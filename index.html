@@ -24206,7 +24206,9 @@ function generateInviteLink(prefix) {
     .then(function(res) {
       if (res.error) throw new Error(res.error);
       var base = window.location.origin;
-      var url = base + res.url;
+      // Embed full data as fallback query param so link survives server restarts
+      var fallback = encodeData(d);
+      var url = base + res.url + (fallback ? "?d=" + fallback : "");
       document.getElementById("inviteUrl").value = url;
       document.getElementById("inviteModal").classList.add("open");
       document.getElementById("copiedMsg").style.display = "none";
@@ -24242,19 +24244,36 @@ function checkFillMode() {
   // SHORT LINK MODE — /i/:code
   if (path.startsWith("/i/")) {
     var code = path.slice(3);
+    // Try server store first, fall back to ?d= query param if server restarted
+    var fallbackData = null;
+    try {
+      var qs = window.location.search;
+      var dm = qs.match(/[?&]d=([^&]+)/);
+      if (dm) fallbackData = decodeData(dm[1]);
+    } catch(e) {}
+
     fetch("/api/invite/" + code)
       .then(function(r) {
-        if (!r.ok) throw new Error("Link not found or expired");
+        if (!r.ok) {
+          if (fallbackData) return fallbackData;
+          throw new Error("Link not found");
+        }
         return r.json();
       })
       .then(function(d) {
+        if (!d) throw new Error("No data");
         if (d._review) { showReviewMode(d); }
         else { renderFillMode(d); }
       })
       .catch(function(e) {
-        document.querySelector(".shell").innerHTML =
-          "<div style='padding:40px;text-align:center'><h2 style='color:#c0392b'>Link not found</h2>"
-          + "<p style='color:#888;margin-top:8px'>This invite link may have expired or been used already. Please ask Vendora to generate a new link.</p></div>";
+        if (fallbackData) {
+          if (fallbackData._review) { showReviewMode(fallbackData); }
+          else { renderFillMode(fallbackData); }
+        } else {
+          document.querySelector(".shell").innerHTML =
+            "<div style='padding:40px;text-align:center'><h2 style='color:#c0392b'>Link not found</h2>"
+            + "<p style='color:#888;margin-top:8px'>This invite link may have expired. Please ask Vendora to generate a new link.</p></div>";
+        }
       });
     return;
   }
@@ -24526,12 +24545,9 @@ function submitFill() {
         if (!xr.error) reviewUrl = window.location.origin + xr.url;
       } catch(e) {}
 
-      // Build docx for supplier copy
-      var buildFn = isDA ? buildDA : buildRA;
-      buildFn(merged).then(function(result) {
-        window.saveAs(result.blob, result.filename);
-
-        // Show success + notify button
+      // Show success + notify button (no docx for supplier — Vendora generates final)
+      var sucDivBuild = null;
+      var doNotify = function() {
         var sucDiv = document.getElementById("fill_suc");
         var vendoraEmail = "ts@vendora.se";
         var ccEmail = (!isDA && d.vemail && d.vemail !== "ts@vendora.se") ? d.vemail : null;
@@ -24543,15 +24559,15 @@ function submitFill() {
           + (ccEmail ? "?cc=" + encodeURIComponent(ccEmail) + "&subject=" : "?subject=")
           + subject + "&body=" + body;
 
-        sucDiv.innerHTML = "<strong>✓ Details submitted and document generated.</strong>"
-          + "<div style='margin-top:10px;font-size:12px;color:var(--muted)'>Your copy of the agreement has been downloaded. Please also notify Vendora so they can generate and countersign the final version.</div>"
+        sucDiv.innerHTML = "<strong>✓ Your details have been submitted.</strong>"
+          + "<div style='margin-top:10px;font-size:12px;color:var(--muted)'>Thank you. Please click the button below to notify Vendora Nordic AB. They will review your details and send you the final agreement for signing.</div>"
           + "<a href='" + mailtoHref + "' style='display:inline-block;margin-top:12px;background:var(--navy);color:#fff;padding:10px 20px;text-decoration:none;font-size:13px;font-weight:500'>✉️ Send notification to Vendora</a>"
           + "<div style='margin-top:8px;font-size:11px;color:var(--muted)'>This will open your email client with a pre-written message containing a review link for Vendora.</div>";
         sucDiv.style.display = "block";
         window._reviewUrl = reviewUrl;
-      }).catch(function(e) {
-        alert("Error: " + e.message);
-      }).finally(function() { spin.style.display = "none"; });
+        spin.style.display = "none";
+      };
+      doNotify();
 
     } catch(e) {
       alert("Error: " + e.message);
