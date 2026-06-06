@@ -24230,10 +24230,7 @@ function generateInviteLink(prefix) {
   }).then(function(r) { return r.json(); })
     .then(function(res) {
       if (res.error) throw new Error(res.error);
-      var base = window.location.origin;
-      // Embed full data as fallback query param so link survives server restarts
-      var fallback = encodeData(d);
-      var url = base + res.url + (fallback ? "?d=" + fallback : "");
+      var url = window.location.origin + res.url;
       document.getElementById("inviteUrl").value = url;
       document.getElementById("inviteModal").classList.add("open");
       document.getElementById("copiedMsg").style.display = "none";
