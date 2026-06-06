@@ -255,7 +255,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Supplier contact name</label><input id="da_inv_name" placeholder="e.g. Sarah Chen"></div>
     <div class="f"><label>Supplier contact email *</label><input id="da_inv_email" type="email" placeholder="e.g. sarah@supplier.com"></div>
   </div>
-  <button class="btn-invite" onclick="generateInviteLink('da')">Generate supplier invite link &rarr;</button>
+  <button class="btn-invite" onclick="generateInviteLink('da')">Send invite &rarr;</button>
 </div>
 <div class="suc" id="da_suc"><strong>Agreement downloaded.</strong></div>
 </div>
@@ -377,7 +377,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Reseller contact name</label><input id="ra_inv_name" placeholder="e.g. Anna Andersson"></div>
     <div class="f"><label>Reseller contact email *</label><input id="ra_inv_email" type="email" placeholder="e.g. anna@reseller.com"></div>
   </div>
-  <button class="btn-invite" onclick="generateInviteLink('ra')">Generate reseller invite link &rarr;</button>
+  <button class="btn-invite" onclick="generateInviteLink('ra')">Send invite &rarr;</button>
 </div>
 <div class="suc" id="ra_suc"><strong>Agreement downloaded.</strong></div>
 </div>
@@ -483,19 +483,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     </div>
   </div>
 </div>
-<!-- Invite modal -->
-<div class="modal-overlay" id="inviteModal">
-  <div class="modal">
-    <h2>Invite Link Generated</h2>
-    <p>Copy this link and send it to your contact. They will only be able to fill in company identity and contact persons &mdash; all commercial terms you have set are locked and pre-filled.</p>
-    <textarea id="inviteUrl" readonly onclick="this.select()"></textarea>
-    <div class="modal-btns">
-      <button class="btn-copy" onclick="copyInviteLink()">Copy link</button>
-      <button class="btn-close" onclick="closeModal()">Close</button>
-    </div>
-    <div id="copiedMsg" style="font-size:11px;color:var(--blue2);margin-top:8px;display:none">&#x2713; Copied to clipboard</div>
-  </div>
-</div>
+<!-- Invite sent directly via server email -->
 </div>
 
 <script>
@@ -24220,29 +24208,46 @@ function getVendoraData(prefix) {
 function generateInviteLink(prefix) {
   var invEmail = gv(prefix+"_inv_email");
   if (!invEmail) { alert("Please enter the contact email first."); return; }
+  var invName  = gv(prefix+"_inv_name");
   var d = getVendoraData(prefix);
-  var btn = document.querySelector(".btn-invite");
-  if (btn) { btn.disabled = true; btn.textContent = "Generating…"; }
-  fetch("/api/invite", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(d)
-  }).then(function(r) { return r.json(); })
-    .then(function(res) {
-      if (res.error) throw new Error(res.error);
-      var url = window.location.origin + res.url;
-      document.getElementById("inviteUrl").value = url;
-      document.getElementById("inviteModal").classList.add("open");
-      document.getElementById("copiedMsg").style.display = "none";
-      setTimeout(function(){ document.getElementById("inviteUrl").select(); }, 100);
-    })
-    .catch(function(e) { alert("Could not generate link: " + e.message); })
-    .finally(function() {
-      var btn = document.querySelector(".btn-invite");
-      if (btn) { btn.disabled = false; btn.textContent = "Generate supplier invite link →"; }
-    });
-}
 
+  var btns = document.querySelectorAll(".btn-invite");
+  btns.forEach(function(b){ b.disabled=true; b.textContent="Sending…"; });
+
+  fetch("/api/invite", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(d)
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(res){
+    if (res.error) throw new Error(res.error);
+    var inviteUrl = window.location.origin + res.url;
+    return fetch("/api/send-invite", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        toEmail: invEmail, toName: invName,
+        fromName: d.vname || "Vendora Nordic AB",
+        agreementType: d._type, inviteUrl: inviteUrl
+      })
+    }).then(function(r2){ return r2.json(); })
+      .then(function(r2){ return { inviteUrl:inviteUrl, emailResult:r2 }; });
+  })
+  .then(function(result){
+    var card = document.querySelector(".invite-card");
+    if (card) {
+      card.innerHTML = "<div style='padding:6px 0'>"
+        + "<span style='font-size:18px'>✉️</span> "
+        + "<strong>Invite sent to " + invEmail + "</strong>"
+        + (result.emailResult.sent === false
+            ? "<div style='font-size:11px;color:var(--muted);margin-top:6px'>SMTP not configured. Copy link manually: <a href='" + result.inviteUrl + "' style='color:var(--blue2);word-break:break-all'>" + result.inviteUrl + "</a></div>"
+            : "<div style='font-size:11px;color:var(--muted);margin-top:6px'>An email has been sent. They will receive a link to fill in their details.</div>")
+        + "</div>";
+    }
+  })
+  .catch(function(e){ alert("Error: " + e.message); })
+  .finally(function(){
+    btns.forEach(function(b){ b.disabled=false; b.textContent="Send invite →"; });
+  });
+}
 function copyInviteLink() {
   var ta = document.getElementById("inviteUrl");
   ta.select(); ta.setSelectionRange(0, 99999);
