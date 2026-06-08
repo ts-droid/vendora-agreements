@@ -49297,22 +49297,7 @@ function doSubmitFill() {
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
       var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
-      try {
-        var resp = fetch("/api/invite", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify(reviewData)
-        });
-        // fire-and-forget — use long URL as fallback if fetch fails
-      } catch(e) {}
-      // Sync short link via XHR so we have it before building the mailto
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/invite", false); // synchronous
-      xhr.setRequestHeader("Content-Type","application/json");
-      try {
-        xhr.send(JSON.stringify(reviewData));
-        var xr = JSON.parse(xhr.responseText);
-        if (!xr.error) reviewUrl = window.location.origin + xr.url;
-      } catch(e) {}
+      // reviewUrl uses hash encoding — permanent, no server dependency
 
       // Show success + notify button (no docx for supplier — Vendora generates final)
       var doNotify = function() {
@@ -98683,22 +98668,7 @@ function doSubmitFill() {
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
       var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
-      try {
-        var resp = fetch("/api/invite", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify(reviewData)
-        });
-        // fire-and-forget — use long URL as fallback if fetch fails
-      } catch(e) {}
-      // Sync short link via XHR so we have it before building the mailto
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/invite", false); // synchronous
-      xhr.setRequestHeader("Content-Type","application/json");
-      try {
-        xhr.send(JSON.stringify(reviewData));
-        var xr = JSON.parse(xhr.responseText);
-        if (!xr.error) reviewUrl = window.location.origin + xr.url;
-      } catch(e) {}
+      // reviewUrl uses hash encoding — permanent, no server dependency
 
       // Show success + notify button (no docx for supplier — Vendora generates final)
       var doNotify = function() {
