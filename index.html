@@ -471,18 +471,6 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="spin" id="spin"></div>
   </button>
 </div>
-<!-- Validation modal -->
-<div class="val-modal" id="valModal">
-  <div class="val-box">
-    <h3>Some fields are not filled in</h3>
-    <p>The following fields are empty. You can go back and complete them, or submit anyway.</p>
-    <ul class="val-list" id="valList"></ul>
-    <div class="val-btns">
-      <button class="btn-goback" onclick="document.getElementById('valModal').classList.remove('open')">Go back and complete</button>
-      <button class="btn-anyway" onclick="document.getElementById('valModal').classList.remove('open');doSubmitFill()">Submit anyway</button>
-    </div>
-  </div>
-</div>
 <!-- Invite sent directly via server email -->
 </div>
 
@@ -24518,31 +24506,51 @@ function submitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
 
-  // ── Validate required + recommended fields ────────────────────────────────
-  var missing = [];
-  if (!gv("fill_name"))    missing.push("Company name (required)");
-  if (!gv("fill_country")) missing.push("Country of incorporation (required)");
-  if (isDA) {
-    if (!gv("fill_products")) missing.push("Products covered (required)");
-    // Check contacts — warn if no primary contact filled for any role
-    var emptyRoles = [];
-    DA_ROLES.forEach(function(r) {
-      if (!gv("fill_"+r.id+"_pn") && !gv("fill_"+r.id+"_pe")) emptyRoles.push(r.label);
-    });
-    if (emptyRoles.length === DA_ROLES.length) missing.push("Supplier contacts — no contacts filled in");
-    else if (emptyRoles.length > 0) missing.push("Contacts missing for: " + emptyRoles.slice(0,3).join(", ") + (emptyRoles.length > 3 ? " +" + (emptyRoles.length-3) + " more" : ""));
-  } else {
-    if (!gv("fill_sig_name"))  missing.push("Signatory name (required)");
-    if (!gv("fill_sig_email")) missing.push("Signatory email (required)");
+  // Hard required fields
+  var required = [];
+  if (!gv("fill_name"))    required.push("Company name");
+  if (!gv("fill_country")) required.push("Country of incorporation");
+  if (!isDA) {
+    if (!gv("fill_sig_name"))  required.push("Signatory name");
+    if (!gv("fill_sig_email")) required.push("Signatory email");
   }
 
-  if (missing.length > 0) {
-    var list = document.getElementById("valList");
-    list.innerHTML = missing.map(function(m){ return "<li>"+m+"</li>"; }).join("");
-    document.getElementById("valModal").classList.add("open");
-    return;
+  // Soft warnings — empty but not blocking
+  var warnings = [];
+  if (!gv("fill_addr")) warnings.push("Registered address");
+  if (isDA) {
+    if (!gv("fill_products")) warnings.push("Products covered");
+    var filledRoles = 0;
+    DA_ROLES.forEach(function(r) {
+      if (gv("fill_"+r.id+"_pn") || gv("fill_"+r.id+"_pe")) filledRoles++;
+    });
+    if (filledRoles === 0) warnings.push("No contact persons filled in");
+    else if (filledRoles < DA_ROLES.length) warnings.push(filledRoles + " of " + DA_ROLES.length + " contact roles filled — that’s fine if those don’t apply");
   }
-  doSubmitFill();
+
+  // Always show modal to confirm (unless literally everything is filled and no issues)
+  var allClear = required.length === 0 && warnings.length === 0;
+  if (allClear) { doSubmitFill(); return; }
+
+  // Build modal content
+  var msg = required.length > 0
+    ? "Please fill in the required fields before submitting."
+    : "Some fields are still empty — that’s fine if they don’t apply. Ready to submit?";
+  document.getElementById("valMsg").textContent = msg;
+
+  var items = required.map(function(f){ return "<li style=\'color:#c0392b\'><strong>⚠ Required:</strong> "+f+"</li>"; })
+    .concat(warnings.map(function(f){ return "<li>"+f+"</li>"; }));
+  document.getElementById("valList").innerHTML = items.join("");
+
+  var btn = document.getElementById("valAnywayBtn");
+  if (required.length > 0) {
+    btn.textContent = "Go back and complete";
+    btn.onclick = function(){ document.getElementById("valModal").classList.remove("open"); };
+  } else {
+    btn.textContent = "Yes, submit";
+    btn.onclick = function(){ document.getElementById("valModal").classList.remove("open"); doSubmitFill(); };
+  }
+  document.getElementById("valModal").classList.add("open");
 }
 
 function doSubmitFill() {
@@ -24650,5 +24658,17 @@ document.getElementById("ra_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("rb_date").value = new Date().toISOString().slice(0,10);
 checkFillMode();
 </script>
+<!-- Validation modal — outside shell so it survives shell.innerHTML="" -->
+<div class="val-modal" id="valModal">
+  <div class="val-box">
+    <h3>Ready to submit?</h3>
+    <p id="valMsg">Some fields are still empty. That's fine if those functions don't apply — but please confirm you're happy to submit.</p>
+    <ul class="val-list" id="valList"></ul>
+    <div class="val-btns">
+      <button class="btn-goback" onclick="document.getElementById('valModal').classList.remove('open')">Go back and check</button>
+      <button class="btn-anyway" id="valAnywayBtn">Submit anyway</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
