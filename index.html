@@ -24450,7 +24450,10 @@ function renderFillMode(d) {
 function showReviewMode(d) {
   var isDA = d._type === "da";
   var isRB = d._type === "rb";
-  document.getElementById("steps").style.display = "none";
+  // Hide all normal page UI
+  document.querySelector(".hdr").style.display = "none";
+  document.querySelector(".tabs").style.display = "none";
+  document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
   document.querySelector(".genbar").style.display = "none";
 
   var shell = document.querySelector(".shell");
@@ -73821,7 +73824,10 @@ function renderFillMode(d) {
 function showReviewMode(d) {
   var isDA = d._type === "da";
   var isRB = d._type === "rb";
-  document.getElementById("steps").style.display = "none";
+  // Hide all normal page UI
+  document.querySelector(".hdr").style.display = "none";
+  document.querySelector(".tabs").style.display = "none";
+  document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
   document.querySelector(".genbar").style.display = "none";
 
   var shell = document.querySelector(".shell");
