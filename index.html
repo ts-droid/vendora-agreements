@@ -229,11 +229,13 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f"><label>MDF invoicing frequency</label><select id="da_mdff"><option value="Quarterly" selected>Quarterly</option><option value="Bi-annually">Bi-annually</option><option value="Annually">Annually</option></select></div>
-    <div class="f"><label>RMA email (Supplier)</label><input id="da_rmae" placeholder="e.g. rma@supplier.com"></div>
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f"><label>RMA credit frequency</label><select id="da_rmaf"><option value="Monthly">Monthly</option><option value="Quarterly" selected>Quarterly</option><option value="Bi-annually">Bi-annually</option></select></div>
     <div class="f"><label>Max defective rate (MDR %)</label><input id="da_rmam" type="number" min="0" max="10" step="0.1" placeholder="e.g. 2"></div>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px 10px;background:var(--lite);border-left:3px solid var(--blue2)">
+    RMA contact person (name, email, phone) is set under <strong>Supplier Contacts → Technical Support / RMA</strong> in the section above.
   </div>
 </div>
 
@@ -23572,7 +23574,7 @@ var DA_ROLES = [
   {id:"logi", label:"Logistics / Shipping",                       scope:"Freight, bookings, customs docs"},
   {id:"pim",  label:"Product Data / PIM / Customs",               scope:"PIM, HS/CN/TARIC, origin documentation"},
   {id:"mktg", label:"Marketing & MDF",                            scope:"MDF, brand assets, launches"},
-  {id:"tech", label:"Technical Support / RMA",                    scope:"Defects, RMA, certifications"},
+  {id:"tech", label:"Technical Support / RMA",                    scope:"RMA email, defect reporting, warranty claims, certifications"},
   {id:"legal",label:"Legal / Compliance",                         scope:"Contract, GDPR, sustainability"}
 ];
 
@@ -23914,7 +23916,7 @@ async function buildDA(overrideData) {
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2),h.dataRow(["Base MDF",data.mdfb?data.mdfb+"% of invoiced value":"—",data.mdff||"Quarterly"],MW),h.dataRow(["Target bonus",data.mdft?data.mdft+"%":"—","Annually"],MW,true),h.dataRow(["Co-op fund",data.mdfc?data.mdfc+"%":"Not agreed","As agreed"],MW)]}));
   children.push(h.sp());
   children.push(h.h2("E   RMA and Stock Rotation"));
-  children.push(h.fldTbl([h.fldRow("RMA email (Supplier)",data.rmae),h.fldRow("RMA credit frequency",data.rmaf),h.fldRow("MDR threshold",data.rmam?data.rmam+"%":"—"),h.fldRow("Rotation cap",data.rot?data.rot+"%":"—"),h.fldRow("Rotation windows",data.rotw)]));
+  children.push(h.fldTbl([h.fldRow("RMA credit frequency",data.rmaf||"Quarterly"),h.fldRow("MDR threshold",data.rmam?data.rmam+"%":"—"),h.fldRow("Rotation cap",data.rot?data.rot+"%":"—"),h.fldRow("Rotation windows",data.rotw||"Twice"),h.fldRow("RMA contact person","See Appendix 3 — Technical Support / RMA")]));
   children.push(h.sp());
   children.push(h.note("This appendix shall be reviewed during the first quarter of each calendar year. Any changes require a signed written amendment."));
   children.push(h.pgBrk());
@@ -24890,11 +24892,13 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f"><label>MDF invoicing frequency</label><select id="da_mdff"><option value="Quarterly" selected>Quarterly</option><option value="Bi-annually">Bi-annually</option><option value="Annually">Annually</option></select></div>
-    <div class="f"><label>RMA email (Supplier)</label><input id="da_rmae" placeholder="e.g. rma@supplier.com"></div>
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f"><label>RMA credit frequency</label><select id="da_rmaf"><option value="Monthly">Monthly</option><option value="Quarterly" selected>Quarterly</option><option value="Bi-annually">Bi-annually</option></select></div>
     <div class="f"><label>Max defective rate (MDR %)</label><input id="da_rmam" type="number" min="0" max="10" step="0.1" placeholder="e.g. 2"></div>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px 10px;background:var(--lite);border-left:3px solid var(--blue2)">
+    RMA contact person (name, email, phone) is set under <strong>Supplier Contacts → Technical Support / RMA</strong> in the section above.
   </div>
 </div>
 
@@ -48233,7 +48237,7 @@ var DA_ROLES = [
   {id:"logi", label:"Logistics / Shipping",                       scope:"Freight, bookings, customs docs"},
   {id:"pim",  label:"Product Data / PIM / Customs",               scope:"PIM, HS/CN/TARIC, origin documentation"},
   {id:"mktg", label:"Marketing & MDF",                            scope:"MDF, brand assets, launches"},
-  {id:"tech", label:"Technical Support / RMA",                    scope:"Defects, RMA, certifications"},
+  {id:"tech", label:"Technical Support / RMA",                    scope:"RMA email, defect reporting, warranty claims, certifications"},
   {id:"legal",label:"Legal / Compliance",                         scope:"Contract, GDPR, sustainability"}
 ];
 
