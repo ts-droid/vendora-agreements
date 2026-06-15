@@ -471,18 +471,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="spin" id="spin"></div>
   </button>
 </div>
-<!-- Validation modal -->
-<div class="val-modal" id="valModal">
-  <div class="val-box">
-    <h3>Some fields are not filled in</h3>
-    <p>The following fields are empty. You can go back and complete them, or submit anyway.</p>
-    <ul class="val-list" id="valList"></ul>
-    <div class="val-btns">
-      <button class="btn-goback" onclick="document.getElementById('valModal').classList.remove('open')">Go back and complete</button>
-      <button class="btn-anyway" onclick="document.getElementById('valModal').classList.remove('open');doSubmitFill()">Submit anyway</button>
-    </div>
-  </div>
-</div>
+
 <!-- Invite sent directly via server email -->
 </div>
 
@@ -24106,9 +24095,9 @@ async function buildRA(overrideData) {
 }
 
 /* ──────────────────────────────────────────────── RB */
-async function buildRB() {
+async function buildRB(overrideData) {
   var h = docxHelpers(), d = window.docx;
-  var data = {
+  var data = overrideData || {
     name:gv("rb_name"),reg:gv("rb_reg"),country:gv("rb_country"),addr:gv("rb_addr"),vat:gv("rb_vat"),
     products:gv("rb_products"),terr:gv("rb_terr"),curr:gv("rb_curr"),pay:gv("rb_pay"),notice:gv("rb_notice"),
     inco:gv("rb_inco"),moq:gv("rb_moq"),target:gv("rb_target"),bonus:gv("rb_bonus"),mdf:gv("rb_mdf"),
@@ -24275,6 +24264,15 @@ function closeModal() {
   document.getElementById("inviteModal").classList.remove("open");
 }
 
+function closeThankModal() {
+  document.getElementById("thankModal").classList.remove("open");
+  try { window.close(); } catch(e) {}
+  setTimeout(function() {
+    var shell = document.querySelector(".shell");
+    if (shell) shell.innerHTML = "<div style='padding:60px;text-align:center;color:#888;font-size:14px'>You can now close this tab.</div>";
+  }, 300);
+}
+
 /* ── SUPPLIER / RESELLER FILL MODE ──────────────────────────────────────────── */
 function checkFillMode() {
   var path = window.location.pathname;
@@ -24413,7 +24411,7 @@ function renderFillMode(d) {
   var submitBar = document.createElement("div");
   submitBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
   submitBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>Fill in your details above, then submit</span>"
-    + "<button class='btn-gen' onclick='submitFill()' style='background:var(--navy)'><span>Submit &amp; Generate Agreement</span><div class='spin' id='fill_spin'></div></button>";
+    + "<button onclick=\'submitFill()\' style=\'background:#0F2240;color:#fff;border:none;padding:11px 28px;font-family:sans-serif;font-size:14px;font-weight:600;cursor:pointer\'><span>Submit Details &#x2192;</span><div class=\'spin\' id=\'fill_spin\'></div></button>";
 
   var sucDiv = document.createElement("div");
   sucDiv.className = "suc";
@@ -24441,7 +24439,9 @@ function renderFillMode(d) {
 
 function showReviewMode(d) {
   var isDA = d._type === "da";
-  document.getElementById("steps").style.display = "none";
+  document.querySelector(".hdr").style.display = "none";
+  document.querySelector(".tabs").style.display = "none";
+  document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
   document.querySelector(".genbar").style.display = "none";
 
   var shell = document.querySelector(".shell");
@@ -24515,7 +24515,7 @@ function generateFromReview() {
   var spin = document.getElementById("review_spin");
   btn.disabled = true; spin.style.display = "block";
 
-  var buildFn = isDA ? buildDA : buildRA;
+  var buildFn = (d._type === "rb") ? buildRB : (isDA ? buildDA : buildRA);
   buildFn(d).then(function(result) {
     window.saveAs(result.blob, result.filename);
     document.getElementById("review_suc").style.display = "block";
@@ -24530,33 +24530,50 @@ function submitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
 
-  // ── Validate required + recommended fields ────────────────────────────────
-  var missing = [];
-  if (!gv("fill_name"))    missing.push("Company name (required)");
-  if (!gv("fill_country")) missing.push("Country of incorporation (required)");
+  // Hard required fields
+  var required = [];
+  if (!gv("fill_name"))    required.push("Company name");
+  if (!gv("fill_country")) required.push("Country of incorporation");
+  if (!isDA) {
+    if (!gv("fill_sig_name"))  required.push("Signatory name");
+    if (!gv("fill_sig_email")) required.push("Signatory email");
+  }
+
+  // Soft warnings — empty but not blocking
+  var warnings = [];
+  if (!gv("fill_addr")) warnings.push("Registered address");
   if (isDA) {
-    if (!gv("fill_products")) missing.push("Products covered (required)");
-    // Check contacts — warn if no primary contact filled for any role
-    var emptyRoles = [];
+    if (!gv("fill_products")) warnings.push("Products covered");
+    var filledRoles = 0;
     DA_ROLES.forEach(function(r) {
-      if (!gv("fill_"+r.id+"_pn") && !gv("fill_"+r.id+"_pe")) emptyRoles.push(r.label);
+      if (gv("fill_"+r.id+"_pn") || gv("fill_"+r.id+"_pe")) filledRoles++;
     });
-    if (emptyRoles.length === DA_ROLES.length) missing.push("Supplier contacts — no contacts filled in");
-    else if (emptyRoles.length > 0) missing.push("Contacts missing for: " + emptyRoles.slice(0,3).join(", ") + (emptyRoles.length > 3 ? " +" + (emptyRoles.length-3) + " more" : ""));
+    if (filledRoles === 0) warnings.push("No contact persons filled in");
+    else if (filledRoles < DA_ROLES.length) warnings.push(filledRoles + " of " + DA_ROLES.length + " contact roles filled \u2014 that\u2019s fine if those don\u2019t apply");
+  }
+
+  var allClear = required.length === 0 && warnings.length === 0;
+  if (allClear) { doSubmitFill(); return; }
+
+  var msg = required.length > 0
+    ? "Please fill in the required fields before submitting."
+    : "Some fields are still empty \u2014 that\u2019s fine if they don\u2019t apply. Ready to submit?";
+  document.getElementById("valMsg").textContent = msg;
+
+  var items = required.map(function(f){ return "<li style=\'color:#c0392b\'><strong>\u26a0 Required:</strong> "+f+"</li>"; })
+    .concat(warnings.map(function(f){ return "<li>"+f+"</li>"; }));
+  document.getElementById("valList").innerHTML = items.join("");
+
+  var btn = document.getElementById("valAnywayBtn");
+  if (required.length > 0) {
+    btn.textContent = "Go back and complete";
+    btn.onclick = function(){ document.getElementById("valModal").classList.remove("open"); };
   } else {
-    if (!gv("fill_sig_name"))  missing.push("Signatory name (required)");
-    if (!gv("fill_sig_email")) missing.push("Signatory email (required)");
+    btn.textContent = "Yes, submit";
+    btn.onclick = function(){ document.getElementById("valModal").classList.remove("open"); doSubmitFill(); };
   }
-
-  if (missing.length > 0) {
-    var list = document.getElementById("valList");
-    list.innerHTML = missing.map(function(m){ return "<li>"+m+"</li>"; }).join("");
-    document.getElementById("valModal").classList.add("open");
-    return;
-  }
-  doSubmitFill();
+  document.getElementById("valModal").classList.add("open");
 }
-
 function doSubmitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
@@ -24594,42 +24611,11 @@ function doSubmitFill() {
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
       var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
-      try {
-        var resp = fetch("/api/invite", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify(reviewData)
-        });
-        // fire-and-forget — use long URL as fallback if fetch fails
-      } catch(e) {}
-      // Sync short link via XHR so we have it before building the mailto
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/invite", false); // synchronous
-      xhr.setRequestHeader("Content-Type","application/json");
-      try {
-        xhr.send(JSON.stringify(reviewData));
-        var xr = JSON.parse(xhr.responseText);
-        if (!xr.error) reviewUrl = window.location.origin + xr.url;
-      } catch(e) {}
+      // Hash-encoded URL is permanent — no server dependency, no override
 
       // Show success + notify button (no docx for supplier — Vendora generates final)
-      var sucDivBuild = null;
       var doNotify = function() {
-        var sucDiv = document.getElementById("fill_suc");
-        var vendoraEmail = "ts@vendora.se";
-        var ccEmail = (!isDA && d.vemail && d.vemail !== "ts@vendora.se") ? d.vemail : null;
-        var supplierName = merged.name || "Supplier";
-        var agreementType = isDA ? "Distributor Agreement" : "Reseller Agreement";
-        var subject = encodeURIComponent(agreementType + " details submitted — " + supplierName);
-        var body = encodeURIComponent("Hi" + (d.vname ? " " + d.vname : "") + ",\n\nI have completed the details for the " + agreementType + ".\n\nPlease click the link below to review and generate the final document:\n\n" + reviewUrl + "\n\nBest regards,\n" + supplierName);
-        var mailtoHref = "mailto:" + vendoraEmail
-          + (ccEmail ? "?cc=" + encodeURIComponent(ccEmail) + "&subject=" : "?subject=")
-          + subject + "&body=" + body;
-
-        sucDiv.innerHTML = "<strong>✓ Your details have been submitted.</strong>"
-          + "<div style='margin-top:10px;font-size:12px;color:var(--muted)'>Thank you. Please click the button below to notify Vendora Nordic AB. They will review your details and send you the final agreement for signing.</div>"
-          + "<a href='" + mailtoHref + "' style='display:inline-block;margin-top:12px;background:var(--navy);color:#fff;padding:10px 20px;text-decoration:none;font-size:13px;font-weight:500'>✉️ Send notification to Vendora</a>"
-          + "<div style='margin-top:8px;font-size:11px;color:var(--muted)'>This will open your email client with a pre-written message containing a review link for Vendora.</div>";
-        // Automatic server-side notification — no action needed from supplier
+        // Automatic server-side notification to Vendora
         fetch("/api/notify", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
@@ -24639,11 +24625,11 @@ function doSubmitFill() {
             reviewUrl: reviewUrl,
             vendoraContact: d.vemail || null
           })
-        }).catch(function(){});  // fire-and-forget, non-blocking
+        }).catch(function(){});
 
-        sucDiv.style.display = "block";
+        // Show thank-you modal — closes the page on OK
+        document.getElementById("thankModal").classList.add("open");
         window._reviewUrl = reviewUrl;
-        spin.style.display = "none";
       };
       doNotify();
 
@@ -24662,5 +24648,29 @@ document.getElementById("ra_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("rb_date").value = new Date().toISOString().slice(0,10);
 checkFillMode();
 </script>
+<!-- Validation modal -->
+<div class="val-modal" id="valModal">
+  <div class="val-box">
+    <h3>Ready to submit?</h3>
+    <p id="valMsg">Some fields are still empty.</p>
+    <ul class="val-list" id="valList"></ul>
+    <div class="val-btns">
+      <button class="btn-goback" onclick="document.getElementById('valModal').classList.remove('open')">Go back and check</button>
+      <button class="btn-anyway" id="valAnywayBtn">Submit anyway</button>
+    </div>
+  </div>
+</div>
+<!-- Thank-you modal -->
+<div class="val-modal" id="thankModal">
+  <div class="val-box" style="text-align:center;max-width:420px">
+    <div style="font-size:40px;margin-bottom:12px">&#x2705;</div>
+    <h3 style="margin-bottom:10px">Thank you!</h3>
+    <p style="font-size:13px;color:#555;line-height:1.6;margin-bottom:20px">
+      Your details have been received by Vendora Nordic AB.<br>
+      We will review your information and be in touch shortly with the complete agreement for signing.
+    </p>
+    <button class="btn-anyway" onclick="closeThankModal()" style="width:100%;padding:12px;font-size:14px">OK, close this window</button>
+  </div>
+</div>
 </body>
 </html>
