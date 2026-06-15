@@ -23973,7 +23973,12 @@ async function buildDA(overrideData) {
   }
   children.push(h.sp());
   children.push(h.h2("D   MDF"));
-  children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2),h.dataRow(["Base MDF",data.mdfb?data.mdfb+"% of invoiced value":"—",data.mdff||"Quarterly"],MW),h.dataRow(["Target bonus",data.mdft?data.mdft+"%":"—","Annually"],MW,true),h.dataRow(["Co-op fund",data.mdfc?data.mdfc+"%":"Not agreed","As agreed"],MW)]}));
+  var hasMDF = data.mdfb || data.mdft || data.mdfc;
+  if (!hasMDF) {
+    children.push(h.note("No Market Development Funds have been agreed for the initial term of this Agreement. MDF may be agreed by written amendment."));
+  } else {
+    children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2),h.dataRow(["Base MDF",data.mdfb?data.mdfb+"% of invoiced value":"—",data.mdff||"Quarterly"],MW),h.dataRow(["Target bonus",data.mdft?data.mdft+"%":"—","Annually"],MW,true),h.dataRow(["Co-op fund",data.mdfc?data.mdfc+"%":"Not agreed","As agreed"],MW)]}));
+  }
   children.push(h.sp());
   children.push(h.h2("E   RMA and Stock Rotation"));
   children.push(h.fldTbl([h.fldRow("RMA contact","See Appendix 3 \u2014 Technical Support / RMA"),h.fldRow("RMA credit frequency",data.rmaf),h.fldRow("MDR threshold",data.rmam?data.rmam+"%":"—"),h.fldRow("Rotation cap",data.rot?data.rot+"%":"—"),h.fldRow("Rotation windows",data.rotw)]));
@@ -24137,30 +24142,16 @@ async function buildRA(overrideData) {
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
     h.h2("A   Products and Territory"),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Appointment",data.excl)]),h.sp(),
-    h.h2("B   Commercial Terms"),
-    h.fldTbl([h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Credit Limit",data.credit||"To be agreed"),h.fldRow("Shipping",data.inco+" — "+data.incoplace),h.fldRow("MOQ",data.moq||"No minimum"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Sell-through report deadline","15th of month after each quarter end"),h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")]),h.sp(),
-    h.h2("C   Minimum Activity (MDF Eligibility)"),
-    h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" (— "+data.sig_email+")":"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
-    h.fldTbl([h.fldRow("Min. net purchases / half-year",data.minact||"To be agreed"),h.fldRow("Reporting requirement","Timely quarterly sell-through reports")]),h.sp(),
-    h.h2("D   Annual Sales Targets"),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")].filter(Boolean)),
+    h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
+    h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
+    h.pgBrk(),
+    h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
+    h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
+    h.pgBrk(),
+    h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS (SUMMARY)",h.TEAL),h.sp(),
   ];
-  if (!targetsOn) {
-    children.push(h.note("No specific sales targets agreed for the initial term. May be added by written amendment."));
-  } else {
-    children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:TW,rows:[h.hdrRow(["Tier","From (EUR)","To (EUR)","Bonus %"],TW),h.dataRow(["Tier 1",data.t1f||"—",data.t1t||"—",data.t1b||"—"],TW),h.dataRow(["Tier 2",data.t2f||"—",data.t2t||"—",data.t2b||"—"],TW,true),h.dataRow(["Tier 3",data.t3f||"—",data.t3t||"—",data.t3b||"—"],TW)]}));
-  }
-  children.push(h.sp());
-  children.push(h.h2("E   MDF"));
-  children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2),h.dataRow(["Base MDF",data.mdfb?data.mdfb+"% of invoiced value":"—",data.mdff||"Quarterly"],MW),h.dataRow(["Target bonus",data.mdft?data.mdft+"%":"—","Annually"],MW,true)]}));
-  children.push(h.sp());
-  children.push(h.note("This appendix shall be reviewed during the first quarter of each calendar year. Any changes require a signed written amendment."));
-  children.push(h.pgBrk());
-  children.push(h.appHdr("APPENDIX 2 — RETURNS, RMA AND STOCK ROTATION",h.BL));children.push(h.sp());
-  children.push(h.par("All returns require a valid RMA/RETURN number (rma@vendora.se). Valid 10 days from issue. Reference on waybill. Warranty claims by credit invoice. Physical return only if requested by Vendora. Stock rotation: new, unopened, within 6 months of order, simultaneous replacement order required."));
-  children.push(h.pgBrk());
-  children.push(h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS",h.TEAL));children.push(h.sp());
-  var GTC=[["Warranty","12 months from invoice date. Claims via RMA process (Appendix 2)."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice (credit-approved) or credit card. Queries to invoices@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoices@vendora.se • marketing@vendora.se"]];
+  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoices@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoices@vendora.se"]];
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
@@ -24171,10 +24162,9 @@ async function buildRA(overrideData) {
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
-  return {blob:blob, filename:"Vendora_RA_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
+  return {blob:blob, filename:"Vendora_RA_Standard_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
 }
 
-/* ──────────────────────────────────────────────── RB */
 async function buildRB(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || {
@@ -24194,7 +24184,7 @@ async function buildRB(overrideData) {
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:500,after:35},children:[h.t("RESELLER AGREEMENT",{bold:true,size:48,color:h.NAVY})]}),
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:35},children:[h.t("Standard version — "+( data.products||"[Products]"),{italics:true,size:20,color:"888888"})]}),
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:200},children:[h.t("VENDORA NORDIC AB  —  "+(data.name||"[THE RESELLER]"),{bold:true,size:28,color:h.NAVY})]}),
-    h.fldTbl([h.fldRow("Agreement date",dt,2400,7106),h.fldRow("Products / brands",data.products,2400,7106),h.fldRow("Territory (active sales area)",data.terr,2400,7106),h.fldRow("Shipping",data.inco+" Vendora Nordic AB, Lomma, Sweden",2400,7106),h.fldRow("Payment",data.curr+", "+data.pay+" days net",2400,7106),h.fldRow("Notice period",data.notice+" days",2400,7106)]),
+    h.fldTbl([h.fldRow("Agreement date",dt,2400,7106),h.fldRow("Products / brands",data.products,2400,7106),h.fldRow("Territory (active sales area)",data.terr,2400,7106),h.fldRow("Shipping",data.inco+" Vendora Nordic AB, Lomma, Sweden",2400,7106),h.fldRow("Payment",data.curr+", "+data.pay+" days net",2400,7106),h.fldRow("Notice period",data.notice+" days",2400,7106)].filter(Boolean)),
     h.pgBrk(),
     h.h1("1   Parties"),h.par("This Reseller Agreement is made between:"),h.sp(),
     h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladugårdsvägen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:'(the “Supplier”)',i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"—")+" — "+(data.country||"—")),(data.addr?h.par(data.addr):h.sp()),h.sp(),h.par([{t:'(the “Reseller”)',i:true}])]),
@@ -24210,7 +24200,7 @@ async function buildRB(overrideData) {
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS",h.NAVY),h.sp(),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),h.fldRow("Annual sales target",data.target||"N/A"),h.fldRow("Back-end bonus",data.bonus||"N/A"),h.fldRow("MDF",data.mdf||"N/A"),h.fldRow("Special conditions",data.special||"N/A"),h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")]),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")]),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.pgBrk(),
@@ -24224,9 +24214,6 @@ async function buildRB(overrideData) {
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
 
-  if (data._isPreview) {
-    children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
-  }
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
