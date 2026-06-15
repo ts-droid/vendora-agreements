@@ -7,7 +7,18 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname)));
+
+// Never cache index.html — always serve the latest deployed version
+app.use(function(req, res, next) {
+  if (req.path === '/' || req.path.endsWith('.html') || req.path.startsWith('/i/')) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+  }
+  next();
+});
+
+app.use(express.static(path.join(__dirname), { etag: false, lastModified: false }));
 
 // ── In-memory invite store ────────────────────────────────────────────────────
 const store = new Map();
