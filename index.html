@@ -24239,10 +24239,36 @@ function generateInviteLink(prefix) {
   var btns = document.querySelectorAll(".btn-invite");
   btns.forEach(function(b){ b.disabled=true; b.textContent="Sending…"; });
 
+  // Always build a permanent fallback link (hash-encoded) so it works even if server fails
+  var fallbackUrl = window.location.origin + "/#fill=" + (encodeData(d)||"");
+
+  function showResult(inviteUrl, emailSent, note) {
+    var card = document.querySelector(".invite-card");
+    if (!card) return;
+    card.innerHTML = "<div style='padding:6px 0'>"
+      + "<span style='font-size:18px'>\u2709\uFE0F</span> "
+      + "<strong>Invite ready for " + invEmail + "</strong>"
+      + (emailSent
+          ? "<div style='font-size:11px;color:var(--muted);margin-top:6px'>An email has been sent with a link to fill in their details.</div>"
+          : "<div style='font-size:11px;color:var(--muted);margin-top:6px'>" + (note||"Email could not be sent automatically.") + " Copy this link and send it manually:<br><a href='" + inviteUrl + "' style='color:var(--blue2);word-break:break-all'>" + inviteUrl + "</a></div>")
+      + "</div>";
+  }
+
+  // 10-second timeout guard so the button never sticks on "Sending…"
+  var timedOut = false;
+  var timer = setTimeout(function(){
+    timedOut = true;
+    showResult(fallbackUrl, false, "Server did not respond in time.");
+    btns.forEach(function(b){ b.disabled=false; b.textContent="Send invite \u2192"; });
+  }, 10000);
+
   fetch("/api/invite", {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(d)
   })
-  .then(function(r){ return r.json(); })
+  .then(function(r){
+    if (!r.ok) throw new Error("Server returned " + r.status);
+    return r.json();
+  })
   .then(function(res){
     if (res.error) throw new Error(res.error);
     var inviteUrl = window.location.origin + res.url;
@@ -24257,20 +24283,20 @@ function generateInviteLink(prefix) {
       .then(function(r2){ return { inviteUrl:inviteUrl, emailResult:r2 }; });
   })
   .then(function(result){
-    var card = document.querySelector(".invite-card");
-    if (card) {
-      card.innerHTML = "<div style='padding:6px 0'>"
-        + "<span style='font-size:18px'>✉️</span> "
-        + "<strong>Invite sent to " + invEmail + "</strong>"
-        + (result.emailResult.sent === false
-            ? "<div style='font-size:11px;color:var(--muted);margin-top:6px'>SMTP not configured. Copy link manually: <a href='" + result.inviteUrl + "' style='color:var(--blue2);word-break:break-all'>" + result.inviteUrl + "</a></div>"
-            : "<div style='font-size:11px;color:var(--muted);margin-top:6px'>An email has been sent. They will receive a link to fill in their details.</div>")
-        + "</div>";
-    }
+    if (timedOut) return;
+    clearTimeout(timer);
+    showResult(result.inviteUrl, result.emailResult.sent !== false,
+               result.emailResult.reason || "SMTP not configured.");
   })
-  .catch(function(e){ alert("Error: " + e.message); })
+  .catch(function(e){
+    if (timedOut) return;
+    clearTimeout(timer);
+    // Fall back to the permanent hash link — still fully usable
+    showResult(fallbackUrl, false, "Could not reach server (" + e.message + ").");
+  })
   .finally(function(){
-    btns.forEach(function(b){ b.disabled=false; b.textContent="Send invite →"; });
+    if (timedOut) return;
+    btns.forEach(function(b){ b.disabled=false; b.textContent="Send invite \u2192"; });
   });
 }
 function copyInviteLink() {
