@@ -96,7 +96,9 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 .neg-label{font-size:12px;font-weight:600;color:var(--navy);margin-bottom:3px}
 .neg-current{font-size:12px;color:var(--text)}
 .neg-current strong{color:var(--blue2)}
-.neg-toggle{display:inline-flex;gap:8px;align-items:center;font-size:11px;color:var(--muted);cursor:pointer;user-select:none;flex-shrink:0;padding-top:2px;max-width:180px;text-align:left;line-height:1.35}
+.neg-toggle{display:inline-flex;gap:8px;align-items:flex-start;font-size:11px;color:var(--muted);cursor:pointer;user-select:none;flex-shrink:0;padding-top:2px;line-height:1.4}
+.neg-toggle input{margin-top:1px}
+.neg-toggle span{width:150px;display:inline-block}
 .neg-toggle input{cursor:pointer;flex-shrink:0}
 .neg-propose{margin-top:8px;display:none;gap:8px}
 .neg-propose.open{display:block}
@@ -24566,7 +24568,7 @@ function renderFillMode(d) {
       + "<div class=\'neg-label\'>"+t.label+"</div>"
       + "<div class=\'neg-current\'>Proposed: <strong>"+t.val+"</strong></div>"
       + "</div>"
-      + "<label class=\'neg-toggle\'><input type=\'checkbox\' onchange=\'togglePropose(this,\""+t.key+"\")\'> I\u2019d like to propose a different value</label>"
+      + "<label class=\'neg-toggle\'><input type=\'checkbox\' onchange=\'togglePropose(this,\""+t.key+"\")\'><span>I\u2019d like to propose a different value</span></label>"
       + "</div>"
       + "<div class=\'neg-propose\' id=\'prop_"+t.key+"\'>"
       + "<label>Your proposed value</label><input id=\'propval_"+t.key+"\' placeholder=\'e.g. your preferred terms\'>"
