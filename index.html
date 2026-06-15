@@ -88,6 +88,30 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 .locked-row{display:grid;grid-template-columns:140px 1fr;gap:3px 10px;margin-top:2px}
 .locked-key{color:var(--muted);font-size:11px}
 .locked-val{color:var(--text);font-size:11px}
+.neg-card{background:#fff;border:1px solid var(--border);margin-bottom:14px}
+.neg-term{padding:12px 16px;border-bottom:1px solid var(--border)}
+.neg-term:last-child{border-bottom:none}
+.neg-label{font-size:12px;font-weight:600;color:var(--navy);margin-bottom:3px}
+.neg-current{font-size:12px;color:var(--text);margin-bottom:6px}
+.neg-current strong{color:var(--blue2)}
+.neg-toggle{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+.neg-toggle input{cursor:pointer}
+.neg-propose{margin-top:8px;display:none;gap:8px}
+.neg-propose.open{display:block}
+.neg-propose input,.neg-propose textarea{width:100%;font-size:12px;border:1px solid var(--border);padding:6px 8px;margin-top:4px;font-family:inherit;color:var(--text)}
+.neg-propose label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.cmp-row{display:grid;grid-template-columns:140px 1fr 1fr 120px;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;font-size:12px}
+.cmp-head{background:var(--lite);font-weight:600;color:var(--navy);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.cmp-orig{color:var(--muted)}
+.cmp-prop{color:var(--text);font-weight:500}
+.cmp-prop.changed{color:#b8860b}
+.cmp-comment{grid-column:2/4;font-size:11px;font-style:italic;color:var(--muted);padding:0 14px 10px}
+.cmp-actions{display:flex;gap:6px}
+.cmp-btn{font-size:11px;padding:4px 10px;border:1px solid var(--border);background:#fff;cursor:pointer;border-radius:2px}
+.cmp-btn.active-accept{background:#1a7d3c;color:#fff;border-color:#1a7d3c}
+.cmp-btn.active-keep{background:var(--navy);color:#fff;border-color:var(--navy)}
+.neg-badge{display:inline-block;background:#FFF3CD;color:#856404;font-size:10px;padding:2px 8px;border-radius:10px;margin-left:6px}
+
 .review-banner{background:#1A3C6E;color:#fff;padding:16px 28px;margin-bottom:16px}
 .review-banner h2{font-family:"Playfair Display",serif;font-size:17px;margin-bottom:4px}
 .review-banner p{font-size:12px;color:#C8D9ED}
@@ -24350,24 +24374,42 @@ function renderFillMode(d) {
   banner.innerHTML = "<h2>You've been invited to complete a " + (isDA?"Distributor":"Reseller") + " Agreement with Vendora Nordic AB</h2>"
     + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit &amp; Generate</strong> to download the ready-to-sign agreement.</p>";
 
-  // Locked summary
+  // Negotiable commercial terms — supplier can accept or propose a change
+  var NEG_TERMS = isDA ? [
+    {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
+    {key:"excl",    label:"Exclusivity",                 val:(d.excl||"\u2014")},
+    {key:"inco",    label:"Incoterms",                   val:((d.inco||"\u2014")+" "+(d.incoy||"")).trim()},
+    {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"terr",    label:"Territory",                   val:(d.terr||"\u2014")},
+    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":"Not offered")}
+  ] : [
+    {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
+    {key:"excl",    label:"Appointment type",            val:(d.excl||"Non-exclusive")},
+    {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"terr",    label:"Territory (active sales)",     val:(d.terr||"\u2014")},
+    {key:"credit",  label:"Credit limit",                val:(d.credit||"To be agreed")},
+    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":(d.mdf||"Not offered"))}
+  ];
+  // Store original values for comparison later
+  window._negOriginals = {};
+  NEG_TERMS.forEach(function(t){ window._negOriginals[t.key] = t.val; });
+
   var summary = document.createElement("div");
-  summary.className = "locked-summary";
-  summary.innerHTML = "<strong>Commercial terms proposed by Vendora Nordic AB (locked)</strong><div class='locked-row'>"
-    + (isDA ? (
-        "<span class='locked-key'>Territory</span><span class='locked-val'>"+(d.terr||"\u2014")+"</span>"
-      + "<span class='locked-key'>Exclusivity</span><span class='locked-val'>"+(d.excl||"\u2014")+"</span>"
-      + "<span class='locked-key'>Incoterms</span><span class='locked-val'>"+(d.inco||"\u2014")+" "+(d.incoy||"")+" \u2014 "+(d.delplace||"\u2014")+"</span>"
-      + "<span class='locked-key'>Payment</span><span class='locked-val'>"+(d.curr||"\u2014")+", "+(d.pay||"\u2014")+" days net</span>"
-      + "<span class='locked-key'>Lead time</span><span class='locked-val'>"+(d.lead||"\u2014")+" working days</span>"
-    ) : (
-        "<span class='locked-key'>Products</span><span class='locked-val'>"+(d.products||"\u2014")+"</span>"
-      + "<span class='locked-key'>Territory</span><span class='locked-val'>"+(d.terr||"\u2014")+"</span>"
-      + "<span class='locked-key'>Incoterms</span><span class='locked-val'>"+(d.inco||"\u2014")+" \u2014 "+(d.incoplace||"\u2014")+"</span>"
-      + "<span class='locked-key'>Payment</span><span class='locked-val'>"+(d.curr||"\u2014")+", "+(d.pay||"\u2014")+" days net</span>"
-      + "<span class='locked-key'>Notice period</span><span class='locked-val'>"+(d.notice||"\u2014")+" days</span>"
-    ))
-    + "</div>";
+  summary.className = "neg-card";
+  var summaryHtml = "<div style=\'padding:12px 16px;background:var(--navy);color:#fff\'>"
+    + "<strong style=\'font-size:13px\'>Commercial terms proposed by Vendora Nordic AB</strong>"
+    + "<div style=\'font-size:11px;color:#C8D9ED;margin-top:3px\'>Accept each term as-is, or propose a change with a short note. Vendora will review any proposed changes.</div></div>";
+  NEG_TERMS.forEach(function(t){
+    summaryHtml += "<div class=\'neg-term\'>"
+      + "<div class=\'neg-label\'>"+t.label+"</div>"
+      + "<div class=\'neg-current\'>Proposed: <strong>"+t.val+"</strong></div>"
+      + "<label class=\'neg-toggle\'><input type=\'checkbox\' onchange=\'togglePropose(this,\""+t.key+"\")\'> I\u2019d like to propose a different value</label>"
+      + "<div class=\'neg-propose\' id=\'prop_"+t.key+"\'>"
+      + "<label>Your proposed value</label><input id=\'propval_"+t.key+"\' placeholder=\'e.g. your preferred terms\'>"
+      + "<label style=\'margin-top:6px;display:block\'>Comment (optional)</label><textarea id=\'propcom_"+t.key+"\' rows=\'2\' placeholder=\'Why this change?\'></textarea>"
+      + "</div></div>";
+  });
+  summary.innerHTML = summaryHtml;
 
   // Identity form
   var idCard = document.createElement("div");
@@ -24498,8 +24540,38 @@ function showReviewMode(d) {
   sucDiv.className = "suc"; sucDiv.id = "review_suc"; sucDiv.style.display = "none";
   sucDiv.innerHTML = "<strong>Agreement generated and downloaded.</strong> Open in Word, review, and send to " + (d.name||"supplier") + " for countersignature.";
 
-  shell.innerHTML = "";
+  // Build proposals comparison card if supplier proposed changes
+  var proposalCard = null;
+  var proposals = d._proposals || {};
+  var proposalKeys = Object.keys(proposals);
+  window._negResolutions = {};
+  if (proposalKeys.length > 0) {
+    var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",inco:"Incoterms",curr:"Invoice currency",terr:"Territory",mdfb:"Base MDF (%)",credit:"Credit limit"};
+    proposalCard = document.createElement("div");
+    proposalCard.className = "card";
+    var ph = "<h2>Proposed changes from " + (d.name||"the counterparty") + " <span class=\'neg-badge\'>" + proposalKeys.length + " to review</span></h2>";
+    ph += "<div class=\'desc\'>They accepted all other terms. Review each proposed change below and choose to accept their value or keep yours.</div>";
+    ph += "<div class=\'cmp-row cmp-head\'><span>Term</span><span>Your value</span><span>Their proposal</span><span>Decision</span></div>";
+    proposalKeys.forEach(function(key){
+      var p = proposals[key];
+      var lbl = termLabels[key] || key;
+      ph += "<div class=\'cmp-row\'>"
+        + "<span>"+lbl+"</span>"
+        + "<span class=\'cmp-orig\'>"+(p.original||"\u2014")+"</span>"
+        + "<span class=\'cmp-prop changed\'>"+(p.proposed||"\u2014")+"</span>"
+        + "<span class=\'cmp-actions\'>"
+        + "<button class=\'cmp-btn\' id=\'acc_"+key+"\' onclick=\'resolveProposal(\""+key+"\",\"accept\")\'>Accept</button>"
+        + "<button class=\'cmp-btn active-keep\' id=\'keep_"+key+"\' onclick=\'resolveProposal(\""+key+"\",\"keep\")\'>Keep mine</button>"
+        + "</span></div>";
+      if (p.comment) ph += "<div class=\'cmp-comment\'>\u201c"+p.comment+"\u201d</div>";
+      window._negResolutions[key] = "keep"; // default: keep Vendora value
+    });
+    proposalCard.innerHTML = ph;
+  }
+
+    shell.innerHTML = "";
   shell.appendChild(banner);
+  if (proposalCard) shell.appendChild(proposalCard);
   shell.appendChild(reviewCard);
   shell.appendChild(genBar);
   shell.appendChild(sucDiv);
@@ -24508,12 +24580,40 @@ function showReviewMode(d) {
   window._reviewIsDA = isDA;
 }
 
+function resolveProposal(key, decision) {
+  window._negResolutions[key] = decision;
+  var acc = document.getElementById("acc_"+key);
+  var keep = document.getElementById("keep_"+key);
+  if (acc && keep) {
+    acc.classList.toggle("active-accept", decision === "accept");
+    keep.classList.toggle("active-keep", decision === "keep");
+  }
+}
+
 function generateFromReview() {
   var d = window._reviewData;
   var isDA = window._reviewIsDA;
   var btn = document.getElementById("reviewGenBtn");
   var spin = document.getElementById("review_spin");
   btn.disabled = true; spin.style.display = "block";
+
+  // Apply accepted proposals to the data
+  var proposals = d._proposals || {};
+  var resolutions = window._negResolutions || {};
+  Object.keys(proposals).forEach(function(key){
+    if (resolutions[key] === "accept") {
+      var val = proposals[key].proposed;
+      // Map the negotiable key back to the data field
+      if (key === "inco") {
+        // proposed may include incoterms + year; store raw in inco
+        d.inco = val;
+      } else if (key === "mdfb") {
+        d.mdfb = val.replace("%","").trim();
+      } else {
+        d[key] = val;
+      }
+    }
+  });
 
   var buildFn = (d._type === "rb") ? buildRB : (isDA ? buildDA : buildRA);
   buildFn(d).then(function(result) {
@@ -24524,6 +24624,28 @@ function generateFromReview() {
   }).finally(function() {
     btn.disabled = false; spin.style.display = "none";
   });
+}
+
+function togglePropose(cb, key) {
+  var box = document.getElementById("prop_" + key);
+  if (box) box.classList.toggle("open", cb.checked);
+}
+
+function collectProposals() {
+  var proposals = {};
+  if (!window._negOriginals) return proposals;
+  Object.keys(window._negOriginals).forEach(function(key){
+    var cb = document.querySelector("#prop_"+key);
+    var valEl = document.getElementById("propval_"+key);
+    if (cb && cb.classList.contains("open") && valEl && valEl.value.trim()) {
+      proposals[key] = {
+        original: window._negOriginals[key],
+        proposed: valEl.value.trim(),
+        comment: (document.getElementById("propcom_"+key)||{}).value || ""
+      };
+    }
+  });
+  return proposals;
 }
 
 function submitFill() {
@@ -24608,6 +24730,10 @@ function doSubmitFill() {
         });
       }
 
+      // Capture any proposed changes to commercial terms
+      var proposals = collectProposals();
+      merged._proposals = proposals;
+
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
       var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
@@ -24623,7 +24749,8 @@ function doSubmitFill() {
             supplierName: merged.name || "Supplier",
             agreementType: isDA ? "Distributor Agreement" : "Reseller Agreement",
             reviewUrl: reviewUrl,
-            vendoraContact: d.vemail || null
+            vendoraContact: d.vemail || null,
+            proposalCount: Object.keys(merged._proposals||{}).length
           })
         }).catch(function(){});
 

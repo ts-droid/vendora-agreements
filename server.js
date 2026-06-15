@@ -104,7 +104,7 @@ app.post('/api/send-invite', async (req, res) => {
 
 // ── Notification to Vendora when supplier submits ─────────────────────────────
 app.post('/api/notify', async (req, res) => {
-  const { supplierName, agreementType, reviewUrl, vendoraContact } = req.body;
+  const { supplierName, agreementType, reviewUrl, vendoraContact, proposalCount } = req.body;
   const transporter = getTransporter();
   if (!transporter) {
     console.log('SMTP not configured — skipping notification');
@@ -118,7 +118,7 @@ app.post('/api/notify', async (req, res) => {
     await transporter.sendMail({
       from:    `"Vendora Agreements" <${process.env.SMTP_USER}>`,
       to:      recipients.join(', '),
-      subject: `${agreementType} details submitted — ${supplierName}`,
+      subject: `${proposalCount > 0 ? '[' + proposalCount + ' proposed changes] ' : ''}${agreementType} details submitted — ${supplierName}`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
           <div style="background:#0F2240;padding:20px 28px">
@@ -132,6 +132,7 @@ app.post('/api/notify', async (req, res) => {
               <strong>${supplierName}</strong> has filled in their company details and contacts
               for the <strong>${agreementType}</strong>.
             </p>
+            ${proposalCount > 0 ? `<div style="background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin:12px 0;color:#856404;font-size:13px"><strong>&#x26A0; ${proposalCount} proposed change${proposalCount>1?'s':''} to your commercial terms.</strong> Review them on the page before generating the final agreement.</div>` : ''}
             <div style="text-align:center;margin:24px 0">
               <a href="${reviewUrl}"
                  style="display:inline-block;background:#0F2240;color:#fff;padding:12px 28px;
