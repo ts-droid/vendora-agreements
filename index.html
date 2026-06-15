@@ -23616,14 +23616,14 @@ function buildRoles(containerId, prefix, roles) {
     html += "<div class=\"rb\">";
     html += "<div class=\"rh\" onclick=\"toggleRole('" + r.id + "', '" + prefix + "')\"><div><div class=\"rh-t\">" + r.label + "</div><div class=\"rh-s\">" + r.scope + "</div></div><span id=\"arr_" + prefix + r.id + "\">&#x25B8;</span></div>";
     html += "<div class=\"rb-body\" id=\"body_" + prefix + r.id + "\"><div class=\"cl\">Primary</div><div class=\"crow\">";
-    ["pn","pe","pp","pt"].forEach(function(f,i){
-      var lbl=["Name","Email","Phone / WhatsApp","Time zone"][i];
-      var ph=["Full name","name@company.com","+1 555 000 0000","UTC+8, 9-18"][i];
+    ["pn","pe","pp"].forEach(function(f,i){
+      var lbl=["Name","Email","Phone / WhatsApp"][i];
+      var ph=["Full name","name@company.com","+1 555 000 0000"][i];
       html += "<div class=\"f\"><label>" + lbl + "</label><input id=\"" + prefix + r.id + "_" + f + "\" placeholder=\"" + ph + "\"></div>";
     });
     html += "</div><div class=\"cl\" style=\"margin-top:8px\">Backup</div><div class=\"crow\">";
-    ["bn","be","bp","bt"].forEach(function(f,i){
-      var ph=["Full name","name@company.com","+1 555 000 0000","UTC+8, 9-18"][i];
+    ["bn","be","bp"].forEach(function(f,i){
+      var ph=["Full name","name@company.com","+1 555 000 0000"][i];
       html += "<div class=\"f\"><input id=\"" + prefix + r.id + "_" + f + "\" placeholder=\"" + ph + "\"></div>";
     });
     html += "</div></div></div>";
@@ -23801,8 +23801,8 @@ async function buildDA(overrideData) {
     var W2=[1400,2600,2700,2806];
     contactRows.push(new d.Paragraph({spacing:{before:100,after:30},shading:{fill:"EEF2F7",type:d.ShadingType.CLEAR},indent:{left:50},children:[h.t(r.label,{bold:true,size:17,color:h.NAVY}),h.t("  —  "+r.scope,{size:15,color:"666666",italics:true})]}));
     contactRows.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:W2,rows:[
-      new d.TableRow({children:[["",h.GREY],["Name",h.GREY],["Email",h.GREY],["Phone / WhatsApp / Time zone",h.GREY]].map(function(c,i){ return new d.TableCell({borders:{top:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},bottom:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},left:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},right:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR}},shading:{fill:h.GREY,type:d.ShadingType.CLEAR},width:{size:W2[i],type:d.WidthType.DXA},margins:{top:70,bottom:70,left:110,right:110},children:[new d.Paragraph({children:[h.t(c[0],{bold:true,size:15,color:h.BL})]})]});})}),
-      ...[{lbl:"Primary",c:ct.p,fill:h.WHITE},{lbl:"Backup",c:ct.b,fill:h.GREY}].map(function(row){ return new d.TableRow({children:[h.t,h.t,h.t,h.t].map(function(_,i){ var vals=[row.lbl,row.c.n||"—",(row.c.e||"—")+" / "+(row.c.t||"—"),row.c.p||"—"]; return new d.TableCell({borders:{top:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},bottom:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},left:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},right:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR}},shading:{fill:row.fill,type:d.ShadingType.CLEAR},width:{size:W2[i],type:d.WidthType.DXA},margins:{top:70,bottom:70,left:110,right:110},children:[new d.Paragraph({children:[h.t(vals[i],{size:16})]})]});})}); })
+      new d.TableRow({children:[["",h.GREY],["Name",h.GREY],["Email",h.GREY],["Phone / WhatsApp",h.GREY]].map(function(c,i){ return new d.TableCell({borders:{top:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},bottom:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},left:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},right:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR}},shading:{fill:h.GREY,type:d.ShadingType.CLEAR},width:{size:W2[i],type:d.WidthType.DXA},margins:{top:70,bottom:70,left:110,right:110},children:[new d.Paragraph({children:[h.t(c[0],{bold:true,size:15,color:h.BL})]})]});})}),
+      ...[{lbl:"Primary",c:ct.p,fill:h.WHITE},{lbl:"Backup",c:ct.b,fill:h.GREY}].map(function(row){ return new d.TableRow({children:[h.t,h.t,h.t,h.t].map(function(_,i){ var vals=[row.lbl,row.c.n||"—",row.c.e||"—",row.c.p||"—"]; return new d.TableCell({borders:{top:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},bottom:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},left:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR},right:{style:d.BorderStyle.SINGLE,size:1,color:h.BDR}},shading:{fill:row.fill,type:d.ShadingType.CLEAR},width:{size:W2[i],type:d.WidthType.DXA},margins:{top:70,bottom:70,left:110,right:110},children:[new d.Paragraph({children:[h.t(vals[i],{size:16})]})]});})}); })
     ]}));
     contactRows.push(h.sp());
   });
