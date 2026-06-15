@@ -24328,7 +24328,8 @@ function generateInviteLink(prefix) {
   })
   .then(function(res){
     if (res.error) throw new Error(res.error);
-    var inviteUrl = window.location.origin + res.url;
+    // Email the PERMANENT hash link (survives server restarts/redeploys), not the short /i/ link
+    var inviteUrl = fallbackUrl;
     return fetch("/api/send-invite", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
