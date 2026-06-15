@@ -23966,6 +23966,9 @@ async function buildDA(overrideData) {
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:VW,rows:[h.hdrRow(["Function","Standing email","Named contact"],VW)].concat(vendoraRows.map(function(r,i){ return h.dataRow([r[0],r[1],r[0]==="Account Management"?vendoraAM:"—"],VW,i%2===1); }))}));
   children.push(h.sp());
 
+  if (data._isPreview) {
+    children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
+  }
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Supplier").replace(/[^\w]/g,"_").replace(/_+/g,"_");
@@ -24114,6 +24117,9 @@ async function buildRA(overrideData) {
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
 
+  if (data._isPreview) {
+    children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
+  }
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
@@ -24170,6 +24176,9 @@ async function buildRB(overrideData) {
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
 
+  if (data._isPreview) {
+    children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
+  }
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
@@ -24383,6 +24392,52 @@ function checkFillMode() {
   renderFillMode(d);
 }
 
+function downloadPreview() {
+  var d = window._fillData;
+  if (!d) { alert("No data to preview."); return; }
+  var isDA = d._type === "da";
+  var isRB = d._type === "rb";
+
+  var btn = document.getElementById("previewBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Generating preview\u2026"; }
+
+  // Build a preview data object with placeholders for the counterparty's own fields
+  var preview = Object.assign({}, d, {
+    name:    "[YOUR COMPANY NAME]",
+    reg:     "[Registration number]",
+    country: "[Country]",
+    addr:    "[Registered address]",
+    vat:     "[VAT / Tax ID]"
+  });
+  preview._isPreview = true;
+
+  if (isDA) {
+    preview.products = d.products || "[Products covered]";
+    preview.excluded = "";
+    preview.eori = "[EORI]";
+    preview.parent = "";
+    preview.contacts = {};
+    DA_ROLES.forEach(function(r){
+      preview.contacts[r.id] = {label:r.label, p:{n:"[To be provided]",e:"",p:""}, b:{n:"",e:"",p:""}};
+    });
+  } else {
+    preview.sig_name  = "[Authorised signatory]";
+    preview.sig_email = "";
+    preview.sig_title = "";
+    preview.sig_phone = "";
+  }
+
+  var buildFn = isRB ? buildRB : (isDA ? buildDA : buildRA);
+  buildFn(preview).then(function(result){
+    var fname = result.filename.replace(".docx", "_PREVIEW.docx");
+    window.saveAs(result.blob, fname);
+  }).catch(function(e){
+    alert("Could not generate preview: " + e.message);
+  }).finally(function(){
+    if (btn) { btn.disabled = false; btn.textContent = "\u2193 Download preview of the agreement"; }
+  });
+}
+
 function renderFillMode(d) {
 
   var isDA = d._type === 'da';
@@ -24400,7 +24455,9 @@ function renderFillMode(d) {
   banner.className = "supplier-banner";
   var invName = d.invName ? (", " + d.invName) : "";
   banner.innerHTML = "<h2>You've been invited to complete a " + (isDA?"Distributor":"Reseller") + " Agreement with Vendora Nordic AB</h2>"
-    + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit &amp; Generate</strong> to download the ready-to-sign agreement.</p>";
+    + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit Details</strong> to send them back to Vendora.</p>"
+    + "<button onclick=\'downloadPreview()\' id=\'previewBtn\' style=\'margin-top:6px;background:#fff;color:#0F2240;border:none;padding:9px 18px;font-family:sans-serif;font-size:13px;font-weight:600;cursor:pointer;border-radius:2px\'>\u2193 Download preview of the agreement</button>"
+    + "<span style=\'font-size:11px;color:#C8D9ED;margin-left:10px\'>See the full draft as it stands now, before you fill in your details.</span>";
 
   // Negotiable commercial terms — supplier can accept or propose a change
   var isRB = d._type === "rb";
