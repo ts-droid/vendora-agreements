@@ -82,8 +82,7 @@ app.post('/api/send-invite', async (req, res) => {
               </a>
             </div>
             <p style="color:#999;font-size:12px">
-              If the button doesn't work, copy and paste this link into your browser:<br>
-              <a href="${inviteUrl}" style="color:#2E6DA4">${inviteUrl}</a>
+              If the button above doesn't work, please contact us at ts@vendora.se.
             </p>
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
             <p style="color:#999;font-size:12px">
@@ -140,9 +139,6 @@ app.post('/api/notify', async (req, res) => {
                 Review &amp; Generate Agreement →
               </a>
             </div>
-            <p style="color:#999;font-size:12px">
-              <a href="${reviewUrl}" style="color:#2E6DA4">${reviewUrl}</a>
-            </p>
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
             <p style="color:#999;font-size:12px">
               Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden

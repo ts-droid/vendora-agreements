@@ -24404,16 +24404,37 @@ function renderFillMode(d) {
 
   // Negotiable commercial terms — supplier can accept or propose a change
   var isRB = d._type === "rb";
+  // Helper: build sales-target tier summary string
+  function tierStr() {
+    if (!d.targetsOn) return "No specific targets agreed";
+    var parts = [];
+    if (d.t1b) parts.push("Tier 1: "+(d.t1f||"0")+"\u2013"+(d.t1t||"")+" \u2192 "+d.t1b);
+    if (d.t2b) parts.push("Tier 2: "+(d.t2f||"")+"\u2013"+(d.t2t||"")+" \u2192 "+d.t2b);
+    if (d.t3b) parts.push("Tier 3: "+(d.t3f||"")+"+ \u2192 "+d.t3b);
+    return parts.length ? parts.join("; ") : "Tiers to be agreed";
+  }
   var NEG_TERMS = isDA ? [
     {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
     {key:"excl",    label:"Exclusivity",                 val:(d.excl||"\u2014")},
+    {key:"term",    label:"Initial term",                val:(d.term?d.term+" years":"\u2014")},
     {key:"inco",    label:"Incoterms",                   val:((d.inco||"\u2014")+" "+(d.incoy||"")).trim()},
+    {key:"delplace",label:"Place of delivery",           val:(d.delplace||"\u2014")},
+    {key:"lead",    label:"Lead time (days)",            val:(d.lead||"\u2014")},
     {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"pcurr",   label:"Price list currency",         val:(d.pcurr||"\u2014")},
+    {key:"moq",     label:"Minimum order quantity",      val:(d.moq||"No minimum")},
     {key:"terr",    label:"Territory",                   val:(d.terr||"\u2014")},
-    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":"Not offered")}
+    {key:"targets", label:"Annual sales targets",        val:tierStr()},
+    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":"Not offered")},
+    {key:"mdft",    label:"Target bonus MDF (%)",         val:(d.mdft?d.mdft+"%":"\u2014")},
+    {key:"mdfc",    label:"Co-op fund (%)",              val:(d.mdfc?d.mdfc+"%":"\u2014")},
+    {key:"mdff",    label:"MDF invoicing frequency",      val:(d.mdff||"Quarterly")}
   ] : isRB ? [
     {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
+    {key:"notice",  label:"Notice period (days)",        val:(d.notice||"\u2014")},
+    {key:"inco",    label:"Shipping terms",              val:(d.inco||"\u2014")},
     {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"moq",     label:"Minimum order value",         val:(d.moq||"No minimum")},
     {key:"terr",    label:"Territory (active sales)",     val:(d.terr||"\u2014")},
     {key:"target",  label:"Annual sales target",         val:(d.target||"None")},
     {key:"bonus",   label:"Back-end bonus",              val:(d.bonus||"None")},
@@ -24421,10 +24442,17 @@ function renderFillMode(d) {
   ] : [
     {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
     {key:"excl",    label:"Appointment type",            val:(d.excl||"Non-exclusive")},
+    {key:"notice",  label:"Notice period (days)",        val:(d.notice||"\u2014")},
+    {key:"inco",    label:"Shipping terms",              val:(d.inco||"\u2014")},
     {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"moq",     label:"Minimum order quantity",      val:(d.moq||"No minimum")},
     {key:"terr",    label:"Territory (active sales)",     val:(d.terr||"\u2014")},
     {key:"credit",  label:"Credit limit",                val:(d.credit||"To be agreed")},
-    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":(d.mdf||"Not offered"))}
+    {key:"minact",  label:"Min. activity (MDF elig.)",    val:(d.minact||"To be agreed")},
+    {key:"targets", label:"Annual sales targets",        val:tierStr()},
+    {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":"Not offered")},
+    {key:"mdft",    label:"Target bonus MDF (%)",         val:(d.mdft?d.mdft+"%":"\u2014")},
+    {key:"mdff",    label:"MDF invoicing frequency",      val:(d.mdff||"Quarterly")}
   ];
   // Store original values for comparison later
   window._negOriginals = {};
@@ -24586,7 +24614,7 @@ function showReviewMode(d) {
   var proposalKeys = Object.keys(proposals);
   window._negResolutions = {};
   if (proposalKeys.length > 0) {
-    var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",inco:"Incoterms",curr:"Invoice currency",terr:"Territory",mdfb:"Base MDF (%)",credit:"Credit limit",target:"Annual sales target",bonus:"Back-end bonus",mdf:"MDF"};
+    var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",term:"Initial term",inco:"Incoterms",delplace:"Place of delivery",lead:"Lead time (days)",curr:"Invoice currency",pcurr:"Price list currency",moq:"Minimum order",terr:"Territory",targets:"Annual sales targets",mdfb:"Base MDF (%)",mdft:"Target bonus MDF (%)",mdfc:"Co-op fund (%)",mdff:"MDF frequency",credit:"Credit limit",minact:"Min. activity",notice:"Notice period",target:"Annual sales target",bonus:"Back-end bonus",mdf:"MDF"};
     proposalCard = document.createElement("div");
     proposalCard.className = "card";
     var ph = "<h2>Proposed changes from " + (d.name||"the counterparty") + " <span class=\'neg-badge\'>" + proposalKeys.length + " to review</span></h2>";
@@ -24640,15 +24668,19 @@ function generateFromReview() {
   // Apply accepted proposals to the data
   var proposals = d._proposals || {};
   var resolutions = window._negResolutions || {};
+  var pctKeys = {mdfb:1, mdft:1, mdfc:1};
   Object.keys(proposals).forEach(function(key){
     if (resolutions[key] === "accept") {
       var val = proposals[key].proposed;
-      // Map the negotiable key back to the data field
-      if (key === "inco") {
-        // proposed may include incoterms + year; store raw in inco
-        d.inco = val;
-      } else if (key === "mdfb") {
-        d.mdfb = val.replace("%","").trim();
+      if (key === "term") {
+        // strip "years" if present, store the period
+        d.term = val.replace(/years?/i,"").trim();
+      } else if (pctKeys[key]) {
+        d[key] = val.replace("%","").trim();
+      } else if (key === "targets") {
+        // Tier summary can't be cleanly parsed back — record as a special condition note
+        d._targetsNote = val;
+        d.targetsOn = true;
       } else {
         d[key] = val;
       }
