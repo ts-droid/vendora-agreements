@@ -24375,6 +24375,7 @@ function renderFillMode(d) {
     + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit &amp; Generate</strong> to download the ready-to-sign agreement.</p>";
 
   // Negotiable commercial terms — supplier can accept or propose a change
+  var isRB = d._type === "rb";
   var NEG_TERMS = isDA ? [
     {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
     {key:"excl",    label:"Exclusivity",                 val:(d.excl||"\u2014")},
@@ -24382,6 +24383,13 @@ function renderFillMode(d) {
     {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
     {key:"terr",    label:"Territory",                   val:(d.terr||"\u2014")},
     {key:"mdfb",    label:"Base MDF (%)",                val:(d.mdfb?d.mdfb+"%":"Not offered")}
+  ] : isRB ? [
+    {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
+    {key:"curr",    label:"Invoice currency",            val:(d.curr||"\u2014")},
+    {key:"terr",    label:"Territory (active sales)",     val:(d.terr||"\u2014")},
+    {key:"target",  label:"Annual sales target",         val:(d.target||"None")},
+    {key:"bonus",   label:"Back-end bonus",              val:(d.bonus||"None")},
+    {key:"mdf",     label:"MDF",                         val:(d.mdf||"Not offered")}
   ] : [
     {key:"pay",     label:"Payment terms (days net)",    val:(d.pay||"\u2014")},
     {key:"excl",    label:"Appointment type",            val:(d.excl||"Non-exclusive")},
@@ -24546,7 +24554,7 @@ function showReviewMode(d) {
   var proposalKeys = Object.keys(proposals);
   window._negResolutions = {};
   if (proposalKeys.length > 0) {
-    var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",inco:"Incoterms",curr:"Invoice currency",terr:"Territory",mdfb:"Base MDF (%)",credit:"Credit limit"};
+    var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",inco:"Incoterms",curr:"Invoice currency",terr:"Territory",mdfb:"Base MDF (%)",credit:"Credit limit",target:"Annual sales target",bonus:"Back-end bonus",mdf:"MDF"};
     proposalCard = document.createElement("div");
     proposalCard.className = "card";
     var ph = "<h2>Proposed changes from " + (d.name||"the counterparty") + " <span class=\'neg-badge\'>" + proposalKeys.length + " to review</span></h2>";
