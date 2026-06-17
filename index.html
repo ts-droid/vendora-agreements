@@ -24044,6 +24044,16 @@ async function buildRA(overrideData) {
   var targetsOn = document.getElementById("ra_targets_on") && document.getElementById("ra_targets_on").checked;
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
+  var hasMDFra = !!(data.mdfb || data.mdft || data.mdf || data.mdff);
+
+  var posRows = [];
+  posRows.push(h.h2("B   Approved Points of Sale"));
+  posRows.push(h.par("The Reseller shall sell the Products only through the points of sale listed below. This includes physical retail locations and all websites, domains, and trading names operated by the Reseller. The Reseller shall obtain the Supplier’s prior written approval before adding any new point of sale, website, or domain. Sales through any point of sale not approved in writing shall constitute a material breach."));
+  posRows.push(h.par([{t:"Physical locations:",b:true}]));
+  (Array.isArray(data.pos_physical) && data.pos_physical.length ? data.pos_physical : ["—"]).forEach(function(x){ posRows.push(h.bul(x)); });
+  posRows.push(h.par([{t:"Websites / domains / trading names:",b:true}]));
+  (Array.isArray(data.pos_web) && data.pos_web.length ? data.pos_web : ["—"]).forEach(function(x){ posRows.push(h.bul(x)); });
+  posRows.push(h.note("Points of sale may be updated by written agreement without re-signing the main agreement."));
 
   var children = [
     h.sp(),h.sp(),
@@ -24073,7 +24083,7 @@ async function buildRA(overrideData) {
     h.h3("Orders"),
     h.par("Orders shall be placed through the Supplier\u2019s designated ordering channel and are subject to acceptance by the Supplier. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence beyond this period constitutes acceptance."),
     h.h3("Prices"),
-    h.par("Prices are as stated in the Supplier\u2019s current price list or web portal, excluding any applicable value added tax or sales tax. Shipping costs shall be governed by the shipping terms in Appendix 1 and Appendix 3. The Supplier reserves the right to amend Prices at any time; price changes apply to orders placed after the date the amended price list is published and shall not apply retroactively to orders already confirmed."),
+    h.par("Prices are as stated in the Supplier\u2019s current price list or web portal, excluding any applicable value added tax or sales tax. It is the Reseller\u2019s responsibility to ensure it uses the Supplier\u2019s current prices at all times. Current prices are made available (i) on the Supplier\u2019s website, and (ii) via a downloadable price file (XML or CSV) which the Supplier makes available for continuous retrieval. The Reseller shall not rely on any previously downloaded, cached, or historical price data. Shipping costs shall be governed by the shipping terms in Appendix 1 and Appendix 3. The Supplier reserves the right to amend Prices at any time; price changes apply to orders placed after the date the amended price list is published and shall not apply retroactively to orders already confirmed."),
     h.h3("Payment"),
     h.par("The Reseller shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date. In the event of late payment, the Supplier is entitled to charge statutory interest, reminder fees, and collection costs. The Supplier also has the right to withhold further deliveries until full payment has been received."),
     h.h3("Credit Assessment and Credit Limit"),
@@ -24092,8 +24102,8 @@ async function buildRA(overrideData) {
     h.par([{t:"Anti-grey market and anti-counterfeiting. ",b:true},"The Reseller shall not knowingly purchase, sell, or distribute Products sourced outside the Supplier\u2019s authorised supply chain. If the Reseller encounters or reasonably suspects the presence of grey market or counterfeit products in the Territory, the Reseller shall promptly notify the Supplier in writing and shall cooperate with the Supplier in any investigation or enforcement action at the Supplier\u2019s cost."]),
     // §7
     h.h1("7   Reporting"),
-    h.par("The Reseller shall provide the Supplier with sell-through reports on a quarterly basis, no later than fifteen (15) calendar days after the end of each calendar quarter. Each Sell-Through Report shall include: (i) units sold per Product SKU during the quarter; (ii) current closing inventory per SKU; and (iii) any significant developments in market conditions relevant to the Products."),
-    h.par([{t:"MDF eligibility linked to reporting. ",b:true},"Receipt of accurate and timely Sell-Through Reports is a condition for the Reseller\u2019s eligibility for Market Development Funds (MDF) in the following quarter. If the Reseller fails to submit a Sell-Through Report within the period specified, the Supplier may withhold MDF payments for the relevant quarter until the report has been received and verified."]),
+    h.par("The Reseller shall provide the Supplier with sell-through reports on a monthly basis, no later than ten (10) calendar days after the end of each calendar month. Each Sell-Through Report shall include: (i) units sold per Product SKU during the month; (ii) current closing inventory per SKU; and (iii) any significant developments in market conditions relevant to the Products."),
+    hasMDFra ? h.par([{t:"MDF eligibility linked to reporting. ",b:true},"Receipt of accurate and timely Sell-Through Reports is a condition for the Reseller\u2019s eligibility for Market Development Funds (MDF) in the following period. If the Reseller fails to submit a Sell-Through Report within the period specified, the Supplier may withhold MDF payments for the relevant period until the report has been received and verified."]) : null,
     // §8
     h.h1("8   Confidentiality"),
     h.par("During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement."),
@@ -24147,6 +24157,8 @@ async function buildRA(overrideData) {
     h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")].filter(Boolean)),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
+    h.sp(),
+    ...posRows,
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24161,6 +24173,7 @@ async function buildRA(overrideData) {
   if (data._isPreview) {
     children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
   }
+  children = children.filter(Boolean);
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
@@ -24604,6 +24617,17 @@ function renderFillMode(d) {
       + "</div>";
   }
 
+  if (d._type === 'ra') {
+    idCard.innerHTML += "<div class='sec'>Approved Points of Sale *</div>"
+      + "<div class='desc'>List every physical store and every website/domain/trading name where you will sell the Products. You must list at least one. You can add more of each.</div>"
+      + "<label>Physical stores</label>"
+      + "<div id='pos_physical_rows'></div>"
+      + "<button type='button' class='pos-add' onclick=\"addPosRow('pos_physical_rows','pos_physical')\">+ Add physical store</button>"
+      + "<label style='margin-top:12px;display:block'>Websites / domains / trading names</label>"
+      + "<div id='pos_web_rows'></div>"
+      + "<button type='button' class='pos-add' onclick=\"addPosRow('pos_web_rows','pos_web')\">+ Add website / domain</button>";
+  }
+
   // Contacts form (only for DA)
   var contactCard = null;
   if (isDA) {
@@ -24637,6 +24661,11 @@ function renderFillMode(d) {
     buildRoles("fill_roles", "fill_", DA_ROLES);
   }
 
+  if (d._type === 'ra') {
+    addPosRow('pos_physical_rows','pos_physical');
+    addPosRow('pos_web_rows','pos_web');
+  }
+
   // Store vendora data for later use
   window._fillData = d;
   window._fillIsDA = isDA;
@@ -24668,6 +24697,7 @@ function showReviewMode(d) {
     ["Address", d.addr||"—"],
     ["Products", d.products||"—"], ["Territory", d.terr||"—"],
     ["Payment", (d.curr||"—")+", "+(d.pay||"—")+" days net"],
+    ["Points of sale", ((d.pos_physical||[]).concat(d.pos_web||[])).join(", ") || "—"],
     ["Signatory", (d.sig_name||"—")+(d.sig_email?" — "+d.sig_email:"")],
   ];
 
@@ -24815,6 +24845,33 @@ function collectProposals() {
   return proposals;
 }
 
+function addPosRow(containerId, group, value){
+  var box = document.getElementById(containerId);
+  if (!box) return;
+  var row = document.createElement("div");
+  row.className = "pos-row";
+  row.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:6px";
+  var ph = group === "pos_physical" ? "e.g. Flagship store, Vilnius" : "e.g. example.lt";
+  var inp = document.createElement("input");
+  inp.className = group + "_input";
+  inp.placeholder = ph;
+  inp.value = value || "";
+  inp.style.flex = "1";
+  var del = document.createElement("button");
+  del.type = "button";
+  del.className = "pos-del";
+  del.innerHTML = "&#x2715;";
+  del.style.cssText = "flex:0 0 auto;width:28px;height:28px;border:1px solid var(--border);background:#fff;cursor:pointer";
+  del.onclick = function(){ row.remove(); };
+  row.appendChild(inp);
+  row.appendChild(del);
+  box.appendChild(row);
+}
+function collectPos(group){
+  return Array.prototype.slice.call(document.querySelectorAll("." + group + "_input"))
+    .map(function(i){ return i.value.trim(); })
+    .filter(Boolean);
+}
 function submitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
@@ -24826,6 +24883,9 @@ function submitFill() {
   if (!isDA) {
     if (!gv("fill_sig_name"))  required.push("Signatory name");
     if (!gv("fill_sig_email")) required.push("Signatory email");
+  }
+  if (d._type === 'ra' && collectPos("pos_physical").length === 0 && collectPos("pos_web").length === 0) {
+    required.push("At least one point of sale (physical store or website / domain)");
   }
 
   // Soft warnings — empty but not blocking
@@ -24895,6 +24955,17 @@ function doSubmitFill() {
           sig_name:  gv("fill_sig_name"), sig_email: gv("fill_sig_email"),
           sig_title: gv("fill_sig_title"), sig_phone: gv("fill_sig_phone")
         });
+        if (d._type === 'ra') {
+          merged.pos_physical = collectPos("pos_physical");
+          merged.pos_web      = collectPos("pos_web");
+        }
+      }
+
+      // Approved Points of Sale are mandatory for RA — at least one entry
+      if (d._type === 'ra' && (!merged.pos_physical || !merged.pos_physical.length) && (!merged.pos_web || !merged.pos_web.length)) {
+        spin.style.display = "none";
+        alert("Please list at least one point of sale — a physical store or a website/domain — where you will sell the Products.");
+        return;
       }
 
       // Capture any proposed changes to commercial terms
