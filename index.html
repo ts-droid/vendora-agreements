@@ -23788,14 +23788,16 @@ async function buildDA(overrideData) {
     vname:gv("da_vname"),vemail:gv("da_vemail"),contacts:{}
   };
   if (!data.name) { alert("Please enter the Supplier name."); return; }
-  DA_ROLES.forEach(function(r){ data.contacts[r.id]={label:r.label,p:{n:gv("da_"+r.id+"_pn"),e:gv("da_"+r.id+"_pe"),p:gv("da_"+r.id+"_pp"),t:gv("da_"+r.id+"_pt")},b:{n:gv("da_"+r.id+"_bn"),e:gv("da_"+r.id+"_be"),p:gv("da_"+r.id+"_bp"),t:gv("da_"+r.id+"_bt")}}; });
+  if (!overrideData) { DA_ROLES.forEach(function(r){ data.contacts[r.id]={label:r.label,p:{n:gv("da_"+r.id+"_pn"),e:gv("da_"+r.id+"_pe"),p:gv("da_"+r.id+"_pp")},b:{n:gv("da_"+r.id+"_bn"),e:gv("da_"+r.id+"_be"),p:gv("da_"+r.id+"_bp")}}; }); }
+  if (!data.contacts) data.contacts = {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = overrideData ? !!overrideData.targetsOn : (document.getElementById("da_targets_on") && document.getElementById("da_targets_on").checked);
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
 
   var contactRows = [];
   DA_ROLES.forEach(function(r){
-    var ct = data.contacts[r.id];
+    var ct = data.contacts[r.id] || {p:{},b:{}};
+    if (!ct.p) ct.p = {}; if (!ct.b) ct.b = {};
     var W2=[1400,2600,2700,2806];
     contactRows.push(new d.Paragraph({spacing:{before:100,after:30},shading:{fill:"EEF2F7",type:d.ShadingType.CLEAR},indent:{left:50},children:[h.t(r.label,{bold:true,size:17,color:h.NAVY}),h.t("  —  "+r.scope,{size:15,color:"666666",italics:true})]}));
     contactRows.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:W2,rows:[
@@ -23805,7 +23807,7 @@ async function buildDA(overrideData) {
     contactRows.push(h.sp());
   });
 
-  var vendoraRows = [["Account Management","accounts@vendora.se"],["Order Management","orders@vendora.se"],["Finance / Invoicing","invoices@vendora.se"],["Logistics & Freight","logistics@vendora.se"],["Marketing & MDF","marketing@vendora.se"],["RMA & Tech Support","rma@vendora.se"],["General / Legal","info@vendora.se"]];
+  var vendoraRows = [["Main contact","ts@vendora.se"],["Purchasing / Orders","orders@vendora.se"],["Finance / Accounts Payable","invoices@vendora.se"],["Logistics & Freight","logistics@vendora.se"],["Marketing & MDF","marketing@vendora.se"],["RMA & Tech Support","rma@vendora.se"],["General / Legal","info@vendora.se"]];
   var VW=[3200,3153,3153];
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
 
@@ -24011,7 +24013,7 @@ async function buildDA(overrideData) {
   children.push(h.sp());children.push(h.h2("2   Supplier — Contact Persons"));
   contactRows.forEach(function(r){ children.push(r); });
   children.push(h.h2("3   Vendora Nordic AB — Contact Reference"));
-  children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:VW,rows:[h.hdrRow(["Function","Standing email","Named contact"],VW)].concat(vendoraRows.map(function(r,i){ return h.dataRow([r[0],r[1],r[0]==="Account Management"?vendoraAM:"—"],VW,i%2===1); }))}));
+  children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:VW,rows:[h.hdrRow(["Function","Standing email","Named contact"],VW)].concat(vendoraRows.map(function(r,i){ return h.dataRow([r[0],r[1],r[0]==="Main contact"?vendoraAM:"—"],VW,i%2===1); }))}));
   children.push(h.sp());
 
   if (data._isPreview) {
