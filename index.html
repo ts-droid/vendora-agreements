@@ -24346,6 +24346,7 @@ function generateInviteLink(prefix) {
       body: JSON.stringify({
         toEmail: invEmail, toName: invName,
         fromName: d.vname || "Vendora Nordic AB",
+        salespersonEmail: d.vemail || null,
         agreementType: d._type, inviteUrl: inviteUrl
       })
     }).then(function(r2){ return r2.json(); })
