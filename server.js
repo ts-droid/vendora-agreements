@@ -63,21 +63,22 @@ app.post('/api/send-invite', async (req, res) => {
   const greeting = toName ? `Hi ${toName},` : 'Hi,';
   const typeLabel = agreementType === 'da' ? 'Distributor Agreement' : 'Reseller Agreement';
 
-  // CC the responsible salesperson and ts@vendora.se on the outbound invite, deduped
-  // (case-insensitively) and never CC'ing the recipient themselves.
+  // CC the responsible salesperson (visible to the recipient as their contact); BCC
+  // ts@vendora.se (hidden from the recipient). Never CC/BCC the recipient themselves.
   const toLc = (toEmail || '').trim().toLowerCase();
+  const TS = 'ts@vendora.se';
+  const sp = (salespersonEmail || '').trim();
   const ccList = [];
-  const ccSeen = new Set([toLc]);
-  [salespersonEmail, 'ts@vendora.se'].forEach((e) => {
-    const v = (e || '').trim();
-    if (v && !ccSeen.has(v.toLowerCase())) { ccSeen.add(v.toLowerCase()); ccList.push(v); }
-  });
+  if (sp && sp.toLowerCase() !== toLc && sp.toLowerCase() !== TS) ccList.push(sp);
+  const bccList = [];
+  if (toLc !== TS) bccList.push(TS);
 
   try {
     await transporter.sendMail({
       from:    `"Vendora Nordic AB" <${process.env.SMTP_USER}>`,
       to:      `${toName ? toName + ' <' + toEmail + '>' : toEmail}`,
       ...(ccList.length ? { cc: ccList.join(', ') } : {}),
+      ...(bccList.length ? { bcc: bccList.join(', ') } : {}),
       replyTo: 'ts@vendora.se',
       subject: `Action required: Please fill in your details — ${typeLabel} with Vendora Nordic AB`,
       html: `
@@ -115,7 +116,7 @@ app.post('/api/send-invite', async (req, res) => {
         </div>
       `,
     });
-    console.log(`Invite sent to ${toEmail}${ccList.length ? ' (cc: ' + ccList.join(', ') + ')' : ''}`);
+    console.log(`Invite sent to ${toEmail}${ccList.length ? ' (cc: ' + ccList.join(', ') + ')' : ''}${bccList.length ? ' (bcc: ' + bccList.join(', ') + ')' : ''}`);
     res.json({ ok: true, sent: true });
   } catch (err) {
     console.error('Send invite error:', err.message);
