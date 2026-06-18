@@ -23602,6 +23602,26 @@ var DA_ROLES = [
   {id:"legal",label:"Legal / Compliance",                         scope:"Contract, GDPR, sustainability"}
 ];
 
+// Reseller-side contact points collected in the RA/RB fill flow (lighter than DA_ROLES:
+// a single contact per function, no primary/backup split).
+var RESELLER_ROLES = [
+  {id:"main", label:"Main / General contact"},
+  {id:"mktg", label:"Marketing"},
+  {id:"legal",label:"Legal / Compliance"},
+  {id:"logi", label:"Logistics"},
+  {id:"fin",  label:"Finance"}
+];
+
+// Build the reseller contact-points table rows from submitted data.rcontacts.
+function resellerContactRows(h, data){
+  var rc = (data && data.rcontacts) || {};
+  return RESELLER_ROLES.map(function(r){
+    var c = rc[r.id] || {};
+    var parts = [c.n, c.e, c.p].filter(Boolean);
+    return h.fldRow(r.label, parts.length ? parts.join(" — ") : "—");
+  });
+}
+
 function switchTab(n) {
   activeTab = n;
   document.querySelectorAll(".tab").forEach(function(t,i){ t.classList.toggle("active", i===n); });
@@ -24172,6 +24192,10 @@ async function buildRA(overrideData) {
       h.fldRow("Responsible salesperson",vendoraAM),
       h.fldRow("General enquiries","info@vendora.se")
     ]),
+    h.sp(),
+    h.h2("D   Reseller Contact Points"),
+    h.par("The Reseller's contact persons for the following functions:"),
+    h.fldTbl(resellerContactRows(h, data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24246,6 +24270,10 @@ async function buildRB(overrideData) {
       h.fldRow("Responsible salesperson",vendoraAM),
       h.fldRow("General enquiries","info@vendora.se")
     ]),
+    h.sp(),
+    h.h2("Reseller Contact Points"),
+    h.par("The Reseller's contact persons for the following functions:"),
+    h.fldTbl(resellerContactRows(h, data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24668,6 +24696,22 @@ function renderFillMode(d) {
     contactCard.innerHTML = "<h2>Supplier Contacts</h2><div class='desc'>Please provide named contacts for each function. Backup contacts are optional but recommended.</div><div id='fill_roles'></div>";
   }
 
+  // Reseller-side contact points (RA / RB) — optional, single contact per function
+  var rcCard = null;
+  if (!isDA) {
+    rcCard = document.createElement("div");
+    rcCard.className = "card";
+    var rcRows = RESELLER_ROLES.map(function(r){
+      return "<div class='sec' style='margin-top:10px'>"+r.label+"</div>"
+        + "<div class='g2'>"
+        + "<div class='f'><label>Name</label><input id='fill_rc_"+r.id+"_n' placeholder='Full name'></div>"
+        + "<div class='f'><label>Email</label><input id='fill_rc_"+r.id+"_e' type='email' placeholder='name@company.com'></div>"
+        + "<div class='f'><label>Phone</label><input id='fill_rc_"+r.id+"_p' placeholder='+46 70 000 00 00'></div>"
+        + "</div>";
+    }).join("");
+    rcCard.innerHTML = "<h2>Your Contact Points</h2><div class='desc'>Optional but recommended — named contacts at your company for each function. Vendora will use these for day-to-day matters.</div>" + rcRows;
+  }
+
   // Submit button
   var submitBar = document.createElement("div");
   submitBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
@@ -24685,6 +24729,7 @@ function renderFillMode(d) {
   shell.appendChild(banner);
   shell.appendChild(summary);
   shell.appendChild(idCard);
+  if (rcCard) shell.appendChild(rcCard);
   if (contactCard) shell.appendChild(contactCard);
   shell.appendChild(submitBar);
   shell.appendChild(sucDiv);
@@ -24730,6 +24775,7 @@ function showReviewMode(d) {
     ["Products", d.products||"—"], ["Territory", d.terr||"—"],
     ["Payment", (d.curr||"—")+", "+(d.pay||"—")+" days net"],
     ["Points of sale", ((d.pos_physical||[]).concat(d.pos_web||[])).join(", ") || "—"],
+    ["Reseller contacts", (function(){var rc=d.rcontacts||{};return RESELLER_ROLES.map(function(r){return rc[r.id]&&rc[r.id].n?r.label+": "+rc[r.id].n:null;}).filter(Boolean).join("; ")||"—";})()],
     ["Signatory", (d.sig_name||"—")+(d.sig_email?" — "+d.sig_email:"")],
   ];
 
@@ -24991,6 +25037,10 @@ function doSubmitFill() {
           merged.pos_physical = collectPos("pos_physical");
           merged.pos_web      = collectPos("pos_web");
         }
+        merged.rcontacts = {};
+        RESELLER_ROLES.forEach(function(r){
+          merged.rcontacts[r.id] = { n:gv("fill_rc_"+r.id+"_n"), e:gv("fill_rc_"+r.id+"_e"), p:gv("fill_rc_"+r.id+"_p") };
+        });
       }
 
       // Approved Points of Sale are mandatory for RA — at least one entry
