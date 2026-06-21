@@ -394,6 +394,11 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Email</label><input id="ra_vemail" placeholder="firstname@vendora.se"></div>
   </div>
 </div>
+<div class="card">
+  <h2>Reseller Contacts</h2>
+  <div class="desc">Optional &mdash; named contacts at the reseller for each function. Pre-fill them here, or leave them for the reseller to complete when they fill in their details. Shown in Appendix 1.</div>
+  <div id="ra_rc"></div>
+</div>
 <div class="invite-card">
   <h3>&#x1F4E7; Invite reseller to fill in their details</h3>
   <p>Enter the reseller contact below, then generate a link to send them. They will fill in company identity and signatory details only &mdash; all commercial terms you set above will be locked.</p>
@@ -23622,6 +23627,28 @@ function resellerContactRows(h, data){
   });
 }
 
+// Build the reseller contact-point input fields for a given id prefix. Used both on the
+// Vendora RA tab (prefix "ra_rc_") and in the counterparty fill form (prefix "fill_rc_").
+function resellerContactFieldsHtml(prefix){
+  return RESELLER_ROLES.map(function(r){
+    return "<div class='sec' style='margin-top:10px'>"+r.label+"</div>"
+      + "<div class='g2'>"
+      + "<div class='f'><label>Name</label><input id='"+prefix+r.id+"_n' placeholder='Full name'></div>"
+      + "<div class='f'><label>Email</label><input id='"+prefix+r.id+"_e' type='email' placeholder='name@company.com'></div>"
+      + "<div class='f'><label>Phone</label><input id='"+prefix+r.id+"_p' placeholder='+46 70 000 00 00'></div>"
+      + "</div>";
+  }).join("");
+}
+
+// Read reseller contact-point fields for a prefix into an rcontacts object.
+function collectResellerContacts(prefix){
+  var rc = {};
+  RESELLER_ROLES.forEach(function(r){
+    rc[r.id] = { n:gv(prefix+r.id+"_n"), e:gv(prefix+r.id+"_e"), p:gv(prefix+r.id+"_p") };
+  });
+  return rc;
+}
+
 function switchTab(n) {
   activeTab = n;
   document.querySelectorAll(".tab").forEach(function(t,i){ t.classList.toggle("active", i===n); });
@@ -24061,6 +24088,7 @@ async function buildRA(overrideData) {
     sig_title:gv("ra_sig_title"), sig_phone:gv("ra_sig_phone")
   };
   if (!data.name) { alert("Please enter the Reseller name."); return; }
+  if (!overrideData) data.rcontacts = collectResellerContacts("ra_rc_");
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = document.getElementById("ra_targets_on") && document.getElementById("ra_targets_on").checked;
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
@@ -24703,15 +24731,7 @@ function renderFillMode(d) {
   if (!isDA) {
     rcCard = document.createElement("div");
     rcCard.className = "card";
-    var rcRows = RESELLER_ROLES.map(function(r){
-      return "<div class='sec' style='margin-top:10px'>"+r.label+"</div>"
-        + "<div class='g2'>"
-        + "<div class='f'><label>Name</label><input id='fill_rc_"+r.id+"_n' placeholder='Full name'></div>"
-        + "<div class='f'><label>Email</label><input id='fill_rc_"+r.id+"_e' type='email' placeholder='name@company.com'></div>"
-        + "<div class='f'><label>Phone</label><input id='fill_rc_"+r.id+"_p' placeholder='+46 70 000 00 00'></div>"
-        + "</div>";
-    }).join("");
-    rcCard.innerHTML = "<h2>Your Contact Points</h2><div class='desc'>Optional but recommended — named contacts at your company for each function. Vendora will use these for day-to-day matters.</div>" + rcRows;
+    rcCard.innerHTML = "<h2>Your Contact Points</h2><div class='desc'>Optional but recommended — named contacts at your company for each function. Vendora will use these for day-to-day matters.</div>" + resellerContactFieldsHtml("fill_rc_");
   }
 
   // Submit button
@@ -25039,10 +25059,7 @@ function doSubmitFill() {
           merged.pos_physical = collectPos("pos_physical");
           merged.pos_web      = collectPos("pos_web");
         }
-        merged.rcontacts = {};
-        RESELLER_ROLES.forEach(function(r){
-          merged.rcontacts[r.id] = { n:gv("fill_rc_"+r.id+"_n"), e:gv("fill_rc_"+r.id+"_e"), p:gv("fill_rc_"+r.id+"_p") };
-        });
+        merged.rcontacts = collectResellerContacts("fill_rc_");
       }
 
       // Approved Points of Sale are mandatory for RA — at least one entry
@@ -25092,6 +25109,7 @@ function doSubmitFill() {
 
 /* INIT */
 buildRoles("da_roles", "da_", DA_ROLES);
+if (document.getElementById("ra_rc")) document.getElementById("ra_rc").innerHTML = resellerContactFieldsHtml("ra_rc_");
 document.getElementById("da_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("ra_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("rb_date").value = new Date().toISOString().slice(0,10);
