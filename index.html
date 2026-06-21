@@ -23610,6 +23610,7 @@ var DA_ROLES = [
 // Reseller-side contact points collected in the RA/RB fill flow (lighter than DA_ROLES:
 // a single contact per function, no primary/backup split).
 var RESELLER_ROLES = [
+  {id:"notices", label:"Contract & Notices", req:true, note:"Vendora sends all contract amendments and notices to this address. The Reseller must keep it active and monitored at all times."},
   {id:"main", label:"Main / General contact"},
   {id:"mktg", label:"Marketing"},
   {id:"legal",label:"Legal / Compliance"},
@@ -23631,7 +23632,8 @@ function resellerContactRows(h, data){
 // Vendora RA tab (prefix "ra_rc_") and in the counterparty fill form (prefix "fill_rc_").
 function resellerContactFieldsHtml(prefix){
   return RESELLER_ROLES.map(function(r){
-    return "<div class='sec' style='margin-top:10px'>"+r.label+"</div>"
+    return "<div class='sec' style='margin-top:10px'>"+r.label+(r.req?" *":"")+"</div>"
+      + (r.note?"<div class='desc' style='margin-top:-2px'>"+r.note+"</div>":"")
       + "<div class='g2'>"
       + "<div class='f'><label>Name</label><input id='"+prefix+r.id+"_n' placeholder='Full name'></div>"
       + "<div class='f'><label>Email</label><input id='"+prefix+r.id+"_e' type='email' placeholder='name@company.com'></div>"
@@ -24189,7 +24191,7 @@ async function buildRA(overrideData) {
     // §16
     h.h1("16   Miscellaneous"),
     h.par([{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."]),
-    h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Legal / Compliance contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."]),
+    h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Contract & Notices contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."]),
     h.par([{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party."]),
     h.par([{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."]),
     h.par([{t:"Anti-bribery. ",b:true},"Both Parties shall comply with the Swedish Anti-Bribery Act and other applicable anti-bribery and anti-corruption laws."]),
@@ -24224,7 +24226,7 @@ async function buildRA(overrideData) {
     h.h2("D   Reseller Contact Points"),
     h.par("The Reseller's contact persons for the following functions:"),
     h.fldTbl(resellerContactRows(h, data)),
-    h.note("Amendments and contractual notices under this Agreement are sent to the Legal / Compliance contact above, or the Main / General contact if none is given. The Reseller shall keep that address monitored."),
+    h.note("Amendments and contractual notices under this Agreement are sent to the Contract & Notices contact above, or the Main / General contact if none is given. The Reseller shall keep that address monitored."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24303,7 +24305,7 @@ async function buildRB(overrideData) {
     h.h2("Reseller Contact Points"),
     h.par("The Reseller's contact persons for the following functions:"),
     h.fldTbl(resellerContactRows(h, data)),
-    h.note("Amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent to the Reseller’s Legal / Compliance contact above, or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
+    h.note("Amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent to the Reseller’s Contract & Notices contact above, or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24983,6 +24985,7 @@ function submitFill() {
   if (!isDA) {
     if (!gv("fill_sig_name"))  required.push("Signatory name");
     if (!gv("fill_sig_email")) required.push("Signatory email");
+    if (!gv("fill_rc_notices_e")) required.push("Contract & Notices contact email (the address Vendora sends all amendments and notices to)");
   }
   if (d._type === 'ra' && collectPos("pos_physical").length === 0 && collectPos("pos_web").length === 0) {
     required.push("At least one point of sale (physical store or website / domain)");
