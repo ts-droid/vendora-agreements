@@ -338,6 +338,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Title / role <em>(optional)</em></label><input id="ra_sig_title" placeholder="e.g. CEO / Purchasing Manager"></div>
     <div class="f"><label>Phone <em>(optional)</em></label><input id="ra_sig_phone" placeholder="e.g. +46 70 000 00 00"></div>
   </div>
+  <div id="ra_rc_notices"></div>
 </div>
 
 <div class="card">
@@ -23617,20 +23618,28 @@ var RESELLER_ROLES = [
   {id:"fin",  label:"Finance"}
 ];
 
-// Build the reseller contact-points table rows from submitted data.rcontacts.
+// Build the reseller function-contact table rows (everything except the dedicated
+// Contract & Notices contact, which is shown with the signatory instead).
 function resellerContactRows(h, data){
   var rc = (data && data.rcontacts) || {};
-  return RESELLER_ROLES.map(function(r){
+  return RESELLER_ROLES.filter(function(r){ return r.id !== "notices"; }).map(function(r){
     var c = rc[r.id] || {};
     var parts = [c.n, c.e, c.p].filter(Boolean);
     return h.fldRow(r.label, parts.length ? parts.join(" — ") : "—");
   });
 }
 
-// Build the reseller contact-point input fields for a given id prefix. Used both on the
-// Vendora RA tab (prefix "ra_rc_") and in the counterparty fill form (prefix "fill_rc_").
-function resellerContactFieldsHtml(prefix){
-  return RESELLER_ROLES.map(function(r){
+// Value string for the dedicated Contract & Notices contact (name — email — phone).
+function resellerNoticesValue(data){
+  var c = (data && data.rcontacts && data.rcontacts.notices) || {};
+  var parts = [c.n, c.e, c.p].filter(Boolean);
+  return parts.length ? parts.join(" — ") : "—";
+}
+
+// Build the reseller contact-point input fields for a given id prefix and role set. Used on
+// the Vendora RA tab (prefix "ra_rc_") and the counterparty fill form (prefix "fill_rc_").
+function resellerContactFieldsHtml(prefix, roles){
+  return (roles || RESELLER_ROLES).map(function(r){
     return "<div class='sec' style='margin-top:10px'>"+r.label+(r.req?" *":"")+"</div>"
       + (r.note?"<div class='desc' style='margin-top:-2px'>"+r.note+"</div>":"")
       + "<div class='g2'>"
@@ -24204,7 +24213,7 @@ async function buildRA(overrideData) {
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
     h.h2("A   Products and Territory"),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")].filter(Boolean)),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.sp(),
@@ -24225,7 +24234,7 @@ async function buildRA(overrideData) {
     h.h2("D   Reseller Contact Points"),
     h.par("The Reseller's contact persons for the following functions:"),
     h.fldTbl(resellerContactRows(h, data)),
-    h.note("Amendments and contractual notices under this Agreement are sent to the Contract & Notices contact above, or the Main / General contact if none is given. The Reseller shall keep that address monitored."),
+    h.note("The Contract & Notices contact set out in Section A above is the address to which all amendments, updated versions, and notices under this Agreement are sent (see section 16). The Reseller shall keep it active and monitored at all times."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24285,7 +24294,7 @@ async function buildRB(overrideData) {
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS",h.NAVY),h.sp(),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—")].filter(Boolean)),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.sp(),
@@ -24304,7 +24313,7 @@ async function buildRB(overrideData) {
     h.h2("Reseller Contact Points"),
     h.par("The Reseller's contact persons for the following functions:"),
     h.fldTbl(resellerContactRows(h, data)),
-    h.note("Amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent to the Reseller’s Contract & Notices contact above, or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
+    h.note("The Contract & Notices contact set out above is the address to which all amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent — or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
     h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
@@ -24705,7 +24714,8 @@ function renderFillMode(d) {
       + "<div class='f'><label>Signatory email *</label><input id='fill_sig_email' type='email' placeholder='name@company.com'></div>"
       + "<div class='f'><label>Title / role</label><input id='fill_sig_title' placeholder='e.g. CEO'></div>"
       + "<div class='f'><label>Phone</label><input id='fill_sig_phone' placeholder='+46 70 000 00 00'></div>"
-      + "</div>";
+      + "</div>"
+      + resellerContactFieldsHtml("fill_rc_", RESELLER_ROLES.filter(function(r){ return r.id === "notices"; }));
   }
 
   if (d._type === 'ra') {
@@ -24732,7 +24742,7 @@ function renderFillMode(d) {
   if (!isDA) {
     rcCard = document.createElement("div");
     rcCard.className = "card";
-    rcCard.innerHTML = "<h2>Your Contact Points</h2><div class='desc'>Optional but recommended — named contacts at your company for each function. Vendora will use these for day-to-day matters.</div>" + resellerContactFieldsHtml("fill_rc_");
+    rcCard.innerHTML = "<h2>Your Contact Points</h2><div class='desc'>Optional but recommended — named contacts at your company for each function. Vendora will use these for day-to-day matters.</div>" + resellerContactFieldsHtml("fill_rc_", RESELLER_ROLES.filter(function(r){ return r.id !== "notices"; }));
   }
 
   // Submit button
@@ -25111,7 +25121,8 @@ function doSubmitFill() {
 
 /* INIT */
 buildRoles("da_roles", "da_", DA_ROLES);
-if (document.getElementById("ra_rc")) document.getElementById("ra_rc").innerHTML = resellerContactFieldsHtml("ra_rc_");
+if (document.getElementById("ra_rc_notices")) document.getElementById("ra_rc_notices").innerHTML = resellerContactFieldsHtml("ra_rc_", RESELLER_ROLES.filter(function(r){ return r.id === "notices"; }));
+if (document.getElementById("ra_rc")) document.getElementById("ra_rc").innerHTML = resellerContactFieldsHtml("ra_rc_", RESELLER_ROLES.filter(function(r){ return r.id !== "notices"; }));
 document.getElementById("da_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("ra_date").value = new Date().toISOString().slice(0,10);
 document.getElementById("rb_date").value = new Date().toISOString().slice(0,10);
