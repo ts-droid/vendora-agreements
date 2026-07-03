@@ -24892,6 +24892,8 @@ function renderFillMode(d) {
 
 function showReviewMode(d) {
   var isDA = d._type === "da";
+  window._aiMessages = [];
+  initAiLawyer();
   document.querySelector(".hdr").style.display = "none";
   document.querySelector(".tabs").style.display = "none";
   document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
@@ -25261,6 +25263,7 @@ function initApp(){
     window._archiveEnabled = !!(cfg && cfg.archive);
     window._googleClientId = (cfg && cfg.googleClientId) || null;
     window._allowedDomain = (cfg && cfg.allowedDomain) || "vendora.se";
+    window._aiEnabled = !!(cfg && cfg.ai);
     if (!window._archiveEnabled) return;             // stateless mode: app works as before, no login
     return fetch("/api/auth/me").then(function(r){
       if (r.ok) return r.json().then(function(j){ onLoggedIn(j.user); });
@@ -25325,6 +25328,7 @@ function onLoggedIn(user){
   var chip = document.getElementById("userChip");
   chip.style.display="inline"; chip.innerHTML = esc(user.name||user.email) + " &middot; <a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='doLogout()'>Log out</a>";
   document.getElementById("archiveTabBtn").style.display="inline-block";
+  if (window._aiEnabled) showAiButton();
 }
 
 function doLogin(){ authRequest("/api/auth/login", { email:document.getElementById("authEmail").value.trim(), password:document.getElementById("authPassword").value }); }
@@ -25441,6 +25445,74 @@ function archiveDelete(id){
   fetch("/api/agreements/"+id,{method:"DELETE"}).then(function(){ loadArchive(); });
 }
 
+/* ── AI CONTRACT LAWYER ──────────────────────────────────────────────────────── */
+window._aiMessages = [];
+function showAiButton(){ var b=document.getElementById("aiFab"); if(b) b.style.display="flex"; }
+// Review mode bypasses the normal login gate, so enable the lawyer there separately.
+function initAiLawyer(){
+  fetch("/api/config").then(function(r){return r.json();}).then(function(cfg){
+    window._aiEnabled = !!(cfg && cfg.ai);
+    if (!window._aiEnabled) return;
+    return fetch("/api/auth/me").then(function(r){ if(r.ok) return r.json().then(function(j){ window._authUser=j.user; showAiButton(); }); });
+  }).catch(function(){});
+}
+function getAiContext(){
+  if (window._reviewData) return window._reviewData;
+  if (window._editing && window._editing.base) return window._editing.base;
+  if (window._lastBuild && window._lastBuild.data) return window._lastBuild.data;
+  return null;
+}
+function toggleAiDrawer(){
+  var d=document.getElementById("aiDrawer");
+  var open = d.style.display==="flex";
+  d.style.display = open?"none":"flex";
+  if (!open){
+    if (!window._aiMessages.length) renderAiMessages();
+    setTimeout(function(){ var i=document.getElementById("aiInput"); if(i) i.focus(); }, 50);
+  }
+}
+function renderAiMessages(){
+  var box=document.getElementById("aiMessages");
+  if (!window._aiMessages.length){
+    var ctx=getAiContext();
+    var hint = ctx && ctx._proposals && Object.keys(ctx._proposals).length
+      ? "The counterparty proposed changes on this agreement. Ask me to <a onclick=\"aiQuick('Analyse the counterparty\\'s proposed changes and recommend accept / counter / reject for each, with reasoning.')\" style='color:var(--blue2);cursor:pointer;text-decoration:underline'>analyse their proposals</a>, or ask anything."
+      : "Ask about this agreement — a clause, a counterparty request, or how to hold Vendora's position.";
+    box.innerHTML = "<div style='color:var(--muted);font-size:13px;line-height:1.6'>"+hint+"</div>";
+    return;
+  }
+  box.innerHTML = window._aiMessages.map(function(m){
+    var mine = m.role==="user";
+    return "<div style='margin:10px 0;display:flex;justify-content:"+(mine?"flex-end":"flex-start")+"'>"
+      + "<div style='max-width:85%;padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;"
+      + (mine?"background:var(--navy);color:#fff":"background:#f1f3f7;color:#1a1a1a")+"'>"+esc(m.content)+"</div></div>";
+  }).join("");
+  box.scrollTop = box.scrollHeight;
+}
+function aiQuick(text){ document.getElementById("aiInput").value=text; sendAi(); }
+function sendAi(){
+  var input=document.getElementById("aiInput");
+  var text=(input.value||"").trim();
+  if (!text) return;
+  input.value="";
+  window._aiMessages.push({role:"user",content:text});
+  renderAiMessages();
+  var box=document.getElementById("aiMessages");
+  var thinking=document.createElement("div");
+  thinking.id="aiThinking"; thinking.style.cssText="margin:10px 0;color:var(--muted);font-size:13px";
+  thinking.textContent="The lawyer is thinking…"; box.appendChild(thinking); box.scrollTop=box.scrollHeight;
+  document.getElementById("aiSend").disabled=true;
+  fetch("/api/ai/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ agreement:getAiContext(), messages:window._aiMessages })
+  }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+    .then(function(res){
+      if (res.ok && res.j.reply){ window._aiMessages.push({role:"assistant",content:res.j.reply}); }
+      else { window._aiMessages.push({role:"assistant",content:"⚠ "+((res.j&&res.j.error)||"No response.")}); }
+      renderAiMessages();
+    }).catch(function(){ window._aiMessages.push({role:"assistant",content:"⚠ Network error."}); renderAiMessages(); })
+    .finally(function(){ document.getElementById("aiSend").disabled=false; var t=document.getElementById("aiThinking"); if(t) t.remove(); });
+}
+
 /* INIT */
 buildRoles("da_roles", "da_", DA_ROLES);
 if (document.getElementById("ra_rc_notices")) document.getElementById("ra_rc_notices").innerHTML = resellerContactFieldsHtml("ra_rc_", RESELLER_ROLES.filter(function(r){ return r.id === "notices"; }));
@@ -25474,6 +25546,20 @@ initApp();
     <button class="btn-anyway" onclick="closeThankModal()" style="width:100%;padding:12px;font-size:14px">OK, close this window</button>
   </div>
 </div>
+<!-- AI contract lawyer: floating button + chat drawer (shown only when AI is configured + signed in) -->
+<button id="aiFab" onclick="toggleAiDrawer()" style="display:none;position:fixed;right:22px;bottom:22px;z-index:9000;align-items:center;gap:8px;background:var(--navy);color:#fff;border:none;border-radius:24px;padding:12px 18px;font-family:sans-serif;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)">&#9878;&#65039; AI Lawyer</button>
+<div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:400px;max-width:92vw;height:560px;max-height:80vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
+  <div style="background:var(--navy);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
+    <div><strong style="font-size:14px">&#9878;&#65039; Vendora Contract Lawyer</strong><div style="font-size:11px;color:#C8D9ED">Drafting assistance — not formal legal advice</div></div>
+    <button onclick="toggleAiDrawer()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">&times;</button>
+  </div>
+  <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
+  <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
+    <textarea id="aiInput" rows="2" placeholder="Ask about this agreement…" style="flex:1;resize:none;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;font-family:inherit" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAi();}"></textarea>
+    <button id="aiSend" onclick="sendAi()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer">Send</button>
+  </div>
+</div>
+
 <!-- Login / registration overlay (shown only when the archive is enabled and no valid session) -->
 <div class="auth-overlay" id="authOverlay" style="display:none">
   <div class="auth-box">
