@@ -1,12 +1,25 @@
-const express    = require('express');
-const path       = require('path');
-const crypto     = require('crypto');
-const nodemailer = require('nodemailer');
+const express      = require('express');
+const path         = require('path');
+const crypto       = require('crypto');
+const nodemailer   = require('nodemailer');
+const cookieParser = require('cookie-parser');
+const db           = require('./db');
+const auth         = require('./auth');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser());
+
+// Provision the database schema on boot (no-op if DATABASE_URL is unset).
+if (db.enabled) {
+  db.init()
+    .then(() => console.log('Database ready (archive + auth enabled)'))
+    .catch((e) => console.error('Database init failed:', e.message));
+} else {
+  console.log('DATABASE_URL not set — archive + auth disabled (stateless mode)');
+}
 
 // Never cache index.html — always serve the latest deployed version
 app.use(function(req, res, next) {
@@ -175,6 +188,140 @@ app.post('/api/notify', async (req, res) => {
   } catch (err) {
     console.error('Notify error:', err.message);
     res.json({ ok: true, sent: false, reason: err.message });
+  }
+});
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+// Reports whether server-side features (login + archive) are available at all.
+app.get('/api/config', (req, res) => {
+  res.json({ archive: db.enabled });
+});
+
+function requireDb(req, res, next) {
+  if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
+  next();
+}
+
+app.post('/api/auth/register', requireDb, async (req, res) => {
+  try {
+    const { email, password, name, signupCode } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const expected = process.env.SIGNUP_CODE || '';
+    if (!expected || signupCode !== expected) return res.status(403).json({ error: 'Invalid or missing signup code' });
+    const hash = await auth.hashPassword(password);
+    let row;
+    try {
+      const r = await db.query(
+        'INSERT INTO users (email, password_hash, name) VALUES ($1,$2,$3) RETURNING id, email, name',
+        [String(email).trim().toLowerCase(), hash, (name || '').trim() || null]
+      );
+      row = r.rows[0];
+    } catch (e) {
+      if (e.code === '23505') return res.status(409).json({ error: 'An account with that email already exists' });
+      throw e;
+    }
+    auth.setAuthCookie(res, auth.signToken(row));
+    res.json({ user: { id: row.id, email: row.email, name: row.name } });
+  } catch (err) {
+    console.error('Register error:', err.message);
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+app.post('/api/auth/login', requireDb, async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    const r = await db.query('SELECT id, email, name, password_hash FROM users WHERE email=$1', [String(email).trim().toLowerCase()]);
+    const u = r.rows[0];
+    if (!u || !(await auth.verifyPassword(password, u.password_hash))) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    auth.setAuthCookie(res, auth.signToken(u));
+    res.json({ user: { id: u.id, email: u.email, name: u.name } });
+  } catch (err) {
+    console.error('Login error:', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  auth.clearAuthCookie(res);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const u = auth.readUser(req);
+  if (!u) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ user: { id: u.uid, email: u.email, name: u.name } });
+});
+
+// ── Agreements archive (auth required) ─────────────────────────────────────────
+app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { type, counterpartyName, counterpartyEmail, data, status } = req.body || {};
+    if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
+    const r = await db.query(
+      `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, created_by, created_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at`,
+      [type, counterpartyName || null, counterpartyEmail || null, data, status || 'draft', req.user.uid, req.user.name || req.user.email]
+    );
+    res.json({ id: r.rows[0].id, created_at: r.rows[0].created_at });
+  } catch (err) {
+    console.error('Save agreement error:', err.message);
+    res.status(500).json({ error: 'Could not save agreement' });
+  }
+});
+
+app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, type, counterparty_name, counterparty_email, status, created_by_name, created_at, updated_at
+       FROM agreements ORDER BY updated_at DESC LIMIT 500`
+    );
+    res.json({ agreements: r.rows });
+  } catch (err) {
+    console.error('List agreements error:', err.message);
+    res.status(500).json({ error: 'Could not list agreements' });
+  }
+});
+
+app.get('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM agreements WHERE id=$1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ agreement: r.rows[0] });
+  } catch (err) {
+    console.error('Get agreement error:', err.message);
+    res.status(500).json({ error: 'Could not load agreement' });
+  }
+});
+
+app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { counterpartyName, counterpartyEmail, data, status } = req.body || {};
+    if (!data) return res.status(400).json({ error: 'data is required' });
+    const r = await db.query(
+      `UPDATE agreements SET counterparty_name=$1, counterparty_email=$2, data=$3,
+         status=COALESCE($4,status), updated_at=now() WHERE id=$5 RETURNING id, updated_at`,
+      [counterpartyName || null, counterpartyEmail || null, data, status || null, req.params.id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ id: r.rows[0].id, updated_at: r.rows[0].updated_at });
+  } catch (err) {
+    console.error('Update agreement error:', err.message);
+    res.status(500).json({ error: 'Could not update agreement' });
+  }
+});
+
+app.delete('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    await db.query('DELETE FROM agreements WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete agreement error:', err.message);
+    res.status(500).json({ error: 'Could not delete agreement' });
   }
 });
 
