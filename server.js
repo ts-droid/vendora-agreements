@@ -204,18 +204,76 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+// Load the evolving playbook (house view + learned notes) from the database.
+async function loadPlaybook() {
+  if (!db.enabled) return { guidance: '', notes: [] };
+  const g = await db.query("SELECT value FROM settings WHERE key='ai_guidance'");
+  const n = await db.query('SELECT id, topic, content, created_by_name, created_at FROM ai_notes ORDER BY created_at DESC LIMIT 200');
+  return { guidance: (g.rows[0] && g.rows[0].value) || '', notes: n.rows };
+}
+
 // AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far.
 app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   try {
     const { agreement, messages } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
-    const out = await ai.chat(agreement || null, messages);
+    const playbook = await loadPlaybook();
+    const out = await ai.chat(agreement || null, messages, playbook);
     res.json(out);
   } catch (err) {
     console.error('AI chat error:', err.message);
     res.status(500).json({ error: 'The AI lawyer could not respond right now.' });
   }
+});
+
+// Distill a reusable lesson from a conversation (the "teach the lawyer" loop).
+app.post('/api/ai/suggest-note', auth.requireAuth, async (req, res) => {
+  if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
+  try {
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
+    const note = await ai.suggestNote(messages);
+    res.json(note);
+  } catch (err) {
+    console.error('Suggest-note error:', err.message);
+    res.status(500).json({ error: 'Could not distill a note' });
+  }
+});
+
+// ── AI playbook (house view + learned notes), auth required ────────────────────
+app.get('/api/playbook', requireDb, auth.requireAuth, async (req, res) => {
+  try { res.json(await loadPlaybook()); }
+  catch (err) { console.error('Get playbook error:', err.message); res.status(500).json({ error: 'Could not load the playbook' }); }
+});
+
+app.put('/api/playbook/guidance', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { guidance } = req.body || {};
+    await db.query(
+      `INSERT INTO settings (key, value, updated_at) VALUES ('ai_guidance',$1,now())
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`,
+      [String(guidance || '')]
+    );
+    res.json({ ok: true });
+  } catch (err) { console.error('Save guidance error:', err.message); res.status(500).json({ error: 'Could not save' }); }
+});
+
+app.post('/api/playbook/notes', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { topic, content } = req.body || {};
+    if (!content || !String(content).trim()) return res.status(400).json({ error: 'content is required' });
+    const r = await db.query(
+      'INSERT INTO ai_notes (topic, content, created_by_name) VALUES ($1,$2,$3) RETURNING id, topic, content, created_by_name, created_at',
+      [(topic || '').trim() || null, String(content).trim(), req.user.name || req.user.email]
+    );
+    res.json({ note: r.rows[0] });
+  } catch (err) { console.error('Add note error:', err.message); res.status(500).json({ error: 'Could not add note' }); }
+});
+
+app.delete('/api/playbook/notes/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try { await db.query('DELETE FROM ai_notes WHERE id=$1', [req.params.id]); res.json({ ok: true }); }
+  catch (err) { console.error('Delete note error:', err.message); res.status(500).json({ error: 'Could not delete' }); }
 });
 
 function requireDb(req, res, next) {
