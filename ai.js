@@ -83,27 +83,68 @@ function houseBlock(playbook) {
   return parts.join('\n\n');
 }
 
-// messages: [{role:'user'|'assistant', content:'...'}]; playbook: {guidance, notes}
-async function chat(agreement, messages, playbook) {
+// Editable clauses block + the tool the model uses to propose a redraft of one.
+function clausesBlock(clauses) {
+  if (!Array.isArray(clauses) || !clauses.length) return '';
+  return 'EDITABLE CLAUSES — you may propose a redraft of any of these via the propose_clause_change tool, referencing the exact id. Do NOT invent ids. When the user asks to reword/redraft/soften/strengthen a clause, or when you recommend concrete wording, call the tool (you can call it more than once). Always also explain your change in text.\n\n'
+    + clauses.map(function (c) { return '[' + c.id + '] ' + (c.label || '') + ':\n"' + c.text + '"'; }).join('\n\n');
+}
+const CLAUSE_TOOL = {
+  name: 'propose_clause_change',
+  description: 'Propose a redrafted version of a specific editable clause. Use the exact clause id from the editable-clauses list. new_text is the full replacement text of that clause (plain prose, no numbering).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      clause_id: { type: 'string', description: 'Exact id from the editable-clauses list' },
+      new_text: { type: 'string', description: 'Full replacement text for the clause' },
+      rationale: { type: 'string', description: 'One or two sentences on why, from Vendora\'s side' },
+    },
+    required: ['clause_id', 'new_text', 'rationale'],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+// messages: [{role, content}]; opts: {playbook:{guidance,notes}, clauses:[{id,label,text}]}
+async function chat(agreement, messages, opts) {
   if (!client) throw new Error('AI is not configured on this server');
+  opts = opts || {};
   const system = [
     { type: 'text', text: BASE_PLAYBOOK, cache_control: { type: 'ephemeral' } }, // stable foundation → cached
   ];
-  const house = houseBlock(playbook);
-  if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } }); // evolving, stable within a session
+  const house = houseBlock(opts.playbook);
+  if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } });
   system.push({ type: 'text', text: 'CURRENT AGREEMENT UNDER NEGOTIATION:\n' + summariseAgreement(agreement) });
-  const resp = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium' },
-    system,
-    messages: (messages || []).slice(-20).map(function (m) {
-      return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') };
-    }),
+  const editable = clausesBlock(opts.clauses);
+  if (editable) system.push({ type: 'text', text: editable });
+
+  const convo = (messages || []).slice(-20).map(function (m) {
+    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') };
   });
-  const text = (resp.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n').trim();
-  return { reply: text || '(no response)', usage: resp.usage || null };
+  const tools = editable ? [CLAUSE_TOOL] : undefined;
+  const proposals = [];
+  const textParts = [];
+
+  // Manual tool loop: capture clause proposals, feed a lightweight tool_result back, continue.
+  for (let i = 0; i < 4; i++) {
+    const resp = await client.messages.create({
+      model: MODEL, max_tokens: 4096,
+      thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
+      system, messages: convo, tools,
+    });
+    (resp.content || []).forEach(function (b) { if (b.type === 'text' && b.text.trim()) textParts.push(b.text.trim()); });
+    const toolUses = (resp.content || []).filter(function (b) { return b.type === 'tool_use'; });
+    if (!toolUses.length || resp.stop_reason !== 'tool_use') break;
+    convo.push({ role: 'assistant', content: resp.content }); // preserve thinking + tool_use blocks
+    convo.push({
+      role: 'user',
+      content: toolUses.map(function (t) {
+        proposals.push({ clauseId: t.input.clause_id, newText: t.input.new_text, rationale: t.input.rationale });
+        return { type: 'tool_result', tool_use_id: t.id, content: 'Recorded. It will be shown to the user as a redline for approval.' };
+      }),
+    });
+  }
+  return { reply: textParts.join('\n').trim() || '(no response)', proposals: proposals };
 }
 
 // Distill a short, reusable lesson from a conversation, to be saved into the playbook notes.
