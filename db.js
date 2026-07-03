@@ -34,6 +34,7 @@ async function init() {
     );
   `);
   // Idempotent migrations for databases created before Google login was added.
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS update_token TEXT;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
   await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
@@ -45,6 +46,7 @@ async function init() {
       counterparty_email TEXT,
       data               JSONB NOT NULL,
       status             TEXT NOT NULL DEFAULT 'draft',
+      update_token       TEXT,
       created_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_by_name    TEXT,
       created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
