@@ -54,6 +54,23 @@ async function init() {
     );
   `);
   await query(`CREATE INDEX IF NOT EXISTS agreements_created_at_idx ON agreements (created_at DESC);`);
+  // AI playbook: an evolving "house view" (settings) + discrete learned notes.
+  await query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS ai_notes (
+      id              SERIAL PRIMARY KEY,
+      topic           TEXT,
+      content         TEXT NOT NULL,
+      created_by_name TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   return true;
 }
 

@@ -25513,6 +25513,59 @@ function sendAi(){
     .finally(function(){ document.getElementById("aiSend").disabled=false; var t=document.getElementById("aiThinking"); if(t) t.remove(); });
 }
 
+/* ── AI PLAYBOOK (smart, learns over time) ───────────────────────────────────── */
+function openPlaybook(){
+  fetch("/api/playbook").then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(pb){
+    document.getElementById("pbGuidance").value = pb.guidance || "";
+    document.getElementById("pbGuidanceStatus").textContent = "";
+    renderPlaybookNotes(pb.notes||[]);
+    document.getElementById("playbookModal").classList.add("open");
+  }).catch(function(){ alert("Could not load the playbook."); });
+}
+function renderPlaybookNotes(notes){
+  var el=document.getElementById("pbNotes");
+  if (!notes.length){ el.innerHTML = "<div style='color:var(--muted);font-size:12px;padding:6px 0'>No notes yet. Add lessons above, or use 💡 in the chat to distill one.</div>"; return; }
+  el.innerHTML = notes.map(function(n){
+    return "<div style='display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px'>"
+      + "<div style='flex:1;font-size:13px'>"+(n.topic?"<strong>"+esc(n.topic)+":</strong> ":"")+esc(n.content)
+      + "<div style='font-size:11px;color:var(--muted);margin-top:2px'>"+esc(n.created_by_name||"")+" · "+((n.created_at||"").slice(0,10))+"</div></div>"
+      + "<button onclick='deletePlaybookNote("+n.id+")' style='color:#c0392b;background:none;border:none;cursor:pointer;font-size:12px'>Delete</button></div>";
+  }).join("");
+}
+function savePlaybookGuidance(){
+  var st=document.getElementById("pbGuidanceStatus"); st.style.color="var(--muted)"; st.textContent="Saving…";
+  fetch("/api/playbook/guidance",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({guidance:document.getElementById("pbGuidance").value})})
+    .then(function(r){ if(!r.ok) throw 0; st.style.color="#1e7e34"; st.textContent="Saved ✓"; })
+    .catch(function(){ st.style.color="#c0392b"; st.textContent="Save failed"; });
+}
+function addPlaybookNote(){
+  var topic=document.getElementById("pbNoteTopic").value.trim();
+  var content=document.getElementById("pbNoteContent").value.trim();
+  if(!content) return;
+  fetch("/api/playbook/notes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:topic,content:content})})
+    .then(function(r){ if(!r.ok) throw 0; document.getElementById("pbNoteTopic").value=""; document.getElementById("pbNoteContent").value=""; return fetch("/api/playbook").then(function(x){return x.json();}); })
+    .then(function(pb){ renderPlaybookNotes(pb.notes||[]); })
+    .catch(function(){ alert("Could not add the note."); });
+}
+function deletePlaybookNote(id){
+  fetch("/api/playbook/notes/"+id,{method:"DELETE"}).then(function(){ return fetch("/api/playbook").then(function(x){return x.json();}); })
+    .then(function(pb){ renderPlaybookNotes(pb.notes||[]); });
+}
+function teachFromChat(){
+  if (!window._aiMessages.length){ openPlaybook(); return; }
+  var b=event&&event.target; if(b){ b.disabled=true; b.style.opacity=.5; }
+  fetch("/api/ai/suggest-note",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:window._aiMessages})})
+    .then(function(r){ return r.json(); }).then(function(note){
+      openPlaybook();
+      setTimeout(function(){
+        document.getElementById("pbNoteTopic").value = note.topic||"";
+        document.getElementById("pbNoteContent").value = note.content||"";
+        document.getElementById("pbNoteContent").focus();
+      }, 150);
+    }).catch(function(){ alert("Could not distill a lesson."); })
+    .finally(function(){ if(b){ b.disabled=false; b.style.opacity=1; } });
+}
+
 /* INIT */
 buildRoles("da_roles", "da_", DA_ROLES);
 if (document.getElementById("ra_rc_notices")) document.getElementById("ra_rc_notices").innerHTML = resellerContactFieldsHtml("ra_rc_", RESELLER_ROLES.filter(function(r){ return r.id === "notices"; }));
@@ -25551,12 +25604,41 @@ initApp();
 <div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:400px;max-width:92vw;height:560px;max-height:80vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
   <div style="background:var(--navy);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
     <div><strong style="font-size:14px">&#9878;&#65039; Vendora Contract Lawyer</strong><div style="font-size:11px;color:#C8D9ED">Drafting assistance — not formal legal advice</div></div>
-    <button onclick="toggleAiDrawer()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">&times;</button>
+    <div style="display:flex;gap:4px;align-items:center">
+      <button onclick="teachFromChat()" title="Teach the lawyer a lesson from this chat" style="background:none;border:none;color:#fff;font-size:15px;cursor:pointer;line-height:1">&#128161;</button>
+      <button onclick="openPlaybook()" title="Edit the playbook" style="background:none;border:none;color:#fff;font-size:15px;cursor:pointer;line-height:1">&#9881;&#65039;</button>
+      <button onclick="toggleAiDrawer()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">&times;</button>
+    </div>
   </div>
   <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
     <textarea id="aiInput" rows="2" placeholder="Ask about this agreement…" style="flex:1;resize:none;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;font-family:inherit" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAi();}"></textarea>
     <button id="aiSend" onclick="sendAi()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer">Send</button>
+  </div>
+</div>
+
+<!-- AI playbook editor -->
+<div class="val-modal" id="playbookModal">
+  <div class="val-box" style="max-width:640px;width:92vw;max-height:86vh;overflow-y:auto;text-align:left">
+    <h3 style="display:flex;align-items:center;justify-content:space-between">Lawyer playbook
+      <button onclick="document.getElementById('playbookModal').classList.remove('open')" style="background:none;border:none;font-size:20px;cursor:pointer">&times;</button>
+    </h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px">The lawyer's built-in Vendora positions are fixed. Add your own evolving guidance and specific lessons below — they're applied on top, on every question.</p>
+
+    <div class="sec">House view <span style="font-weight:400;color:var(--muted);font-size:11px">— how Vendora thinks about things (edit freely)</span></div>
+    <textarea id="pbGuidance" rows="7" placeholder="e.g. We prefer 30-day terms but will go to 45 for committed annual volume above €X. We never grant marketplace rights for electronics brands. For small resellers, prioritise speed over perfect terms…" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;font-family:inherit"></textarea>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <button onclick="savePlaybookGuidance()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">Save house view</button>
+      <span id="pbGuidanceStatus" style="font-size:12px"></span>
+    </div>
+
+    <div class="sec" style="margin-top:18px">Learned notes <span style="font-weight:400;color:var(--muted);font-size:11px">— specific lessons, applied to every deal</span></div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="pbNoteTopic" placeholder="Tag (e.g. Exclusivity)" style="flex:0 0 150px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+      <input id="pbNoteContent" placeholder="The lesson…" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px" onkeydown="if(event.key==='Enter')addPlaybookNote()">
+      <button onclick="addPlaybookNote()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer">Add</button>
+    </div>
+    <div id="pbNotes"></div>
   </div>
 </div>
 

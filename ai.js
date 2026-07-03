@@ -9,7 +9,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
 // Vendora's negotiating playbook. This is the system prompt that gives the model Vendora's
 // standard positions, non-negotiables, and fallbacks. Refine over time — it is a living
 // document. Kept stable so it prompt-caches across turns.
-const PLAYBOOK = `You are the in-house contract lawyer for Vendora Nordic AB (org.nr 556843-5456, Ladugårdsvägen 1, 234 35 Lomma, Sweden). CEO and signatory on all agreements: Andreas Höynälä.
+const BASE_PLAYBOOK = `You are the in-house contract lawyer for Vendora Nordic AB (org.nr 556843-5456, Ladugårdsvägen 1, 234 35 Lomma, Sweden). CEO and signatory on all agreements: Andreas Höynälä.
 
 You advise the Vendora sales/legal team as they negotiate three agreement types:
 - Distributor Agreement (DA): Vendora is the distributor/buyer; the counterparty is the Supplier.
@@ -68,13 +68,30 @@ function summariseAgreement(a) {
   return lines.join('\n');
 }
 
-// messages: [{role:'user'|'assistant', content:'...'}]
-async function chat(agreement, messages) {
+// Build the evolving layer on top of the base playbook: the team's editable "house view" plus
+// the discrete lessons the team has recorded. This is what makes the lawyer learn over time.
+function houseBlock(playbook) {
+  const p = playbook || {};
+  const parts = [];
+  if (p.guidance && String(p.guidance).trim()) {
+    parts.push('VENDORA HOUSE VIEW (maintained and updated by the team — treat as current policy):\n' + String(p.guidance).trim());
+  }
+  if (Array.isArray(p.notes) && p.notes.length) {
+    parts.push('LEARNED NOTES (specific lessons the team has recorded from past deals — apply them):\n' +
+      p.notes.map(function (n) { return '- ' + (n.topic ? '[' + n.topic + '] ' : '') + n.content; }).join('\n'));
+  }
+  return parts.join('\n\n');
+}
+
+// messages: [{role:'user'|'assistant', content:'...'}]; playbook: {guidance, notes}
+async function chat(agreement, messages, playbook) {
   if (!client) throw new Error('AI is not configured on this server');
   const system = [
-    { type: 'text', text: PLAYBOOK, cache_control: { type: 'ephemeral' } }, // stable → cached
-    { type: 'text', text: 'CURRENT AGREEMENT UNDER NEGOTIATION:\n' + summariseAgreement(agreement) },
+    { type: 'text', text: BASE_PLAYBOOK, cache_control: { type: 'ephemeral' } }, // stable foundation → cached
   ];
+  const house = houseBlock(playbook);
+  if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } }); // evolving, stable within a session
+  system.push({ type: 'text', text: 'CURRENT AGREEMENT UNDER NEGOTIATION:\n' + summariseAgreement(agreement) });
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 4096,
@@ -89,4 +106,23 @@ async function chat(agreement, messages) {
   return { reply: text || '(no response)', usage: resp.usage || null };
 }
 
-module.exports = { enabled, chat, summariseAgreement, PLAYBOOK };
+// Distill a short, reusable lesson from a conversation, to be saved into the playbook notes.
+async function suggestNote(messages) {
+  if (!client) throw new Error('AI is not configured on this server');
+  const convo = (messages || []).slice(-12).map(function (m) {
+    return (m.role === 'assistant' ? 'Lawyer' : 'User') + ': ' + String(m.content || '');
+  }).join('\n\n');
+  const resp = await client.messages.create({
+    model: MODEL,
+    max_tokens: 500,
+    output_config: { effort: 'low' },
+    system: 'You distill ONE short, reusable negotiating lesson for Vendora\'s contract playbook from a conversation. Generalise it so it applies to future deals (not just this counterparty). Return ONLY a JSON object: {"topic":"<2-4 word tag>","content":"<one or two sentences stating the position or lesson>"}. No prose, no code fences.',
+    messages: [{ role: 'user', content: 'Conversation:\n\n' + convo + '\n\nDistill one reusable lesson.' }],
+  });
+  let text = (resp.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('').trim();
+  text = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  try { const j = JSON.parse(text); return { topic: j.topic || '', content: j.content || text }; }
+  catch (e) { return { topic: '', content: text }; }
+}
+
+module.exports = { enabled, chat, suggestNote, summariseAgreement, BASE_PLAYBOOK };
