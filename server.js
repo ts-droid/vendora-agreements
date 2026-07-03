@@ -5,6 +5,7 @@ const nodemailer   = require('nodemailer');
 const cookieParser = require('cookie-parser');
 const db           = require('./db');
 const auth         = require('./auth');
+const ai           = require('./ai');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -199,7 +200,22 @@ app.get('/api/config', (req, res) => {
     google: auth.googleEnabled,
     googleClientId: auth.GOOGLE_CLIENT_ID || null,
     allowedDomain: auth.ALLOWED_DOMAIN,
+    ai: ai.enabled,
   });
+});
+
+// AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far.
+app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
+  if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
+  try {
+    const { agreement, messages } = req.body || {};
+    if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
+    const out = await ai.chat(agreement || null, messages);
+    res.json(out);
+  } catch (err) {
+    console.error('AI chat error:', err.message);
+    res.status(500).json({ error: 'The AI lawyer could not respond right now.' });
+  }
 });
 
 function requireDb(req, res, next) {
