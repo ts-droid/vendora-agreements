@@ -166,6 +166,13 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <span id="userChip" style="display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted)"></span>
 </div>
 
+<div id="editBar" style="display:none;align-items:center;gap:12px;background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin-bottom:16px">
+  <span id="editBarText" style="font-size:13px;color:#856404;font-weight:600;flex:1"></span>
+  <span id="editBarStatus" style="font-size:12px"></span>
+  <button onclick="saveEditOnly()" style="font-size:13px;font-weight:600;padding:7px 16px;border:none;background:var(--navy);color:#fff;border-radius:4px;cursor:pointer">Save changes</button>
+  <button onclick="exitEdit()" style="font-size:13px;padding:7px 14px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">Cancel</button>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════ TAB 0: DA -->
 <div id="tab0" class="tab-panel active">
 <div class="card">
@@ -23748,6 +23755,87 @@ function toggleTargets(prefix) {
 
 function gv(id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; }
 
+/* ── FORM ↔ DATA (single source of truth for generate + edit) ─────────────────── */
+function readDAForm(){
+  var data = {
+    name:gv("da_name"),reg:gv("da_reg"),country:gv("da_country"),addr:gv("da_addr"),vat:gv("da_vat"),eori:gv("da_eori"),parent:gv("da_parent"),
+    products:gv("da_products"),excluded:gv("da_excluded"),date:gv("da_date"),term:gv("da_term"),
+    terr:gv("da_terr"),excl:gv("da_excl"),curr:gv("da_curr"),pay:gv("da_pay"),invmail:gv("da_invmail"),
+    inco:gv("da_inco"),incoy:gv("da_incoy"),delplace:gv("da_delplace"),lead:gv("da_lead"),
+    moq:gv("da_moq"),rot:gv("da_rot"),rotw:gv("da_rotw"),pcurr:gv("da_pcurr"),
+    t1f:gv("da_t1f"),t1t:gv("da_t1t"),t1b:gv("da_t1b"),t2f:gv("da_t2f"),t2t:gv("da_t2t"),t2b:gv("da_t2b"),t3f:gv("da_t3f"),t3t:gv("da_t3t"),t3b:gv("da_t3b"),
+    targetsOn:!!(document.getElementById("da_targets_on") && document.getElementById("da_targets_on").checked),
+    mdfb:gv("da_mdfb"),mdft:gv("da_mdft"),mdfc:gv("da_mdfc"),mdff:gv("da_mdff"),
+    rmae:gv("da_rmae"),rmaf:gv("da_rmaf"),rmam:gv("da_rmam"),
+    vname:gv("da_vname"),vemail:gv("da_vemail"),contacts:{}
+  };
+  DA_ROLES.forEach(function(r){ data.contacts[r.id]={label:r.label,p:{n:gv("da_"+r.id+"_pn"),e:gv("da_"+r.id+"_pe"),p:gv("da_"+r.id+"_pp")},b:{n:gv("da_"+r.id+"_bn"),e:gv("da_"+r.id+"_be"),p:gv("da_"+r.id+"_bp")}}; });
+  return data;
+}
+function readRAForm(){
+  var data = {
+    name:gv("ra_name"),reg:gv("ra_reg"),country:gv("ra_country"),addr:gv("ra_addr"),vat:gv("ra_vat"),
+    products:gv("ra_products"),terr:gv("ra_terr"),excl:gv("ra_excl"),
+    date:gv("ra_date"),notice:gv("ra_notice"),curr:gv("ra_curr"),pay:gv("ra_pay"),credit:gv("ra_credit"),
+    inco:gv("ra_inco"),incoplace:gv("ra_incoplace"),moq:gv("ra_moq"),minact:gv("ra_minact"),
+    t1f:gv("ra_t1f"),t1t:gv("ra_t1t"),t1b:gv("ra_t1b"),t2f:gv("ra_t2f"),t2t:gv("ra_t2t"),t2b:gv("ra_t2b"),t3f:gv("ra_t3f"),t3t:gv("ra_t3t"),t3b:gv("ra_t3b"),
+    mdfb:gv("ra_mdfb"),mdft:gv("ra_mdft"),mdff:gv("ra_mdff"),
+    targetsOn:!!(document.getElementById("ra_targets_on") && document.getElementById("ra_targets_on").checked),
+    vname:gv("ra_vname"),vemail:gv("ra_vemail"),
+    sig_name:gv("ra_sig_name"), sig_email:gv("ra_sig_email"),
+    sig_title:gv("ra_sig_title"), sig_phone:gv("ra_sig_phone")
+  };
+  data.rcontacts = collectResellerContacts("ra_rc_");
+  return data;
+}
+function readRBForm(){
+  return {
+    name:gv("rb_name"),reg:gv("rb_reg"),country:gv("rb_country"),addr:gv("rb_addr"),vat:gv("rb_vat"),
+    products:gv("rb_products"),terr:gv("rb_terr"),curr:gv("rb_curr"),pay:gv("rb_pay"),notice:gv("rb_notice"),
+    inco:gv("rb_inco"),moq:gv("rb_moq"),target:gv("rb_target"),bonus:gv("rb_bonus"),mdf:gv("rb_mdf"),
+    date:gv("rb_date"),special:gv("rb_special"),vname:gv("rb_vname"),vemail:gv("rb_vemail"),
+    sig_name:gv("rb_sig_name"), sig_email:gv("rb_sig_email"),
+    sig_title:gv("rb_sig_title"), sig_phone:gv("rb_sig_phone")
+  };
+}
+function readForm(type){ return type==="da" ? readDAForm() : type==="rb" ? readRBForm() : readRAForm(); }
+
+// Set one form field (input/select/textarea/checkbox) by id.
+function sv(id, val){ var e=document.getElementById(id); if(!e) return; if(e.type==="checkbox") e.checked=!!val; else e.value=(val==null?"":val); }
+
+// Best-effort restore of the territory checkboxes from a stored territory string.
+function restoreTerr(prefix, terr){
+  if (!terr) return;
+  var names = String(terr).replace(/\s+and\s+/g, ", ").split(",").map(function(s){return s.trim().toLowerCase();});
+  var codes = {sweden:"se",norway:"no",denmark:"dk",finland:"fi",iceland:"is",estonia:"ee",latvia:"lv",lithuania:"lt",poland:"pl"};
+  var extras = [];
+  names.forEach(function(n){
+    if (codes[n]) { var cb=document.getElementById(prefix+"_t_"+codes[n]); if(cb) cb.checked=true; }
+    else if (n) extras.push(n.charAt(0).toUpperCase()+n.slice(1));
+  });
+  var ex=document.getElementById(prefix+"_terr_extra"); if(ex) ex.value = extras.join(", ");
+}
+
+// Load a stored data object back into the corresponding tab form for editing.
+function hydrateForm(type, d){
+  d = d || {};
+  var p = type;
+  ["name","reg","country","addr","vat","products","curr","pay","inco","moq","date","vname","vemail","sig_name","sig_email","sig_title","sig_phone","notice"].forEach(function(k){ sv(p+"_"+k, d[k]); });
+  sv(p+"_terr", d.terr); restoreTerr(p, d.terr);
+  if (type==="da"){
+    ["eori","parent","excluded","term","excl","invmail","incoy","delplace","lead","rot","rotw","pcurr","mdfb","mdft","mdfc","mdff","rmae","rmaf","rmam","t1f","t1t","t1b","t2f","t2t","t2b","t3f","t3t","t3b"].forEach(function(k){ sv("da_"+k, d[k]); });
+    sv("da_inco", d.inco);
+    var rc=d.contacts||{}; DA_ROLES.forEach(function(r){ var c=rc[r.id]||{}, pr=c.p||{}, bk=c.b||{}; sv("da_"+r.id+"_pn",pr.n); sv("da_"+r.id+"_pe",pr.e); sv("da_"+r.id+"_pp",pr.p); sv("da_"+r.id+"_bn",bk.n); sv("da_"+r.id+"_be",bk.e); sv("da_"+r.id+"_bp",bk.p); });
+    sv("da_targets_on", d.targetsOn); toggleTargets("da");
+  } else if (type==="ra"){
+    ["excl","credit","incoplace","minact","mdfb","mdft","mdff","t1f","t1t","t1b","t2f","t2t","t2b","t3f","t3t","t3b"].forEach(function(k){ sv("ra_"+k, d[k]); });
+    var rrc=d.rcontacts||{}; RESELLER_ROLES.forEach(function(r){ var c=rrc[r.id]||{}; sv("ra_rc_"+r.id+"_n",c.n); sv("ra_rc_"+r.id+"_e",c.e); sv("ra_rc_"+r.id+"_p",c.p); });
+    sv("ra_targets_on", d.targetsOn); toggleTargets("ra");
+  } else {
+    ["target","bonus","mdf","special"].forEach(function(k){ sv("rb_"+k, d[k]); });
+  }
+}
+
 /* ──────────────────────────────────────────────── GENERATE DISPATCHER */
 function generate() {
   // Libraries embedded inline — always available
@@ -23760,7 +23848,10 @@ function generate() {
   fn().then(function(result) {
     window.saveAs(result.blob, result.filename);
     document.getElementById(sucId).style.display = "block";
-    if (window._lastBuild) saveToArchive(window._lastBuild.type, window._lastBuild.data);
+    if (window._lastBuild) {
+      if (window._editing && window._editing.id && window._editing.type === window._lastBuild.type) updateArchive(window._editing, window._lastBuild.data, false);
+      else saveToArchive(window._lastBuild.type, window._lastBuild.data);
+    }
   }).catch(function(e) {
     alert("Error generating document: " + e.message);
     console.error(e);
@@ -23864,19 +23955,8 @@ function docxHelpers() {
 /* ──────────────────────────────────────────────── DA */
 async function buildDA(overrideData) {
   var h = docxHelpers(), d = window.docx;
-  var data = overrideData || {
-    name:gv("da_name"),reg:gv("da_reg"),country:gv("da_country"),addr:gv("da_addr"),vat:gv("da_vat"),eori:gv("da_eori"),parent:gv("da_parent"),
-    products:gv("da_products"),excluded:gv("da_excluded"),date:gv("da_date"),term:gv("da_term"),
-    terr:gv("da_terr"),excl:gv("da_excl"),curr:gv("da_curr"),pay:gv("da_pay"),invmail:gv("da_invmail"),
-    inco:gv("da_inco"),incoy:gv("da_incoy"),delplace:gv("da_delplace"),lead:gv("da_lead"),
-    moq:gv("da_moq"),rot:gv("da_rot"),rotw:gv("da_rotw"),pcurr:gv("da_pcurr"),
-    t1f:gv("da_t1f"),t1t:gv("da_t1t"),t1b:gv("da_t1b"),t2f:gv("da_t2f"),t2t:gv("da_t2t"),t2b:gv("da_t2b"),t3f:gv("da_t3f"),t3t:gv("da_t3t"),t3b:gv("da_t3b"),
-    mdfb:gv("da_mdfb"),mdft:gv("da_mdft"),mdfc:gv("da_mdfc"),mdff:gv("da_mdff"),
-    rmae:gv("da_rmae"),rmaf:gv("da_rmaf"),rmam:gv("da_rmam"),
-    vname:gv("da_vname"),vemail:gv("da_vemail"),contacts:{}
-  };
+  var data = overrideData || readDAForm();
   if (!data.name) { alert("Please enter the Supplier name."); return; }
-  if (!overrideData) { DA_ROLES.forEach(function(r){ data.contacts[r.id]={label:r.label,p:{n:gv("da_"+r.id+"_pn"),e:gv("da_"+r.id+"_pe"),p:gv("da_"+r.id+"_pp")},b:{n:gv("da_"+r.id+"_bn"),e:gv("da_"+r.id+"_be"),p:gv("da_"+r.id+"_bp")}}; }); }
   if (!data.contacts) data.contacts = {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = overrideData ? !!overrideData.targetsOn : (document.getElementById("da_targets_on") && document.getElementById("da_targets_on").checked);
@@ -24118,20 +24198,8 @@ async function buildDA(overrideData) {
 /* ──────────────────────────────────────────────── RA */
 async function buildRA(overrideData) {
   var h = docxHelpers(), d = window.docx;
-  var data = overrideData || {
-    name:gv("ra_name"),reg:gv("ra_reg"),country:gv("ra_country"),addr:gv("ra_addr"),vat:gv("ra_vat"),
-    products:gv("ra_products"),terr:gv("ra_terr"),excl:gv("ra_excl"),
-    date:gv("ra_date"),notice:gv("ra_notice"),curr:gv("ra_curr"),pay:gv("ra_pay"),credit:gv("ra_credit"),
-    inco:gv("ra_inco"),incoplace:gv("ra_incoplace"),moq:gv("ra_moq"),minact:gv("ra_minact"),
-    t1f:gv("ra_t1f"),t1t:gv("ra_t1t"),t1b:gv("ra_t1b"),t2f:gv("ra_t2f"),t2t:gv("ra_t2t"),t2b:gv("ra_t2b"),t3f:gv("ra_t3f"),t3t:gv("ra_t3t"),t3b:gv("ra_t3b"),
-    mdfb:gv("ra_mdfb"),mdft:gv("ra_mdft"),mdff:gv("ra_mdff"),
-    targetsOn:!!(document.getElementById("ra_targets_on") && document.getElementById("ra_targets_on").checked),
-    vname:gv("ra_vname"),vemail:gv("ra_vemail"),
-    sig_name:gv("ra_sig_name"), sig_email:gv("ra_sig_email"),
-    sig_title:gv("ra_sig_title"), sig_phone:gv("ra_sig_phone")
-  };
+  var data = overrideData || readRAForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
-  if (!overrideData) data.rcontacts = collectResellerContacts("ra_rc_");
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = !!data.targetsOn;
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
@@ -24295,14 +24363,7 @@ async function buildRA(overrideData) {
 
 async function buildRB(overrideData) {
   var h = docxHelpers(), d = window.docx;
-  var data = overrideData || {
-    name:gv("rb_name"),reg:gv("rb_reg"),country:gv("rb_country"),addr:gv("rb_addr"),vat:gv("rb_vat"),
-    products:gv("rb_products"),terr:gv("rb_terr"),curr:gv("rb_curr"),pay:gv("rb_pay"),notice:gv("rb_notice"),
-    inco:gv("rb_inco"),moq:gv("rb_moq"),target:gv("rb_target"),bonus:gv("rb_bonus"),mdf:gv("rb_mdf"),
-    date:gv("rb_date"),special:gv("rb_special"),vname:gv("rb_vname"),vemail:gv("rb_vemail"),
-    sig_name:gv("rb_sig_name"), sig_email:gv("rb_sig_email"),
-    sig_title:gv("rb_sig_title"), sig_phone:gv("rb_sig_phone")
-  };
+  var data = overrideData || readRBForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
@@ -25270,7 +25331,9 @@ function loadArchive(){
     rows.forEach(function(a){
       var dt = (a.created_at||"").slice(0,10);
       html += "<tr><td>"+(TYPE[a.type]||esc(a.type))+"</td><td>"+esc(a.counterparty_name||"—")+"</td><td>"+esc(a.status||"")+"</td><td>"+esc(a.created_by_name||"")+"</td><td>"+esc(dt)+"</td>"
-        + "<td style='white-space:nowrap;text-align:right'><button onclick='archiveDownload("+a.id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
+        + "<td style='white-space:nowrap;text-align:right'>"
+        + "<button onclick='archiveEdit("+a.id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
+        + "<button onclick='archiveDownload("+a.id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
         + "<button onclick='archiveDelete("+a.id+")' style='color:#c0392b;cursor:pointer'>Delete</button></td></tr>";
     });
     html += "</table>";
@@ -25302,6 +25365,38 @@ function importFromLink(){
   }).catch(function(){ msg.style.color="#c0392b"; msg.textContent="Import failed — are you signed in?"; });
 }
 
+window._editing = null;
+function archiveEdit(id){
+  fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    var a=j.agreement, data=a.data||{}, type=a.type;
+    switchTab(type==="da"?0:(type==="rb"?2:1));
+    hydrateForm(type, data);
+    window._editing = { id:a.id, type:type, base:data };
+    var bar=document.getElementById("editBar"); bar.style.display="flex";
+    document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
+    document.getElementById("editBarStatus").textContent = "";
+    window.scrollTo(0,0);
+  }).catch(function(e){ alert("Could not open that agreement."); });
+}
+function exitEdit(){ window._editing=null; var b=document.getElementById("editBar"); if(b) b.style.display="none"; }
+function updateArchive(editing, formData, showStatus){
+  var merged = Object.assign({}, editing.base, formData); merged._type = editing.type;
+  var cpEmail = merged.sig_email || merged.invEmail || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
+  var st = document.getElementById("editBarStatus");
+  if (showStatus && st){ st.style.color="var(--muted)"; st.textContent="Saving…"; }
+  return fetch("/api/agreements/"+editing.id, {method:"PUT",headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:"generated" })
+  }).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
+    editing.base = merged;
+    if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
+  }).catch(function(){ if(st){ st.style.color="#c0392b"; st.textContent="Save failed"; } });
+}
+function saveEditOnly(){
+  var e=window._editing; if(!e) return;
+  var formData = readForm(e.type);
+  if (!formData.name){ var st=document.getElementById("editBarStatus"); st.style.color="#c0392b"; st.textContent="Enter the "+(e.type==="da"?"Supplier":"Reseller")+" name first"; return; }
+  updateArchive(e, formData, true);
+}
 function archiveDownload(id){
   fetch("/api/agreements/"+id).then(function(r){return r.json();}).then(function(j){
     var a = j.agreement, data = a.data, t = a.type;
