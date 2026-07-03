@@ -194,7 +194,12 @@ app.post('/api/notify', async (req, res) => {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Reports whether server-side features (login + archive) are available at all.
 app.get('/api/config', (req, res) => {
-  res.json({ archive: db.enabled });
+  res.json({
+    archive: db.enabled,
+    google: auth.googleEnabled,
+    googleClientId: auth.GOOGLE_CLIENT_ID || null,
+    allowedDomain: auth.ALLOWED_DOMAIN,
+  });
 });
 
 function requireDb(req, res, next) {
@@ -226,6 +231,35 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
   } catch (err) {
     console.error('Register error:', err.message);
     res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+// Sign in with Google (domain-restricted). The frontend sends the Google ID-token credential.
+app.post('/api/auth/google', requireDb, async (req, res) => {
+  try {
+    const { credential } = req.body || {};
+    if (!credential) return res.status(400).json({ error: 'Missing Google credential' });
+    let g;
+    try {
+      g = await auth.verifyGoogleToken(credential);
+    } catch (e) {
+      return res.status(e.forbidden ? 403 : 401).json({ error: e.message || 'Google sign-in failed' });
+    }
+    // Upsert by email; record the Google subject and name.
+    const r = await db.query(
+      `INSERT INTO users (email, google_sub, name)
+         VALUES ($1,$2,$3)
+       ON CONFLICT (email) DO UPDATE SET google_sub = EXCLUDED.google_sub,
+         name = COALESCE(NULLIF(EXCLUDED.name,''), users.name)
+       RETURNING id, email, name`,
+      [g.email, g.sub, g.name || null]
+    );
+    const u = r.rows[0];
+    auth.setAuthCookie(res, auth.signToken(u));
+    res.json({ user: { id: u.id, email: u.email, name: u.name } });
+  } catch (err) {
+    console.error('Google auth error:', err.message);
+    res.status(500).json({ error: 'Google sign-in failed' });
   }
 });
 

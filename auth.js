@@ -3,6 +3,31 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+// Only accounts on this domain may sign in (empty = fall back to '@' any, but we require it set).
+const ALLOWED_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'vendora.se').toLowerCase();
+const googleEnabled = !!GOOGLE_CLIENT_ID;
+const googleClient = googleEnabled ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+
+// Verify a Google ID token (credential from Sign in with Google), enforce the allowed
+// domain, and return { sub, email, name } — or throw with a user-safe message.
+async function verifyGoogleToken(idToken) {
+  if (!googleClient) throw new Error('Google login is not configured');
+  const ticket = await googleClient.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID });
+  const p = ticket.getPayload();
+  if (!p || !p.email || !p.email_verified) throw new Error('Google account email is not verified');
+  const email = String(p.email).toLowerCase();
+  const domain = email.split('@')[1] || '';
+  const hdOk = !p.hd || String(p.hd).toLowerCase() === ALLOWED_DOMAIN;
+  if (domain !== ALLOWED_DOMAIN || !hdOk) {
+    const err = new Error('Only @' + ALLOWED_DOMAIN + ' accounts may sign in');
+    err.forbidden = true;
+    throw err;
+  }
+  return { sub: p.sub, email, name: p.name || (p.given_name || '') };
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 if (!process.env.JWT_SECRET) {
@@ -47,4 +72,5 @@ function verifyPassword(pw, hash) { return bcrypt.compare(pw, hash); }
 module.exports = {
   signToken, setAuthCookie, clearAuthCookie, readUser, requireAuth,
   hashPassword, verifyPassword, COOKIE,
+  verifyGoogleToken, googleEnabled, GOOGLE_CLIENT_ID, ALLOWED_DOMAIN,
 };

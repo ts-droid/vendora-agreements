@@ -27,11 +27,16 @@ async function init() {
     CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
       email         TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
+      google_sub    TEXT,
       name          TEXT,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Idempotent migrations for databases created before Google login was added.
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
+  await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
   await query(`
     CREATE TABLE IF NOT EXISTS agreements (
       id                 SERIAL PRIMARY KEY,

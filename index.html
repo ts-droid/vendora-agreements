@@ -25161,6 +25161,8 @@ function initApp(){
   if (isFillOrReview) { checkFillMode(); return; }   // counterparty / review flows never require login
   fetch("/api/config").then(function(r){return r.json();}).then(function(cfg){
     window._archiveEnabled = !!(cfg && cfg.archive);
+    window._googleClientId = (cfg && cfg.googleClientId) || null;
+    window._allowedDomain = (cfg && cfg.allowedDomain) || "vendora.se";
     if (!window._archiveEnabled) return;             // stateless mode: app works as before, no login
     return fetch("/api/auth/me").then(function(r){
       if (r.ok) return r.json().then(function(j){ onLoggedIn(j.user); });
@@ -25169,7 +25171,42 @@ function initApp(){
   }).catch(function(){ /* config unreachable → behave as stateless */ });
 }
 
-function showAuthOverlay(){ document.getElementById("authOverlay").style.display="flex"; }
+function showAuthOverlay(){
+  document.getElementById("authOverlay").style.display="flex";
+  if (window._googleClientId) {
+    document.getElementById("googleBox").style.display="block";
+    document.getElementById("loginForm").style.display="none";
+    document.getElementById("registerForm").style.display="none";
+    document.getElementById("authSubtitle").textContent="Sign in with your @"+window._allowedDomain+" account";
+    renderGoogleButton();
+  } else {
+    document.getElementById("googleBox").style.display="none";
+    document.getElementById("loginForm").style.display="block";
+  }
+}
+function renderGoogleButton(){
+  var cid = window._googleClientId; if (!cid || window._gisRendered) return;
+  function doRender(){
+    if (!(window.google && google.accounts && google.accounts.id)) return false;
+    google.accounts.id.initialize({ client_id: cid, callback: handleGoogleCredential, auto_select:false });
+    google.accounts.id.renderButton(document.getElementById("gsiButton"), { theme:"filled_blue", size:"large", width:280, text:"signin_with" });
+    window._gisRendered = true;
+    return true;
+  }
+  if (doRender()) return;
+  var s = document.createElement("script");
+  s.src = "https://accounts.google.com/gsi/client"; s.async = true; s.defer = true;
+  s.onload = function(){ doRender(); };
+  s.onerror = function(){ document.getElementById("authErr").textContent = "Could not load Google sign-in."; };
+  document.head.appendChild(s);
+}
+function handleGoogleCredential(resp){
+  document.getElementById("authErr").textContent = "";
+  fetch("/api/auth/google",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential:resp.credential})})
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+    .then(function(res){ if(res.ok){ onLoggedIn(res.j.user); } else { document.getElementById("authErr").textContent = res.j.error || "Sign-in failed"; } })
+    .catch(function(){ document.getElementById("authErr").textContent = "Network error"; });
+}
 function hideAuthOverlay(){ document.getElementById("authOverlay").style.display="none"; }
 function showRegister(){ document.getElementById("loginForm").style.display="none"; document.getElementById("registerForm").style.display="block"; document.getElementById("authSubtitle").textContent="Create your account"; document.getElementById("authErr").textContent=""; }
 function showLogin(){ document.getElementById("registerForm").style.display="none"; document.getElementById("loginForm").style.display="block"; document.getElementById("authSubtitle").textContent="Sign in to continue"; document.getElementById("authErr").textContent=""; }
@@ -25276,6 +25313,10 @@ initApp();
   <div class="auth-box">
     <h2>Vendora Agreements</h2>
     <div class="desc" id="authSubtitle">Sign in to continue</div>
+    <div id="googleBox" style="display:none">
+      <div id="gsiButton" style="margin-top:16px;display:flex;justify-content:center"></div>
+      <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:12px">Only Vendora accounts can sign in.</div>
+    </div>
     <div id="loginForm">
       <label>Email</label><input id="authEmail" type="email" placeholder="you@vendora.se" autocomplete="username">
       <label>Password</label><input id="authPassword" type="password" placeholder="Your password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
