@@ -24495,7 +24495,20 @@ function generateInviteLink(prefix) {
   var btns = document.querySelectorAll(".btn-invite");
   btns.forEach(function(b){ b.disabled=true; b.textContent="Sending…"; });
 
-  // Always build a permanent fallback link (hash-encoded) so it works even if server fails
+  // When signed in, create a linked 'invited' record first so the counterparty's submission
+  // updates this same archive row (auto-linking). Best-effort; falls back to a plain invite.
+  if (window._archiveEnabled && window._authUser) {
+    fetch("/api/invites", {method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ type:d._type, counterpartyName:(invName||null), counterpartyEmail:invEmail, data:d })
+    }).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(res){ if (res && res.id){ d._aid=res.id; d._atok=res.token; } proceedInvite(d, invEmail, invName, btns); })
+      .catch(function(){ proceedInvite(d, invEmail, invName, btns); });
+  } else {
+    proceedInvite(d, invEmail, invName, btns);
+  }
+}
+function proceedInvite(d, invEmail, invName, btns) {
+  // Permanent fallback link (hash-encoded) so it works even if the short-link server fails.
   var fallbackUrl = window.location.origin + "/#fill=" + (encodeData(d)||"");
 
   function showResult(inviteUrl, emailSent, note) {
@@ -25023,6 +25036,14 @@ function generateFromReview() {
   buildFn(d).then(function(result) {
     window.saveAs(result.blob, result.filename);
     document.getElementById("review_suc").style.display = "block";
+    // If this came from a linked invite, advance that same archive row to 'generated' with the
+    // final data (Vendora is authenticated here). Best-effort; ignored if not signed in.
+    if (d._aid) {
+      var cpEmail = d.sig_email || (d.contacts && d.contacts.mgmt && d.contacts.mgmt.p && d.contacts.mgmt.p.e) || (d.rcontacts && d.rcontacts.notices && d.rcontacts.notices.e) || null;
+      fetch("/api/agreements/" + d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ counterpartyName:(d.name||null), counterpartyEmail:cpEmail, data:d, status:"generated" })
+      }).catch(function(){});
+    }
   }).catch(function(e) {
     alert("Error: " + e.message);
   }).finally(function() {
@@ -25183,8 +25204,19 @@ function doSubmitFill() {
 
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
+      delete reviewData._atok;   // keep _aid for linking, but never persist the capability token
       var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
       // Hash-encoded URL is permanent — no server dependency, no override
+
+      // If this invite was linked to an archive record, update that same row in place
+      // (status 'submitted') using the capability token carried in the link. Best-effort.
+      if (d._aid && d._atok) {
+        var cpEmail = merged.sig_email || (merged.contacts && merged.contacts.mgmt && merged.contacts.mgmt.p && merged.contacts.mgmt.p.e) || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
+        fetch("/api/agreements/" + d._aid + "/submit", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ token: d._atok, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
+        }).catch(function(){});
+      }
 
       // Show success + notify button (no docx for supplier — Vendora generates final)
       var doNotify = function() {

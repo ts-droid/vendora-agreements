@@ -308,6 +308,45 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   }
 });
 
+// Create an 'invited' agreement record + capability token when Vendora sends an invite, so the
+// counterparty's submission can later update THIS row (auto-linking invite → returned data).
+app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { type, counterpartyName, counterpartyEmail, data } = req.body || {};
+    if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
+    const token = crypto.randomBytes(24).toString('base64url');
+    const r = await db.query(
+      `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, update_token, created_by, created_by_name)
+       VALUES ($1,$2,$3,$4,'invited',$5,$6,$7) RETURNING id`,
+      [type, counterpartyName || null, counterpartyEmail || null, data, token, req.user.uid, req.user.name || req.user.email]
+    );
+    res.json({ id: r.rows[0].id, token });
+  } catch (err) {
+    console.error('Create invite error:', err.message);
+    res.status(500).json({ error: 'Could not create invite record' });
+  }
+});
+
+// Public: the counterparty's fill submission updates its linked record, authorised by the token.
+app.post('/api/agreements/:id/submit', requireDb, async (req, res) => {
+  try {
+    const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
+    if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
+    const cur = await db.query('SELECT update_token FROM agreements WHERE id=$1', [req.params.id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: 'Not found' });
+    if (!cur.rows[0].update_token || cur.rows[0].update_token !== token) return res.status(403).json({ error: 'Invalid token' });
+    await db.query(
+      `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
+         counterparty_email=COALESCE($3,counterparty_email), updated_at=now() WHERE id=$4`,
+      [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Submit error:', err.message);
+    res.status(500).json({ error: 'Could not record submission' });
+  }
+});
+
 app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const r = await db.query(
