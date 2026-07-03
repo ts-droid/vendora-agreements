@@ -25166,11 +25166,21 @@ function initApp(){
     if (!window._archiveEnabled) return;             // stateless mode: app works as before, no login
     return fetch("/api/auth/me").then(function(r){
       if (r.ok) return r.json().then(function(j){ onLoggedIn(j.user); });
-      showAuthOverlay();
+      // Not signed in. Only hard-block behind login when a real login method exists (Google
+      // configured). Otherwise (e.g. archive enabled but Google not set up yet) leave the
+      // generator open — exactly as before — so a deploy can never lock the team out. The
+      // archive API stays auth-protected regardless, so nothing leaks.
+      if (window._googleClientId) { showAuthOverlay(); }
+      else { showSignInLink(); }
     });
   }).catch(function(){ /* config unreachable → behave as stateless */ });
 }
 
+function showSignInLink(){
+  var chip = document.getElementById("userChip");
+  chip.style.display = "inline";
+  chip.innerHTML = "<a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='showAuthOverlay()'>Log in</a>";
+}
 function showAuthOverlay(){
   document.getElementById("authOverlay").style.display="flex";
   if (window._googleClientId) {
