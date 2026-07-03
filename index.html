@@ -23953,6 +23953,37 @@ function docxHelpers() {
 }
 
 /* ──────────────────────────────────────────────── DA */
+/* ── EDITABLE CLAUSES (clause-as-data: AI can redraft these; overrides live on the agreement) */
+var CLAUSES = {
+  ra: [
+    { id:"ra.marketplaces", label:"Third-party marketplaces (§3)",
+      text:"Third-party online marketplaces. The Reseller shall not list, advertise, or sell the Products on any third-party online marketplace (including but not limited to Amazon, eBay, Bol, Cdiscount, Allegro, or similar platforms) without the Supplier’s prior written authorisation, which the Supplier may grant, withhold, condition, or revoke at its sole discretion. Any authorisation granted applies only to the specific marketplace, account, and territory identified, and may be subject to conditions including minimum pricing, content, and brand-presentation requirements. The Supplier may withdraw authorisation on written notice where marketplace activity conflicts with the Supplier’s or the brand owner’s own sales channels or brand strategy, and the Reseller shall cease the relevant listings within five (5) business days of such notice. Selling the Products on any marketplace without valid authorisation shall constitute a material breach." },
+    { id:"ra.no_subreselling", label:"No sub-reselling (§3)",
+      text:"The Reseller shall not appoint sub-resellers, sub-distributors, or sub-agents for the Products, nor grant any third party the right to sell or distribute the Products, without the prior written consent of the Supplier. Any such arrangement made without consent shall be null and void and shall constitute a material breach." },
+    { id:"ra.liability_indirect", label:"Limitation of liability — indirect (§10)",
+      text:"Neither Party shall be liable for any indirect or consequential damages, including loss of profit, loss of revenue, or loss of anticipated savings, regardless of whether such damages were foreseeable." },
+    { id:"ra.warranty_asis", label:"Products “as is” (§10)",
+      text:"The Reseller acknowledges that, except as expressly provided in this Agreement or in the Supplier’s standard warranty terms in Appendix 3, the Products are provided “as is” and the Supplier makes no warranties, express or implied, as to merchantability, fitness for a particular purpose, or non-infringement." },
+    { id:"ra.antibribery", label:"Anti-bribery (§16)",
+      text:"Both Parties shall comply with the Swedish Anti-Bribery Act and other applicable anti-bribery and anti-corruption laws." }
+  ]
+};
+var CLAUSE_BY_ID = {};
+Object.keys(CLAUSES).forEach(function(t){ CLAUSES[t].forEach(function(c){ CLAUSE_BY_ID[c.id]=c; }); });
+// cl(id) → the per-agreement override if set (window._clauseOverrides), else the registry default.
+function cl(id){
+  var ov = window._clauseOverrides;
+  if (ov && ov[id] != null && String(ov[id]).trim()) return String(ov[id]);
+  var reg = CLAUSE_BY_ID[id];
+  return reg ? reg.text : "";
+}
+// Editable clauses for a type with any overrides applied — sent to the AI as context.
+function getEditableClauses(type, data){
+  var list = CLAUSES[type]; if (!list) return [];
+  var ov = (data && data.clauseOverrides) || {};
+  return list.map(function(c){ return { id:c.id, label:c.label, text:(ov[c.id]!=null&&String(ov[c.id]).trim())?String(ov[c.id]):c.text }; });
+}
+
 async function buildDA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readDAForm();
@@ -24200,6 +24231,7 @@ async function buildRA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readRAForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
+  window._clauseOverrides = (data && data.clauseOverrides) || {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = !!data.targetsOn;
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
@@ -24236,8 +24268,9 @@ async function buildRA(overrideData) {
     // §3
     h.h1("3   Appointment and Territory"),
     h.par("The Supplier hereby grants to the Reseller a "+data.excl+" right to market and sell the Products within the Territory during the term of this Agreement. The Supplier has the right to amend its offered product range and/or product specifications at any time and at its sole discretion. This Agreement does not restrict the Supplier from appointing other resellers within the Territory or from selling the Products directly. Within the EU/EEA, passive sales (unsolicited orders) cannot be restricted regardless of territory."),
-    h.par([{t:"No sub-reselling. ",b:true},"The Reseller shall not appoint sub-resellers, sub-distributors, or sub-agents for the Products, nor grant any third party the right to sell or distribute the Products, without the prior written consent of the Supplier. Any such arrangement made without consent shall be null and void and shall constitute a material breach."]),
-    h.par("Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products. Third-party online marketplaces. The Reseller shall not list, advertise, or sell the Products on any third-party online marketplace (including but not limited to Amazon, eBay, Bol, Cdiscount, Allegro, or similar platforms) without the Supplier\u2019s prior written authorisation, which the Supplier may grant, withhold, condition, or revoke at its sole discretion. Any authorisation granted applies only to the specific marketplace, account, and territory identified, and may be subject to conditions including minimum pricing, content, and brand-presentation requirements. The Supplier may withdraw authorisation on written notice where marketplace activity conflicts with the Supplier\u2019s or the brand owner\u2019s own sales channels or brand strategy, and the Reseller shall cease the relevant listings within five (5) business days of such notice. Selling the Products on any marketplace without valid authorisation shall constitute a material breach."),
+    h.par([{t:"No sub-reselling. ",b:true},cl("ra.no_subreselling")]),
+    h.par("Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products."),
+    h.par(cl("ra.marketplaces")),
     // §4
     h.h1("4   Orders and Payment"),
     h.h3("Orders"),
@@ -24273,10 +24306,10 @@ async function buildRA(overrideData) {
     h.par("Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. The Parties shall enter into a Data Processing Agreement (DPA) if personal data is shared or processed by one Party on behalf of the other. Data breaches must be reported to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery."),
     // §10
     h.h1("10   Limitation of Liability"),
-    h.par("Neither Party shall be liable for any indirect or consequential damages, including loss of profit, loss of revenue, or loss of anticipated savings, regardless of whether such damages were foreseeable."),
+    h.par(cl("ra.liability_indirect")),
     h.par("The aggregate liability of either Party in any twelve (12) month period shall not exceed the total amount paid or payable by the Reseller for the Products during the preceding twelve (12) months."),
     h.par("Nothing in this Agreement shall limit either Party\u2019s liability for: (i) death or personal injury caused by negligence; (ii) fraud or fraudulent misrepresentation; or (iii) any other liability that cannot be limited or excluded under applicable law."),
-    h.par("The Reseller acknowledges that, except as expressly provided in this Agreement or in the Supplier\u2019s standard warranty terms in Appendix 3, the Products are provided \u201cas is\u201d and the Supplier makes no warranties, express or implied, as to merchantability, fitness for a particular purpose, or non-infringement."),
+    h.par(cl("ra.warranty_asis")),
     h.h3("IP and Product Liability Indemnity"),
     h.par("The Supplier warrants that, to its knowledge, the sale of the Products in the Territory does not infringe any third-party intellectual property rights. If the Reseller receives a third-party IP claim relating to the Products as supplied, the Supplier shall indemnify the Reseller against finally determined liability, damages, and reasonable legal costs, provided the Reseller: (i) gives prompt written notice; (ii) makes no admission of liability without the Supplier\u2019s prior written consent; and (iii) provides reasonable cooperation at the Supplier\u2019s cost. The Supplier\u2019s indemnity does not cover claims arising from the Reseller\u2019s own modifications to the Products or warranties given by the Reseller beyond the Supplier\u2019s standard warranty."),
     // §11
@@ -24303,7 +24336,7 @@ async function buildRA(overrideData) {
     h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Contract & Notices contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."]),
     h.par([{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party."]),
     h.par([{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."]),
-    h.par([{t:"Anti-bribery. ",b:true},"Both Parties shall comply with the Swedish Anti-Bribery Act and other applicable anti-bribery and anti-corruption laws."]),
+    h.par([{t:"Anti-bribery. ",b:true},cl("ra.antibribery")]),
     h.par([{t:"Survival. ",b:true},"Sections 8 (confidentiality), 10 (limitation of liability), 13 (term and termination), 14 (premature termination), and 17 (governing law and disputes) survive termination or expiry of this Agreement."]),
 
     // §17
@@ -25490,6 +25523,44 @@ function renderAiMessages(){
   box.scrollTop = box.scrollHeight;
 }
 function aiQuick(text){ document.getElementById("aiInput").value=text; sendAi(); }
+function renderProposals(proposals){
+  var box=document.getElementById("aiMessages");
+  var ctx=getAiContext();
+  proposals.forEach(function(p){
+    var reg=CLAUSE_BY_ID[p.clauseId];
+    var ov=ctx&&ctx.clauseOverrides&&ctx.clauseOverrides[p.clauseId];
+    var current=(ov!=null&&String(ov).trim())?String(ov):(reg?reg.text:"(unknown clause: "+esc(p.clauseId)+")");
+    var label=reg?reg.label:p.clauseId;
+    var card=document.createElement("div");
+    card.style.cssText="margin:10px 0;border:1px solid #ffe69c;background:#FFFDF5;border-radius:8px;padding:10px;font-size:12px;line-height:1.5";
+    card.innerHTML="<div style='font-weight:600;color:#856404;margin-bottom:6px'>&#9998; Proposed redraft — "+esc(label)+"</div>"
+      + (p.rationale?"<div style='color:#666;margin-bottom:8px'>"+esc(p.rationale)+"</div>":"")
+      + "<div><span style='color:#c0392b;font-weight:600'>Current</span><div style='background:#fdece9;border-radius:4px;padding:6px;margin:2px 0 6px;white-space:pre-wrap'>"+esc(current)+"</div></div>"
+      + "<div><span style='color:#1e7e34;font-weight:600'>Proposed</span><div style='background:#eaf7ee;border-radius:4px;padding:6px;margin-top:2px;white-space:pre-wrap'>"+esc(p.newText)+"</div></div>"
+      + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Accept</button>"
+      + "<button class='pbRej' style='background:#fff;border:1px solid var(--border);border-radius:5px;padding:6px 12px;cursor:pointer'>Dismiss</button></div>";
+    box.appendChild(card);
+    card.querySelector(".pbAcc").onclick=function(){ acceptProposal(p.clauseId, p.newText); var a=card.querySelector(".pbAcc"); a.textContent="Accepted ✓"; a.disabled=true; a.style.opacity=.7; };
+    card.querySelector(".pbRej").onclick=function(){ card.remove(); };
+  });
+  box.scrollTop=box.scrollHeight;
+}
+function acceptProposal(clauseId, newText){
+  var ctx=getAiContext(); if(!ctx){ alert("No agreement is open to apply this to."); return; }
+  ctx.clauseOverrides = ctx.clauseOverrides || {};
+  ctx.clauseOverrides[clauseId] = newText;
+  document.getElementById("aiUpdatedBar").style.display="flex";
+  // Persist to the archive if we're editing a saved agreement.
+  if (window._editing && window._editing.id && window._editing.base){
+    window._editing.base.clauseOverrides = ctx.clauseOverrides;
+    if (typeof updateArchive==="function") updateArchive(window._editing, {}, false);
+  }
+}
+function downloadUpdatedAgreement(){
+  var ctx=getAiContext(); if(!ctx) return;
+  var t=ctx._type; var fn=(t==="rb")?buildRB:(t==="da"?buildDA:buildRA);
+  fn(ctx).then(function(r){ window.saveAs(r.blob, r.filename); }).catch(function(e){ alert("Could not regenerate: "+((e&&e.message)||e)); });
+}
 function sendAi(){
   var input=document.getElementById("aiInput");
   var text=(input.value||"").trim();
@@ -25502,13 +25573,15 @@ function sendAi(){
   thinking.id="aiThinking"; thinking.style.cssText="margin:10px 0;color:var(--muted);font-size:13px";
   thinking.textContent="The lawyer is thinking…"; box.appendChild(thinking); box.scrollTop=box.scrollHeight;
   document.getElementById("aiSend").disabled=true;
+  var ctx=getAiContext();
   fetch("/api/ai/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ agreement:getAiContext(), messages:window._aiMessages })
+    body: JSON.stringify({ agreement:ctx, messages:window._aiMessages, clauses: ctx?getEditableClauses(ctx._type, ctx):[] })
   }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
     .then(function(res){
       if (res.ok && res.j.reply){ window._aiMessages.push({role:"assistant",content:res.j.reply}); }
       else { window._aiMessages.push({role:"assistant",content:"⚠ "+((res.j&&res.j.error)||"No response.")}); }
       renderAiMessages();
+      if (res.ok && res.j.proposals && res.j.proposals.length) renderProposals(res.j.proposals);
     }).catch(function(){ window._aiMessages.push({role:"assistant",content:"⚠ Network error."}); renderAiMessages(); })
     .finally(function(){ document.getElementById("aiSend").disabled=false; var t=document.getElementById("aiThinking"); if(t) t.remove(); });
 }
@@ -25611,6 +25684,10 @@ initApp();
     </div>
   </div>
   <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
+  <div id="aiUpdatedBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#eaf7ee;border-top:1px solid #cfe8d6;padding:8px 12px;font-size:12px;color:#1e7e34">
+    <span>Clause changes applied to this agreement.</span>
+    <button onclick="downloadUpdatedAgreement()" style="background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">&#8681; Updated .docx</button>
+  </div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
     <textarea id="aiInput" rows="2" placeholder="Ask about this agreement…" style="flex:1;resize:none;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;font-family:inherit" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAi();}"></textarea>
     <button id="aiSend" onclick="sendAi()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer">Send</button>

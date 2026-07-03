@@ -216,10 +216,10 @@ async function loadPlaybook() {
 app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   try {
-    const { agreement, messages } = req.body || {};
+    const { agreement, messages, clauses } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
     const playbook = await loadPlaybook();
-    const out = await ai.chat(agreement || null, messages, playbook);
+    const out = await ai.chat(agreement || null, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null });
     res.json(out);
   } catch (err) {
     console.error('AI chat error:', err.message);
