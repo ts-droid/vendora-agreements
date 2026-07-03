@@ -151,7 +151,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 <div class="tabs">
   <button class="tab active" onclick="switchTab(0)">Distributor Agreement</button>
   <button class="tab" onclick="switchTab(1)">Reseller Agreement</button>
-  <button class="tab" onclick="switchTab(2)">Reseller Agreement &mdash; Standard</button>
+  <button class="tab" onclick="switchTab(2)">Reseller Agreement &mdash; Simplified</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════ TAB 0: DA -->
@@ -24256,7 +24256,7 @@ async function buildRA(overrideData) {
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
-  return {blob:blob, filename:"Vendora_RA_Standard_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
+  return {blob:blob, filename:"Vendora_Reseller_Agreement_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
 }
 
 async function buildRB(overrideData) {
@@ -24276,7 +24276,7 @@ async function buildRB(overrideData) {
   var children = [
     h.sp(),h.sp(),
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:500,after:35},children:[h.t("RESELLER AGREEMENT",{bold:true,size:48,color:h.NAVY})]}),
-    new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:35},children:[h.t("Standard version — "+( data.products||"[Products]"),{italics:true,size:20,color:"888888"})]}),
+    new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:35},children:[h.t("Simplified version — "+( data.products||"[Products]"),{italics:true,size:20,color:"888888"})]}),
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:200},children:[h.t("VENDORA NORDIC AB  —  "+(data.name||"[THE RESELLER]"),{bold:true,size:28,color:h.NAVY})]}),
     h.fldTbl([h.fldRow("Agreement date",dt,2400,7106),h.fldRow("Products / brands",data.products,2400,7106),h.fldRow("Territory (active sales area)",data.terr,2400,7106),h.fldRow("Shipping",data.inco+" Vendora Nordic AB, Lomma, Sweden",2400,7106),h.fldRow("Payment",data.curr+", "+data.pay+" days net",2400,7106),h.fldRow("Notice period",data.notice+" days",2400,7106)].filter(Boolean)),
     h.pgBrk(),
@@ -24331,7 +24331,7 @@ async function buildRB(overrideData) {
   var doc = h.makeDoc(children);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
-  return {blob:blob, filename:"Vendora_RA_Standard_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
+  return {blob:blob, filename:"Vendora_Reseller_Agreement_Simplified_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx"};
 }
 
 /* ── INVITE LINK ─────────────────────────────────────────────────────────── */
