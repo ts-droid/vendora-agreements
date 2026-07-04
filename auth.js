@@ -1,7 +1,7 @@
-// Authentication: bcrypt password hashing + stateless JWT stored in an httpOnly cookie.
-// Registration is gated by SIGNUP_CODE so the public URL can't be freely signed up against.
+// Authentication: Google Sign-In (domain-restricted) issuing a stateless JWT in an httpOnly
+// cookie. Password login/registration were removed — the only way in is a verified @vendora.se
+// Google account.
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 
@@ -66,11 +66,7 @@ function requireAuth(req, res, next) {
   req.user = u;
   next();
 }
-function hashPassword(pw) { return bcrypt.hash(pw, 10); }
-function verifyPassword(pw, hash) { return bcrypt.compare(pw, hash); }
-
 module.exports = {
-  signToken, setAuthCookie, clearAuthCookie, readUser, requireAuth,
-  hashPassword, verifyPassword, COOKIE,
+  signToken, setAuthCookie, clearAuthCookie, readUser, requireAuth, COOKIE,
   verifyGoogleToken, googleEnabled, GOOGLE_CLIENT_ID, ALLOWED_DOMAIN,
 };
