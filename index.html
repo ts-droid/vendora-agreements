@@ -25330,15 +25330,15 @@ function showSignInLink(){
 }
 function showAuthOverlay(){
   document.getElementById("authOverlay").style.display="flex";
+  document.getElementById("authSubtitle").textContent="Sign in with your @"+window._allowedDomain+" account";
   if (window._googleClientId) {
     document.getElementById("googleBox").style.display="block";
-    document.getElementById("loginForm").style.display="none";
-    document.getElementById("registerForm").style.display="none";
-    document.getElementById("authSubtitle").textContent="Sign in with your @"+window._allowedDomain+" account";
     renderGoogleButton();
   } else {
+    // Google is the only sign-in method. If it isn't configured, say so rather than silently
+    // showing nothing (this only happens on a misconfigured deploy).
     document.getElementById("googleBox").style.display="none";
-    document.getElementById("loginForm").style.display="block";
+    document.getElementById("authErr").textContent="Google sign-in is not configured on this server.";
   }
 }
 function renderGoogleButton(){
@@ -25365,8 +25365,6 @@ function handleGoogleCredential(resp){
     .catch(function(){ document.getElementById("authErr").textContent = "Network error"; });
 }
 function hideAuthOverlay(){ document.getElementById("authOverlay").style.display="none"; }
-function showRegister(){ document.getElementById("loginForm").style.display="none"; document.getElementById("registerForm").style.display="block"; document.getElementById("authSubtitle").textContent="Create your account"; document.getElementById("authErr").textContent=""; }
-function showLogin(){ document.getElementById("registerForm").style.display="none"; document.getElementById("loginForm").style.display="block"; document.getElementById("authSubtitle").textContent="Sign in to continue"; document.getElementById("authErr").textContent=""; }
 
 function onLoggedIn(user){
   window._authUser = user;
@@ -25377,20 +25375,6 @@ function onLoggedIn(user){
   if (window._aiEnabled) showAiButton();
 }
 
-function doLogin(){ authRequest("/api/auth/login", { email:document.getElementById("authEmail").value.trim(), password:document.getElementById("authPassword").value }); }
-function doRegister(){ authRequest("/api/auth/register", {
-  name:document.getElementById("regName").value.trim(),
-  email:document.getElementById("regEmail").value.trim(),
-  password:document.getElementById("regPassword").value,
-  signupCode:document.getElementById("regCode").value.trim()
-}); }
-function authRequest(url, body){
-  document.getElementById("authErr").textContent="";
-  fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
-    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-    .then(function(res){ if(res.ok){ onLoggedIn(res.j.user); } else { document.getElementById("authErr").textContent = res.j.error || "Failed"; } })
-    .catch(function(){ document.getElementById("authErr").textContent="Network error"; });
-}
 function doLogout(){ fetch("/api/auth/logout",{method:"POST"}).finally(function(){ window.location.reload(); }); }
 
 function saveToArchive(type, data){
@@ -25737,23 +25721,9 @@ initApp();
   <div class="auth-box">
     <h2>Vendora Agreements</h2>
     <div class="desc" id="authSubtitle">Sign in to continue</div>
-    <div id="googleBox" style="display:none">
+    <div id="googleBox">
       <div id="gsiButton" style="margin-top:16px;display:flex;justify-content:center"></div>
-      <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:12px">Only Vendora accounts can sign in.</div>
-    </div>
-    <div id="loginForm">
-      <label>Email</label><input id="authEmail" type="email" placeholder="you@vendora.se" autocomplete="username">
-      <label>Password</label><input id="authPassword" type="password" placeholder="Your password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-      <button class="auth-btn" onclick="doLogin()">Sign in</button>
-      <div class="auth-toggle">No account yet? <a onclick="showRegister()">Create one</a></div>
-    </div>
-    <div id="registerForm" style="display:none">
-      <label>Name</label><input id="regName" placeholder="Your name">
-      <label>Email</label><input id="regEmail" type="email" placeholder="you@vendora.se">
-      <label>Password <em style="font-weight:400;color:var(--muted)">(min 8 characters)</em></label><input id="regPassword" type="password" placeholder="Choose a password">
-      <label>Signup code</label><input id="regCode" placeholder="Team signup code" onkeydown="if(event.key==='Enter')doRegister()">
-      <button class="auth-btn" onclick="doRegister()">Create account</button>
-      <div class="auth-toggle">Already have an account? <a onclick="showLogin()">Sign in</a></div>
+      <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:12px">Only @vendora.se Google accounts can sign in.</div>
     </div>
     <div class="auth-err" id="authErr"></div>
   </div>

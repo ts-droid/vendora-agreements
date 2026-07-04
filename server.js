@@ -348,35 +348,8 @@ function requireDb(req, res, next) {
   next();
 }
 
-app.post('/api/auth/register', authLimiter, requireDb, async (req, res) => {
-  try {
-    const { email, password, name, signupCode } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-    const emailLc = String(email).trim().toLowerCase();
-    // Same domain gate as Google sign-in: only @vendora.se accounts may register.
-    if (!emailLc.endsWith('@' + DOMAIN)) return res.status(403).json({ error: 'Only @' + DOMAIN + ' accounts may register' });
-    const expected = process.env.SIGNUP_CODE || '';
-    if (!expected || !tokenEq(signupCode, expected)) return res.status(403).json({ error: 'Invalid or missing signup code' });
-    const hash = await auth.hashPassword(password);
-    let row;
-    try {
-      const r = await db.query(
-        'INSERT INTO users (email, password_hash, name) VALUES ($1,$2,$3) RETURNING id, email, name',
-        [emailLc, hash, (name || '').trim() || null]
-      );
-      row = r.rows[0];
-    } catch (e) {
-      if (e.code === '23505') return res.status(409).json({ error: 'An account with that email already exists' });
-      throw e;
-    }
-    auth.setAuthCookie(res, auth.signToken(row));
-    res.json({ user: { id: row.id, email: row.email, name: row.name } });
-  } catch (err) {
-    console.error('Register error:', err.message);
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
+// Sign-in is Google-only (domain-restricted). Password registration/login were removed so the
+// only way into the archive is a verified @vendora.se Google account.
 
 // Sign in with Google (domain-restricted). The frontend sends the Google ID-token credential.
 app.post('/api/auth/google', authLimiter, requireDb, async (req, res) => {
@@ -404,23 +377,6 @@ app.post('/api/auth/google', authLimiter, requireDb, async (req, res) => {
   } catch (err) {
     console.error('Google auth error:', err.message);
     res.status(500).json({ error: 'Google sign-in failed' });
-  }
-});
-
-app.post('/api/auth/login', authLimiter, requireDb, async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-    const r = await db.query('SELECT id, email, name, password_hash FROM users WHERE email=$1', [String(email).trim().toLowerCase()]);
-    const u = r.rows[0];
-    if (!u || !(await auth.verifyPassword(password, u.password_hash))) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
-    auth.setAuthCookie(res, auth.signToken(u));
-    res.json({ user: { id: u.id, email: u.email, name: u.name } });
-  } catch (err) {
-    console.error('Login error:', err.message);
-    res.status(500).json({ error: 'Login failed' });
   }
 });
 
