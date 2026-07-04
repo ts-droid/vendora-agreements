@@ -14,6 +14,41 @@ app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 app.set('trust proxy', 1); // behind Railway's proxy: correct req.ip / secure-cookie handling
 
+// Baseline security headers (no external dependency; deliberately no strict CSP because the
+// single-file frontend relies on inline scripts/styles that a strict policy would break).
+app.use(function (req, res, next) {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'SAMEORIGIN');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('X-XSS-Protection', '0');
+  next();
+});
+
+// Tiny in-memory rate limiter (single Railway instance). Keyed by client IP + bucket name.
+// Not a distributed guarantee — just enough to blunt credential stuffing and email/API abuse.
+const rlBuckets = new Map();
+function rateLimit(name, max, windowMs) {
+  return function (req, res, next) {
+    const now = Date.now();
+    const key = name + ':' + (req.ip || 'unknown');
+    let b = rlBuckets.get(key);
+    if (!b || now > b.reset) { b = { count: 0, reset: now + windowMs }; rlBuckets.set(key, b); }
+    b.count++;
+    if (b.count > max) {
+      res.set('Retry-After', String(Math.ceil((b.reset - now) / 1000)));
+      return res.status(429).json({ error: 'Too many requests — please slow down and try again shortly.' });
+    }
+    next();
+  };
+}
+// Opportunistic sweep so the map can't grow unbounded.
+setInterval(function () {
+  const now = Date.now();
+  for (const [k, v] of rlBuckets) { if (now > v.reset) rlBuckets.delete(k); }
+}, 10 * 60 * 1000).unref();
+const authLimiter   = rateLimit('auth',   15, 15 * 60 * 1000); // 15 attempts / 15 min / IP
+const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
+
 // Escape untrusted strings before putting them in email HTML.
 function escHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -64,7 +99,7 @@ app.post('/api/invite', auth.requireAuth, (req, res) => {
   res.json({ code, url: `/i/${code}` });
 });
 
-app.get('/api/invite/:code', (req, res) => {
+app.get('/api/invite/:code', publicLimiter, (req, res) => {
   const entry = store.get(req.params.code);
   if (!entry) return res.status(404).json({ error: 'Link not found or expired' });
   res.json(entry.data);
@@ -91,8 +126,10 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
     return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
   }
 
-  const greeting = toName ? `Hi ${toName},` : 'Hi,';
+  const greeting = toName ? `Hi ${escHtml(toName)},` : 'Hi,';
   const typeLabel = agreementType === 'da' ? 'Distributor Agreement' : 'Reseller Agreement';
+  const fromLabel = escHtml(fromName || 'Vendora Nordic AB');
+  const okInvite = typeof inviteUrl === 'string' && inviteUrl.indexOf('https://' + req.get('host') + '/') === 0;
 
   // CC the responsible salesperson (visible to the recipient as their contact); BCC
   // ts@vendora.se (hidden from the recipient). Never CC/BCC the recipient themselves.
@@ -121,20 +158,20 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
           <div style="padding:24px 28px;border:1px solid #e0e0e0;border-top:none">
             <p style="color:#333;font-size:14px">${greeting}</p>
             <p style="color:#333;font-size:14px">
-              ${fromName || 'Vendora Nordic AB'} has prepared a <strong>${typeLabel}</strong>
+              ${fromLabel} has prepared a <strong>${typeLabel}</strong>
               and would like you to fill in your company details before the agreement is finalised.
             </p>
             <p style="color:#333;font-size:14px">
               It only takes a few minutes. The commercial terms have already been set —
               you just need to provide your legal company details and contact persons.
             </p>
-            <div style="text-align:center;margin:28px 0">
-              <a href="${inviteUrl}"
+            ${okInvite ? `<div style="text-align:center;margin:28px 0">
+              <a href="${escHtml(inviteUrl)}"
                  style="display:inline-block;background:#0F2240;color:#fff;padding:14px 32px;
                         text-decoration:none;font-size:15px;font-weight:bold">
                 Fill in your details →
               </a>
-            </div>
+            </div>` : ''}
             <p style="color:#999;font-size:12px">
               If the button above doesn't work, please contact us at ts@vendora.se.
             </p>
@@ -151,12 +188,12 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
     res.json({ ok: true, sent: true });
   } catch (err) {
     console.error('Send invite error:', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Could not send the invitation email' });
   }
 });
 
 // ── Notification to Vendora when supplier submits ─────────────────────────────
-app.post('/api/notify', async (req, res) => {
+app.post('/api/notify', publicLimiter, async (req, res) => {
   const { supplierName, agreementType, reviewUrl, vendoraContact, proposalCount } = req.body;
   const transporter = getTransporter();
   if (!transporter) {
@@ -214,7 +251,7 @@ app.post('/api/notify', async (req, res) => {
     res.json({ ok: true, sent: true });
   } catch (err) {
     console.error('Notify error:', err.message);
-    res.json({ ok: true, sent: false, reason: err.message });
+    res.json({ ok: true, sent: false });
   }
 });
 
@@ -298,7 +335,11 @@ app.post('/api/playbook/notes', requireDb, auth.requireAuth, async (req, res) =>
 });
 
 app.delete('/api/playbook/notes/:id', requireDb, auth.requireAuth, async (req, res) => {
-  try { await db.query('DELETE FROM ai_notes WHERE id=$1', [req.params.id]); res.json({ ok: true }); }
+  try {
+    const r = await db.query('DELETE FROM ai_notes WHERE id=$1', [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  }
   catch (err) { console.error('Delete note error:', err.message); res.status(500).json({ error: 'Could not delete' }); }
 });
 
@@ -307,19 +348,22 @@ function requireDb(req, res, next) {
   next();
 }
 
-app.post('/api/auth/register', requireDb, async (req, res) => {
+app.post('/api/auth/register', authLimiter, requireDb, async (req, res) => {
   try {
     const { email, password, name, signupCode } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const emailLc = String(email).trim().toLowerCase();
+    // Same domain gate as Google sign-in: only @vendora.se accounts may register.
+    if (!emailLc.endsWith('@' + DOMAIN)) return res.status(403).json({ error: 'Only @' + DOMAIN + ' accounts may register' });
     const expected = process.env.SIGNUP_CODE || '';
-    if (!expected || signupCode !== expected) return res.status(403).json({ error: 'Invalid or missing signup code' });
+    if (!expected || !tokenEq(signupCode, expected)) return res.status(403).json({ error: 'Invalid or missing signup code' });
     const hash = await auth.hashPassword(password);
     let row;
     try {
       const r = await db.query(
         'INSERT INTO users (email, password_hash, name) VALUES ($1,$2,$3) RETURNING id, email, name',
-        [String(email).trim().toLowerCase(), hash, (name || '').trim() || null]
+        [emailLc, hash, (name || '').trim() || null]
       );
       row = r.rows[0];
     } catch (e) {
@@ -335,7 +379,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
 });
 
 // Sign in with Google (domain-restricted). The frontend sends the Google ID-token credential.
-app.post('/api/auth/google', requireDb, async (req, res) => {
+app.post('/api/auth/google', authLimiter, requireDb, async (req, res) => {
   try {
     const { credential } = req.body || {};
     if (!credential) return res.status(400).json({ error: 'Missing Google credential' });
@@ -363,7 +407,7 @@ app.post('/api/auth/google', requireDb, async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', requireDb, async (req, res) => {
+app.post('/api/auth/login', authLimiter, requireDb, async (req, res) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
@@ -428,7 +472,7 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
 });
 
 // Public: the counterparty's fill submission updates its linked record, authorised by the token.
-app.post('/api/agreements/:id/submit', requireDb, async (req, res) => {
+app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res) => {
   try {
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
@@ -496,7 +540,8 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
 
 app.delete('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
   try {
-    await db.query('DELETE FROM agreements WHERE id=$1', [req.params.id]);
+    const r = await db.query('DELETE FROM agreements WHERE id=$1', [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete agreement error:', err.message);
