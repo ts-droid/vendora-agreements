@@ -231,7 +231,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="g3">
     <div class="f"><label>Invoice currency</label><select id="da_curr"><option value="EUR" selected>EUR</option><option value="DKK">DKK</option><option value="NOK">NOK</option><option value="USD">USD</option><option value="SEK">SEK</option><option value="DKK">DKK</option><option value="NOK">NOK</option><option value="GBP">GBP</option></select></div>
     <div class="f"><label>Payment terms</label><select id="da_pay"><option value="30">30 days</option><option value="45">45 days</option><option value="60" selected>60 days</option><option value="90">90 days</option></select></div>
-    <div class="f"><label>Invoice email</label><input id="da_invmail" value="invoices@vendora.se"></div>
+    <div class="f"><label>Invoice email</label><input id="da_invmail" value="invoice@vendora.se"></div>
   </div>
   <div class="sec">Shipping &amp; logistics</div>
   <div class="g2">
@@ -24015,7 +24015,7 @@ async function buildDA(overrideData) {
     contactRows.push(h.sp());
   });
 
-  var vendoraRows = [["Main contact","ts@vendora.se"],["Purchasing / Orders","orders@vendora.se"],["Finance / Accounts Payable","invoices@vendora.se"],["Logistics & Freight","logistics@vendora.se"],["Marketing & MDF","marketing@vendora.se"],["RMA & Tech Support","rma@vendora.se"],["General / Legal","info@vendora.se"]];
+  var vendoraRows = [["Main contact","ts@vendora.se"],["Purchasing / Orders","orders@vendora.se"],["Finance / Accounts Payable","invoice@vendora.se"],["Logistics & Freight","logistics@vendora.se"],["Marketing & MDF","marketing@vendora.se"],["RMA & Tech Support","rma@vendora.se"],["General / Legal","info@vendora.se"]];
   var VW=[3200,3153,3153];
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
 
@@ -24366,7 +24366,7 @@ async function buildRA(overrideData) {
     h.par("For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:"),
     h.fldTbl([
       h.fldRow("Orders (if not placed via the web portal)","orders@vendora.se"),
-      h.fldRow("Invoicing & payment queries","invoices@vendora.se"),
+      h.fldRow("Invoicing & payment queries","invoice@vendora.se"),
       h.fldRow("Logistics, deliveries & freight","logistics@vendora.se"),
       h.fldRow("Returns / RMA","rma@vendora.se"),
       h.fldRow("Product images & marketing assets","marketing@vendora.se"),
@@ -24387,7 +24387,7 @@ async function buildRA(overrideData) {
     h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
     h.sp(),
   ];
-  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoices@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoices@vendora.se"]];
+  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
@@ -24440,7 +24440,7 @@ async function buildRB(overrideData) {
     h.par("For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:"),
     h.fldTbl([
       h.fldRow("Orders (if not placed via the web portal)","orders@vendora.se"),
-      h.fldRow("Invoicing & payment queries","invoices@vendora.se"),
+      h.fldRow("Invoicing & payment queries","invoice@vendora.se"),
       h.fldRow("Logistics, deliveries & freight","logistics@vendora.se"),
       h.fldRow("Returns / RMA","rma@vendora.se"),
       h.fldRow("Product images & marketing assets","marketing@vendora.se"),
@@ -24461,7 +24461,7 @@ async function buildRB(overrideData) {
     h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
     h.sp(),
   ];
-  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoices@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoices@vendora.se"]];
+  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
