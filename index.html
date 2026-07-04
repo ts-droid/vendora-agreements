@@ -173,6 +173,39 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <button onclick="exitEdit()" style="font-size:13px;padding:7px 14px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">Cancel</button>
 </div>
 
+<!-- Archive record management (status, signed-file uploads, reminders) — shown while editing a saved record -->
+<div id="archivePanel" style="display:none;background:#fff;border:1px solid var(--border);border-radius:6px;padding:16px 18px;margin-bottom:16px">
+  <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
+    <div style="min-width:180px">
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Status</label>
+      <select id="apStatus" onchange="apSetStatus(this.value)" style="font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;min-width:200px">
+        <option value="draft">Draft</option>
+        <option value="invited">Invited — awaiting details</option>
+        <option value="submitted">Submitted by counterparty</option>
+        <option value="generated">Generated</option>
+        <option value="sent">Sent for signature</option>
+        <option value="signed">Signed / completed</option>
+        <option value="imported">Imported</option>
+      </select>
+      <span id="apStatusMsg" style="font-size:11px;margin-left:8px"></span>
+    </div>
+    <div style="flex:1;min-width:260px">
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Signed / uploaded documents</label>
+      <div id="apFiles" style="font-size:13px;color:var(--muted)">—</div>
+      <div style="margin-top:8px">
+        <input type="file" id="apFileInput" style="display:none" onchange="apUpload(this)">
+        <button onclick="document.getElementById('apFileInput').click()" style="font-size:12px;padding:6px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">&#8681; Upload signed agreement</button>
+        <span id="apUploadMsg" style="font-size:11px;margin-left:8px"></span>
+      </div>
+    </div>
+    <div style="min-width:180px">
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Reminder</label>
+      <button id="apRemindBtn" onclick="apRemind()" style="font-size:12px;padding:6px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">&#9993; Send reminder</button>
+      <div id="apRemindMsg" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════ TAB 0: DA -->
 <div id="tab0" class="tab-panel active">
 <div class="card">
@@ -25385,6 +25418,19 @@ function saveToArchive(type, data){
   }).catch(function(){});
 }
 
+var STATUS_META = {
+  draft:     {label:"Draft",              bg:"#eef1f5", fg:"#555"},
+  invited:   {label:"Invited",            bg:"#e7f0fb", fg:"#1A3C6E"},
+  submitted: {label:"Submitted",          bg:"#fff3cd", fg:"#856404"},
+  generated: {label:"Generated",          bg:"#e6f2ea", fg:"#1e7e34"},
+  sent:      {label:"Sent for signature", bg:"#e7f0fb", fg:"#1A3C6E"},
+  signed:    {label:"Signed",             bg:"#1e7e34", fg:"#fff"},
+  imported:  {label:"Imported",           bg:"#eef1f5", fg:"#555"}
+};
+function statusBadge(s){
+  var m = STATUS_META[s] || {label:(s||"—"), bg:"#eef1f5", fg:"#555"};
+  return "<span style='display:inline-block;background:"+m.bg+";color:"+m.fg+";font-size:11px;padding:2px 9px;border-radius:10px'>"+esc(m.label)+"</span>";
+}
 function loadArchive(){
   var el = document.getElementById("archiveList");
   if (!el) return;
@@ -25396,7 +25442,7 @@ function loadArchive(){
     var html = "<table class='review-table' style='width:100%'><tr><th>Type</th><th>Counterparty</th><th>Status</th><th>Created by</th><th>Date</th><th></th></tr>";
     rows.forEach(function(a){
       var dt = (a.created_at||"").slice(0,10);
-      html += "<tr><td>"+(TYPE[a.type]||esc(a.type))+"</td><td>"+esc(a.counterparty_name||"—")+"</td><td>"+esc(a.status||"")+"</td><td>"+esc(a.created_by_name||"")+"</td><td>"+esc(dt)+"</td>"
+      html += "<tr><td>"+(TYPE[a.type]||esc(a.type))+"</td><td>"+esc(a.counterparty_name||"—")+"</td><td>"+statusBadge(a.status)+"</td><td>"+esc(a.created_by_name||"")+"</td><td>"+esc(dt)+"</td>"
         + "<td style='white-space:nowrap;text-align:right'>"
         + "<button onclick='archiveEdit("+a.id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
         + "<button onclick='archiveDownload("+a.id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
@@ -25437,21 +25483,99 @@ function archiveEdit(id){
     var a=j.agreement, data=a.data||{}, type=a.type;
     switchTab(type==="da"?0:(type==="rb"?2:1));
     hydrateForm(type, data);
-    window._editing = { id:a.id, type:type, base:data };
+    window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email };
     var bar=document.getElementById("editBar"); bar.style.display="flex";
     document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
     document.getElementById("editBarStatus").textContent = "";
+    apShowPanel(a);
     window.scrollTo(0,0);
   }).catch(function(e){ alert("Could not open that agreement."); });
 }
-function exitEdit(){ window._editing=null; var b=document.getElementById("editBar"); if(b) b.style.display="none"; }
+function exitEdit(){ window._editing=null; var b=document.getElementById("editBar"); if(b) b.style.display="none"; var p=document.getElementById("archivePanel"); if(p) p.style.display="none"; }
+
+/* ── Archive record management: status, signed-file uploads, reminders ── */
+function apShowPanel(a){
+  var p=document.getElementById("archivePanel"); if(!p) return;
+  p.style.display="block";
+  var sel=document.getElementById("apStatus"); sel.value=a.status||"draft";
+  document.getElementById("apStatusMsg").textContent="";
+  document.getElementById("apUploadMsg").textContent="";
+  // Reminder hint reflects what will be sent for the current status.
+  var msg=document.getElementById("apRemindMsg"), btn=document.getElementById("apRemindBtn");
+  if(!a.counterparty_email){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="No counterparty email on file."; }
+  else { btn.disabled=false; btn.style.opacity=1; msg.textContent=(a.status==="invited"?"Nudge to fill in their details":"Nudge to sign & return")+" → "+a.counterparty_email; }
+  apLoadFiles();
+}
+function apSetStatus(status){
+  var e=window._editing; if(!e) return;
+  var m=document.getElementById("apStatusMsg"); m.style.color="var(--muted)"; m.textContent="Saving…";
+  fetch("/api/agreements/"+e.id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:status})})
+    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(){ e.status=status; m.style.color="#1e7e34"; m.textContent="Saved ✓";
+      var msg=document.getElementById("apRemindMsg");
+      if(e.cpEmail) msg.textContent=(status==="invited"?"Nudge to fill in their details":"Nudge to sign & return")+" → "+e.cpEmail;
+    })
+    .catch(function(){ m.style.color="#c0392b"; m.textContent="Failed"; });
+}
+function apLoadFiles(){
+  var e=window._editing; if(!e) return;
+  var box=document.getElementById("apFiles");
+  fetch("/api/agreements/"+e.id+"/files").then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    var files=j.files||[];
+    if(!files.length){ box.innerHTML="<span style='color:var(--muted)'>No documents uploaded yet.</span>"; return; }
+    box.innerHTML=files.map(function(f){
+      var kb=Math.max(1,Math.round((f.size_bytes||0)/1024));
+      var when=(f.uploaded_at||"").slice(0,10);
+      return "<div style='display:flex;align-items:center;gap:8px;padding:3px 0'>"
+        + "<a href='/api/agreements/"+e.id+"/files/"+f.id+"' style='color:var(--blue2);text-decoration:none'>&#128196; "+esc(f.filename)+"</a>"
+        + "<span style='color:var(--muted);font-size:11px'>"+kb+" KB · "+esc(f.uploaded_by||"")+" · "+esc(when)+"</span>"
+        + "<a onclick='apDeleteFile("+f.id+")' style='color:#c0392b;cursor:pointer;font-size:11px'>remove</a></div>";
+    }).join("");
+  }).catch(function(){ box.innerHTML="<span style='color:#c0392b'>Could not load files.</span>"; });
+}
+function apUpload(input){
+  var e=window._editing; if(!e||!input.files||!input.files[0]) return;
+  var file=input.files[0];
+  if(file.size>15*1024*1024){ document.getElementById("apUploadMsg").style.color="#c0392b"; document.getElementById("apUploadMsg").textContent="File too large (max 15 MB)."; input.value=""; return; }
+  var msg=document.getElementById("apUploadMsg"); msg.style.color="var(--muted)"; msg.textContent="Uploading…";
+  fetch("/api/agreements/"+e.id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name)},body:file})
+    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(res){ msg.style.color="#1e7e34"; msg.textContent="Uploaded ✓ — status set to Signed";
+      if(res.status){ document.getElementById("apStatus").value=res.status; e.status=res.status; }
+      apLoadFiles();
+    })
+    .catch(function(){ msg.style.color="#c0392b"; msg.textContent="Upload failed"; })
+    .finally(function(){ input.value=""; });
+}
+function apDeleteFile(fileId){
+  var e=window._editing; if(!e) return;
+  if(!confirm("Remove this document?")) return;
+  fetch("/api/agreements/"+e.id+"/files/"+fileId,{method:"DELETE"}).then(function(r){ if(!r.ok) throw 0; apLoadFiles(); })
+    .catch(function(){ alert("Could not remove the file."); });
+}
+function apRemind(){
+  var e=window._editing; if(!e) return;
+  var btn=document.getElementById("apRemindBtn"), msg=document.getElementById("apRemindMsg");
+  btn.disabled=true; var old=msg.textContent; msg.style.color="var(--muted)"; msg.textContent="Sending…";
+  fetch("/api/agreements/"+e.id+"/remind",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+    .then(function(res){
+      if(res.ok && res.j.sent){ msg.style.color="#1e7e34"; msg.textContent="Reminder sent ✓"; }
+      else if(res.ok && !res.j.sent){ msg.style.color="#c0392b"; msg.textContent="Not sent: "+(res.j.reason||"email not configured"); }
+      else { msg.style.color="#c0392b"; msg.textContent=res.j.error||"Could not send"; }
+    })
+    .catch(function(){ msg.style.color="#c0392b"; msg.textContent="Network error"; })
+    .finally(function(){ btn.disabled=false; });
+}
 function updateArchive(editing, formData, showStatus){
   var merged = Object.assign({}, editing.base, formData); merged._type = editing.type;
   var cpEmail = merged.sig_email || merged.invEmail || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
   var st = document.getElementById("editBarStatus");
   if (showStatus && st){ st.style.color="var(--muted)"; st.textContent="Saving…"; }
+  // Preserve the record's current status (don't downgrade a signed/sent record on an edit-save).
+  var keepStatus = editing.status || "generated";
   return fetch("/api/agreements/"+editing.id, {method:"PUT",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:"generated" })
+    body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:keepStatus })
   }).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
     editing.base = merged;
     if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
