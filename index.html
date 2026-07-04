@@ -23845,7 +23845,15 @@ function generate() {
   btn.disabled = true; spin.style.display = "block";
   document.getElementById(sucId).style.display = "none";
   var fn = [buildDA, buildRA, buildRB][activeTab];
-  fn().then(function(result) {
+  var type = ["da","ra","rb"][activeTab];
+  // Carry any clause overrides (from an edited agreement or accepted AI redrafts) into the build.
+  // readForm() only reads visible fields, so without this the overrides would be silently dropped
+  // and the generated document would revert every reworded clause to its registry default.
+  var data = readForm(type);
+  data.clauseOverrides = window._clauseOverrides
+    || (window._editing && window._editing.base && window._editing.base.clauseOverrides)
+    || {};
+  fn(data).then(function(result) {
     window.saveAs(result.blob, result.filename);
     document.getElementById(sucId).style.display = "block";
     if (window._lastBuild) {
@@ -23988,6 +23996,7 @@ async function buildDA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readDAForm();
   if (!data.name) { alert("Please enter the Supplier name."); return; }
+  window._clauseOverrides = (data && data.clauseOverrides) || {};
   if (!data.contacts) data.contacts = {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = overrideData ? !!overrideData.targetsOn : (document.getElementById("da_targets_on") && document.getElementById("da_targets_on").checked);
@@ -24398,6 +24407,7 @@ async function buildRB(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readRBForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
+  window._clauseOverrides = (data && data.clauseOverrides) || {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
 
@@ -24935,7 +24945,7 @@ function showReviewMode(d) {
   var shell = document.querySelector(".shell");
   var banner = document.createElement("div");
   banner.className = "review-banner";
-  banner.innerHTML = "<h2>✅ " + (d.name||"Supplier") + " has submitted their details</h2>"
+  banner.innerHTML = "<h2>✅ " + esc(d.name||"Supplier") + " has submitted their details</h2>"
     + "<p>All information has been pre-filled below. Review and click <strong>Generate &amp; Download</strong> to produce the final agreement.</p>";
 
   var rows = isDA ? [
@@ -24957,7 +24967,7 @@ function showReviewMode(d) {
   ];
 
   var tableHtml = "<table class='review-table'>" + rows.map(function(r){
-    return "<tr><td>"+r[0]+"</td><td>"+(r[1]||"—")+"</td></tr>";
+    return "<tr><td>"+esc(r[0])+"</td><td>"+esc(r[1]||"—")+"</td></tr>";
   }).join("") + "</table>";
 
   // Contacts summary for DA
@@ -24968,8 +24978,8 @@ function showReviewMode(d) {
       var ct = d.contacts[r.id];
       if (ct && ct.p && ct.p.n) {
         contactHtml += "<div style='margin-bottom:8px;font-size:12px'><strong style='color:var(--navy)'>"
-          + r.label + "</strong><br>"
-          + ct.p.n + (ct.p.e?" — "+ct.p.e:"") + (ct.p.p?", "+ct.p.p:"") + "</div>";
+          + esc(r.label) + "</strong><br>"
+          + esc(ct.p.n) + (ct.p.e?" — "+esc(ct.p.e):"") + (ct.p.p?", "+esc(ct.p.p):"") + "</div>";
       }
     });
     contactHtml += "</div>";
@@ -24981,12 +24991,12 @@ function showReviewMode(d) {
 
   var genBar = document.createElement("div");
   genBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
-  genBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>All details received from " + (d.name||"supplier") + " — ready to generate</span>"
+  genBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>All details received from " + esc(d.name||"supplier") + " — ready to generate</span>"
     + "<button class='btn-gen' onclick='generateFromReview()' id='reviewGenBtn'><span>Generate &amp; Download (.docx)</span><div class='spin' id='review_spin'></div></button>";
 
   var sucDiv = document.createElement("div");
   sucDiv.className = "suc"; sucDiv.id = "review_suc"; sucDiv.style.display = "none";
-  sucDiv.innerHTML = "<strong>Agreement generated and downloaded.</strong> Open in Word, review, and send to " + (d.name||"supplier") + " for countersignature.";
+  sucDiv.innerHTML = "<strong>Agreement generated and downloaded.</strong> Open in Word, review, and send to " + esc(d.name||"supplier") + " for countersignature.";
 
   // Build proposals comparison card if supplier proposed changes
   var proposalCard = null;
@@ -24997,21 +25007,24 @@ function showReviewMode(d) {
     var termLabels = {pay:"Payment terms (days)",excl:"Exclusivity / appointment",term:"Initial term",inco:"Incoterms",delplace:"Place of delivery",lead:"Lead time (days)",curr:"Invoice currency",pcurr:"Price list currency",moq:"Minimum order",terr:"Territory",targets:"Annual sales targets",mdfb:"Base MDF (%)",mdft:"Target bonus MDF (%)",mdfc:"Co-op fund (%)",mdff:"MDF frequency",credit:"Credit limit",minact:"Min. activity",notice:"Notice period",target:"Annual sales target",bonus:"Back-end bonus",mdf:"MDF"};
     proposalCard = document.createElement("div");
     proposalCard.className = "card";
-    var ph = "<h2>Proposed changes from " + (d.name||"the counterparty") + " <span class=\'neg-badge\'>" + proposalKeys.length + " to review</span></h2>";
+    var ph = "<h2>Proposed changes from " + esc(d.name||"the counterparty") + " <span class=\'neg-badge\'>" + proposalKeys.length + " to review</span></h2>";
     ph += "<div class=\'desc\'>They accepted all other terms. Review each proposed change below and choose to accept their value or keep yours.</div>";
     ph += "<div class=\'cmp-row cmp-head\'><span>Term</span><span>Your value</span><span>Their proposal</span><span>Decision</span></div>";
     proposalKeys.forEach(function(key){
+      // key is interpolated into id/onclick attributes, so ignore anything that isn't a plain
+      // identifier \u2014 this blocks attribute/JS breakout via a malicious proposal key.
+      if (!/^[A-Za-z0-9_]+$/.test(key)) return;
       var p = proposals[key];
       var lbl = termLabels[key] || key;
       ph += "<div class=\'cmp-row\'>"
-        + "<span>"+lbl+"</span>"
-        + "<span class=\'cmp-orig\'>"+(p.original||"\u2014")+"</span>"
-        + "<span class=\'cmp-prop changed\'>"+(p.proposed||"\u2014")+"</span>"
+        + "<span>"+esc(lbl)+"</span>"
+        + "<span class=\'cmp-orig\'>"+esc(p.original||"\u2014")+"</span>"
+        + "<span class=\'cmp-prop changed\'>"+esc(p.proposed||"\u2014")+"</span>"
         + "<span class=\'cmp-actions\'>"
         + "<button class=\'cmp-btn\' id=\'acc_"+key+"\' onclick=\'resolveProposal(\""+key+"\",\"accept\")\'>Accept</button>"
         + "<button class=\'cmp-btn active-keep\' id=\'keep_"+key+"\' onclick=\'resolveProposal(\""+key+"\",\"keep\")\'>Keep mine</button>"
         + "</span></div>";
-      if (p.comment) ph += "<div class=\'cmp-comment\'>\u201c"+p.comment+"\u201d</div>";
+      if (p.comment) ph += "<div class=\'cmp-comment\'>\u201c"+esc(p.comment)+"\u201d</div>";
       window._negResolutions[key] = "keep"; // default: keep Vendora value
     });
     proposalCard.innerHTML = ph;

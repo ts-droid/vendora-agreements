@@ -12,6 +12,21 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+app.set('trust proxy', 1); // behind Railway's proxy: correct req.ip / secure-cookie handling
+
+// Escape untrusted strings before putting them in email HTML.
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'vendora.se').toLowerCase();
+
+// Constant-time secret comparison (avoids timing side-channels on capability tokens).
+function tokenEq(a, b) {
+  try { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); }
+  catch (e) { return false; }
+}
 
 // Provision the database schema on boot (no-op if DATABASE_URL is unset).
 if (db.enabled) {
@@ -32,12 +47,14 @@ app.use(function(req, res, next) {
   next();
 });
 
-app.use(express.static(path.join(__dirname), { etag: false, lastModified: false }));
+// NOTE: we do NOT use express.static on the project root — that would serve server.js, ai.js
+// (the Vendora playbook), package.json etc. as source. index.html is self-contained (libraries
+// are embedded inline), so the catch-all GET '*' below serves it for every page route.
 
 // ── In-memory invite store ────────────────────────────────────────────────────
 const store = new Map();
 
-app.post('/api/invite', (req, res) => {
+app.post('/api/invite', auth.requireAuth, (req, res) => {
   const data = req.body;
   if (!data || !data._type) return res.status(400).json({ error: 'Invalid data' });
   const code = crypto.randomBytes(5).toString('base64url');
@@ -65,7 +82,7 @@ function getTransporter() {
 }
 
 // ── Send invite email to supplier/reseller ────────────────────────────────────
-app.post('/api/send-invite', async (req, res) => {
+app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
   const { toEmail, toName, fromName, agreementType, inviteUrl, salespersonEmail } = req.body;
   if (!toEmail || !inviteUrl) return res.status(400).json({ error: 'Missing fields' });
 
@@ -147,14 +164,23 @@ app.post('/api/notify', async (req, res) => {
     return res.json({ ok: true, sent: false });
   }
 
+  // This endpoint is public (the counterparty's browser calls it after submitting), so treat
+  // every field as untrusted: only ever email Vendora addresses, escape all interpolated
+  // values, coerce the count, and only render the review button if the URL is our own origin.
   const recipients = ['ts@vendora.se'];
-  if (vendoraContact && vendoraContact !== 'ts@vendora.se') recipients.push(vendoraContact);
+  if (vendoraContact && /^[^\s@]+@vendora\.se$/i.test(String(vendoraContact)) && vendoraContact.toLowerCase() !== 'ts@vendora.se') {
+    recipients.push(String(vendoraContact));
+  }
+  const sName = escHtml(supplierName || 'Supplier');
+  const aType = escHtml(agreementType || 'Agreement');
+  const pCount = Math.max(0, parseInt(proposalCount, 10) || 0);
+  const okUrl = typeof reviewUrl === 'string' && reviewUrl.indexOf('https://' + req.get('host') + '/') === 0;
 
   try {
     await transporter.sendMail({
       from:    `"Vendora Agreements" <${process.env.SMTP_USER}>`,
       to:      recipients.join(', '),
-      subject: `${proposalCount > 0 ? '[' + proposalCount + ' proposed changes] ' : ''}${agreementType} details submitted — ${supplierName}`,
+      subject: `${pCount > 0 ? '[' + pCount + ' proposed changes] ' : ''}${aType} details submitted — ${sName}`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
           <div style="background:#0F2240;padding:20px 28px">
@@ -162,20 +188,20 @@ app.post('/api/notify', async (req, res) => {
           </div>
           <div style="padding:24px 28px;border:1px solid #e0e0e0;border-top:none">
             <h2 style="color:#0F2240;font-size:16px;margin-top:0">
-              &#x2705; ${supplierName} has submitted their details
+              &#x2705; ${sName} has submitted their details
             </h2>
             <p style="color:#555;font-size:14px">
-              <strong>${supplierName}</strong> has filled in their company details and contacts
-              for the <strong>${agreementType}</strong>.
+              <strong>${sName}</strong> has filled in their company details and contacts
+              for the <strong>${aType}</strong>.
             </p>
-            ${proposalCount > 0 ? `<div style="background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin:12px 0;color:#856404;font-size:13px"><strong>&#x26A0; ${proposalCount} proposed change${proposalCount>1?'s':''} to your commercial terms.</strong> Review them on the page before generating the final agreement.</div>` : ''}
-            <div style="text-align:center;margin:24px 0">
-              <a href="${reviewUrl}"
+            ${pCount > 0 ? `<div style="background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin:12px 0;color:#856404;font-size:13px"><strong>&#x26A0; ${pCount} proposed change${pCount>1?'s':''} to your commercial terms.</strong> Review them on the page before generating the final agreement.</div>` : ''}
+            ${okUrl ? `<div style="text-align:center;margin:24px 0">
+              <a href="${escHtml(reviewUrl)}"
                  style="display:inline-block;background:#0F2240;color:#fff;padding:12px 28px;
                         text-decoration:none;font-size:14px;font-weight:bold">
                 Review &amp; Generate Agreement →
               </a>
-            </div>
+            </div>` : '<p style="color:#555;font-size:13px">Open the Vendora Agreement Generator to review this submission.</p>'}
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
             <p style="color:#999;font-size:12px">
               Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden
@@ -406,12 +432,18 @@ app.post('/api/agreements/:id/submit', requireDb, async (req, res) => {
   try {
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
-    const cur = await db.query('SELECT update_token FROM agreements WHERE id=$1', [req.params.id]);
+    const cur = await db.query('SELECT update_token, status FROM agreements WHERE id=$1', [req.params.id]);
     if (!cur.rows[0]) return res.status(404).json({ error: 'Not found' });
-    if (!cur.rows[0].update_token || cur.rows[0].update_token !== token) return res.status(403).json({ error: 'Invalid token' });
+    if (!cur.rows[0].update_token || !tokenEq(cur.rows[0].update_token, token)) return res.status(403).json({ error: 'Invalid token' });
+    // Only accept a submission while the row is still awaiting one. Once Vendora has generated the
+    // final agreement (status='generated'), a stray/replayed submit must not overwrite it.
+    if (!['invited', 'submitted'].includes(cur.rows[0].status)) {
+      return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
+    }
     await db.query(
       `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
-         counterparty_email=COALESCE($3,counterparty_email), updated_at=now() WHERE id=$4`,
+         counterparty_email=COALESCE($3,counterparty_email), updated_at=now()
+         WHERE id=$4 AND status IN ('invited','submitted')`,
       [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
     );
     res.json({ ok: true });

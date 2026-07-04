@@ -33,11 +33,6 @@ async function init() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
-  // Idempotent migrations for databases created before Google login was added.
-  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS update_token TEXT;`);
-  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
-  await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
-  await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
   await query(`
     CREATE TABLE IF NOT EXISTS agreements (
       id                 SERIAL PRIMARY KEY,
@@ -54,6 +49,12 @@ async function init() {
     );
   `);
   await query(`CREATE INDEX IF NOT EXISTS agreements_created_at_idx ON agreements (created_at DESC);`);
+  // Idempotent migrations for databases created before later columns were added — run AFTER
+  // the CREATE TABLEs so they don't fail (and abort init) on a brand-new database.
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS update_token TEXT;`);
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
+  await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
   // AI playbook: an evolving "house view" (settings) + discrete learned notes.
   await query(`
     CREATE TABLE IF NOT EXISTS settings (
