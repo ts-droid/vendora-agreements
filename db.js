@@ -72,6 +72,20 @@ async function init() {
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Uploaded countersigned agreements (and any supporting files) attached to an archive record.
+  await query(`
+    CREATE TABLE IF NOT EXISTS agreement_files (
+      id             SERIAL PRIMARY KEY,
+      agreement_id   INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
+      filename       TEXT NOT NULL,
+      mime           TEXT,
+      size_bytes     INTEGER,
+      content        BYTEA NOT NULL,
+      uploaded_by    TEXT,
+      uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS agreement_files_agreement_idx ON agreement_files (agreement_id);`);
   return true;
 }
 

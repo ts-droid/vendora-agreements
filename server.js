@@ -57,6 +57,15 @@ function escHtml(s) {
 }
 const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'vendora.se').toLowerCase();
 
+// Valid archive lifecycle statuses (draft → invited → submitted → generated → sent → signed;
+// plus 'imported' for records brought in from a link).
+const STATUSES = ['draft', 'invited', 'submitted', 'generated', 'sent', 'signed', 'imported'];
+
+// Strip characters that could break a Content-Disposition header or path.
+function safeFilename(s) {
+  return String(s == null ? 'file' : s).replace(/[\r\n"\\/]/g, '_').replace(/[^\x20-\x7E]/g, '_').slice(0, 200) || 'file';
+}
+
 // Constant-time secret comparison (avoids timing side-channels on capability tokens).
 function tokenEq(a, b) {
   try { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); }
@@ -502,6 +511,158 @@ app.delete('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) 
   } catch (err) {
     console.error('Delete agreement error:', err.message);
     res.status(500).json({ error: 'Could not delete agreement' });
+  }
+});
+
+// Set the lifecycle status of an archive record (manual override from the edit view).
+app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    const r = await db.query('UPDATE agreements SET status=$1, updated_at=now() WHERE id=$2 RETURNING id', [status, req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true, status });
+  } catch (err) {
+    console.error('Set status error:', err.message);
+    res.status(500).json({ error: 'Could not update status' });
+  }
+});
+
+// ── Signed-agreement files (stored as bytea in Postgres) ───────────────────────
+// List file metadata for a record (never returns the bytea content).
+app.get('/api/agreements/:id/files', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query(
+      'SELECT id, filename, mime, size_bytes, uploaded_by, uploaded_at FROM agreement_files WHERE agreement_id=$1 ORDER BY uploaded_at DESC',
+      [req.params.id]
+    );
+    res.json({ files: r.rows });
+  } catch (err) {
+    console.error('List files error:', err.message);
+    res.status(500).json({ error: 'Could not list files' });
+  }
+});
+
+// Upload a signed agreement. The file is sent as the raw request body (the global JSON parser
+// ignores non-JSON content types, so it never hits the 2 MB JSON cap); filename comes via header.
+// Uploading a signed document also advances the record to 'signed'.
+app.post('/api/agreements/:id/files',
+  requireDb, auth.requireAuth,
+  express.raw({ type: () => true, limit: '15mb' }),
+  async (req, res) => {
+    try {
+      const buf = req.body;
+      if (!buf || !buf.length) return res.status(400).json({ error: 'Empty file' });
+      const exists = await db.query('SELECT id FROM agreements WHERE id=$1', [req.params.id]);
+      if (!exists.rows[0]) return res.status(404).json({ error: 'Not found' });
+      const filename = safeFilename(decodeURIComponent(req.get('X-Filename') || 'signed-agreement'));
+      const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].slice(0, 120);
+      const who = req.user.name || req.user.email;
+      const r = await db.query(
+        `INSERT INTO agreement_files (agreement_id, filename, mime, size_bytes, content, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, filename, mime, size_bytes, uploaded_by, uploaded_at`,
+        [req.params.id, filename, mime, buf.length, buf, who]
+      );
+      // A countersigned upload means the deal is done.
+      await db.query("UPDATE agreements SET status='signed', updated_at=now() WHERE id=$1", [req.params.id]);
+      res.json({ file: r.rows[0], status: 'signed' });
+    } catch (err) {
+      console.error('Upload file error:', err.message);
+      res.status(500).json({ error: 'Could not store file' });
+    }
+  });
+
+// Download a stored file.
+app.get('/api/agreements/:id/files/:fileId', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query('SELECT filename, mime, content FROM agreement_files WHERE id=$1 AND agreement_id=$2',
+      [req.params.fileId, req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const f = r.rows[0];
+    res.set('Content-Type', f.mime || 'application/octet-stream');
+    res.set('Content-Disposition', 'attachment; filename="' + safeFilename(f.filename) + '"');
+    res.send(f.content);
+  } catch (err) {
+    console.error('Download file error:', err.message);
+    res.status(500).json({ error: 'Could not download file' });
+  }
+});
+
+// Delete a stored file.
+app.delete('/api/agreements/:id/files/:fileId', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query('DELETE FROM agreement_files WHERE id=$1 AND agreement_id=$2', [req.params.fileId, req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete file error:', err.message);
+    res.status(500).json({ error: 'Could not delete file' });
+  }
+});
+
+// Send a reminder to the counterparty on file. Status-aware: an 'invited' record still awaiting
+// the counterparty's details gets a "please fill in" nudge with a fresh link to the same record;
+// anything past that gets a "please sign and return" nudge. Recipient is always the stored
+// counterparty email — never an arbitrary address — so this can't be used as an open relay.
+app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const cur = await db.query(
+      'SELECT counterparty_name, counterparty_email, type, status, update_token, data FROM agreements WHERE id=$1',
+      [req.params.id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const row = cur.rows[0];
+    if (!row.counterparty_email) return res.status(400).json({ error: 'No counterparty email on file for this agreement.' });
+    const transporter = getTransporter();
+    if (!transporter) return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
+
+    const TYPE = { da: 'Distributor Agreement', ra: 'Reseller Agreement', rb: 'Reseller Agreement — Simplified' };
+    const typeLabel = TYPE[row.type] || 'agreement';
+    const name = escHtml(row.counterparty_name || 'there');
+    const kind = row.status === 'invited' ? 'fill' : 'sign';
+
+    let link = '';
+    if (kind === 'fill') {
+      // Ensure the record has a capability token, then rebuild the same fill link so the
+      // counterparty's submission still auto-links back to THIS record.
+      let token = row.update_token;
+      if (!token) {
+        token = crypto.randomBytes(24).toString('base64url');
+        await db.query('UPDATE agreements SET update_token=$1 WHERE id=$2', [token, req.params.id]);
+      }
+      const linkData = Object.assign({}, row.data || {}, { _aid: Number(req.params.id), _atok: token });
+      link = 'https://' + req.get('host') + '/#fill=' + Buffer.from(JSON.stringify(linkData), 'utf8').toString('base64');
+    }
+
+    const btn = link
+      ? `<div style="text-align:center;margin:26px 0"><a href="${escHtml(link)}" style="display:inline-block;background:#0F2240;color:#fff;padding:13px 30px;text-decoration:none;font-size:14px;font-weight:bold">${kind === 'fill' ? 'Fill in your details →' : 'Open the agreement →'}</a></div>`
+      : '';
+    const body = kind === 'fill'
+      ? `<p style="color:#333;font-size:14px">This is a friendly reminder to fill in your company details for the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. It only takes a few minutes.</p>`
+      : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please sign the agreement you received and return the countersigned copy to us.</p>`;
+
+    await transporter.sendMail({
+      from:    `"Vendora Nordic AB" <${process.env.SMTP_USER}>`,
+      to:      row.counterparty_email,
+      replyTo: 'ts@vendora.se',
+      subject: `Reminder: ${typeLabel} with Vendora Nordic AB`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
+          <div style="background:#0F2240;padding:20px 28px"><h1 style="color:#fff;font-size:18px;margin:0">Vendora Nordic AB</h1></div>
+          <div style="padding:24px 28px;border:1px solid #e0e0e0;border-top:none">
+            <p style="color:#333;font-size:14px">Hi ${name},</p>
+            ${body}
+            ${btn}
+            <p style="color:#999;font-size:12px">If you have any questions, just reply to this email or contact us at ts@vendora.se.</p>
+            <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+            <p style="color:#999;font-size:12px">Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden</p>
+          </div>
+        </div>`,
+    });
+    console.log(`Reminder (${kind}) sent for agreement ${req.params.id} to ${row.counterparty_email}`);
+    res.json({ ok: true, sent: true, kind });
+  } catch (err) {
+    console.error('Reminder error:', err.message);
+    res.status(500).json({ error: 'Could not send the reminder' });
   }
 });
 
