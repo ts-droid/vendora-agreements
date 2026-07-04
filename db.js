@@ -52,6 +52,8 @@ async function init() {
   // Idempotent migrations for databases created before later columns were added — run AFTER
   // the CREATE TABLEs so they don't fail (and abort init) on a brand-new database.
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS update_token TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
   await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);

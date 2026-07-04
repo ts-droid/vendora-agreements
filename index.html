@@ -25431,6 +25431,13 @@ function statusBadge(s){
   var m = STATUS_META[s] || {label:(s||"—"), bg:"#eef1f5", fg:"#555"};
   return "<span style='display:inline-block;background:"+m.bg+";color:"+m.fg+";font-size:11px;padding:2px 9px;border-radius:10px'>"+esc(m.label)+"</span>";
 }
+function statusOptions(sel){
+  return Object.keys(STATUS_META).map(function(k){
+    return "<option value='"+k+"'"+(k===sel?" selected":"")+">"+esc(STATUS_META[k].label)+"</option>";
+  }).join("");
+}
+function fmtWhen(s){ return s ? String(s).slice(0,16).replace("T"," ") : ""; }
+
 function loadArchive(){
   var el = document.getElementById("archiveList");
   if (!el) return;
@@ -25439,18 +25446,94 @@ function loadArchive(){
     var rows = j.agreements||[];
     if (!rows.length){ el.innerHTML = "<div style='color:var(--muted);padding:20px 0'>No agreements saved yet. Generate one and it will appear here.</div>"; return; }
     var TYPE = {da:"Distributor", ra:"Reseller", rb:"Reseller &mdash; Simplified"};
-    var html = "<table class='review-table' style='width:100%'><tr><th>Type</th><th>Counterparty</th><th>Status</th><th>Created by</th><th>Date</th><th></th></tr>";
+    var html = "<div style='overflow-x:auto'><table class='review-table' style='width:100%;min-width:840px'><tr>"
+      + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th></th></tr>";
     rows.forEach(function(a){
-      var dt = (a.created_at||"").slice(0,10);
-      html += "<tr><td>"+(TYPE[a.type]||esc(a.type))+"</td><td>"+esc(a.counterparty_name||"—")+"</td><td>"+statusBadge(a.status)+"</td><td>"+esc(a.created_by_name||"")+"</td><td>"+esc(dt)+"</td>"
+      var id=a.id, mut="color:var(--muted);font-size:10px";
+      var noEmail = !a.counterparty_email;
+      html += "<tr>"
+        + "<td>"+(TYPE[a.type]||esc(a.type))+"<div style='"+mut+"'>"+esc((a.created_at||"").slice(0,10))+"</div></td>"
+        + "<td>"+esc(a.counterparty_name||"—")+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
+        // Status — inline editable
+        + "<td style='white-space:nowrap'>"
+          + "<select onchange='ovSetStatus("+id+",this)' style='font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:4px'>"+statusOptions(a.status)+"</select>"
+          + "<div id='ovStat_"+id+"' style='"+mut+";margin-top:3px'>"+(a.status_updated_at?"updated "+esc(fmtWhen(a.status_updated_at)):"")+"</div>"
+        + "</td>"
+        // Documents — count (expand) + upload
+        + "<td style='white-space:nowrap'>"
+          + "<span id='ovDocs_"+id+"'>"+(a.file_count>0?"<a onclick='ovToggleFiles("+id+")' style='color:var(--blue2);cursor:pointer'>&#128206; "+a.file_count+"</a>":"<span style='"+mut+"'>none</span>")+"</span> "
+          + "<input type='file' id='ovFile_"+id+"' style='display:none' onchange='ovUpload("+id+",this)'>"
+          + "<button onclick=\"document.getElementById('ovFile_"+id+"').click()\" style='font-size:11px;padding:3px 8px;cursor:pointer'>&#8681; Upload</button>"
+          + "<div id='ovUp_"+id+"' style='"+mut+";margin-top:3px'></div>"
+        + "</td>"
+        // Reminder — send + last-sent
+        + "<td style='white-space:nowrap'>"
+          + "<button onclick='ovRemind("+id+",this)' "+(noEmail?"disabled title='No counterparty email on file' style='font-size:11px;padding:3px 8px;opacity:.5'":"style='font-size:11px;padding:3px 8px;cursor:pointer'")+">&#9993; Remind</button>"
+          + "<div id='ovRem_"+id+"' style='"+mut+";margin-top:3px'>"+(a.last_reminder_at?"sent "+esc(fmtWhen(a.last_reminder_at)):"")+"</div>"
+        + "</td>"
+        + "<td>"+esc(a.created_by_name||"")+"</td>"
         + "<td style='white-space:nowrap;text-align:right'>"
-        + "<button onclick='archiveEdit("+a.id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
-        + "<button onclick='archiveDownload("+a.id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
-        + "<button onclick='archiveDelete("+a.id+")' style='color:#c0392b;cursor:pointer'>Delete</button></td></tr>";
+          + "<button onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
+          + "<button onclick='archiveDownload("+id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
+          + "<button onclick='archiveDelete("+id+")' style='color:#c0392b;cursor:pointer'>Delete</button>"
+        + "</td></tr>"
+        + "<tr id='ovFilesRow_"+id+"' style='display:none'><td colspan='7' style='background:#fafbfc'><div id='ovFilesBox_"+id+"' style='font-size:12px;padding:4px 0'></div></td></tr>";
     });
-    html += "</table>";
+    html += "</table></div>";
     el.innerHTML = html;
   }).catch(function(){ el.innerHTML = "<div style='color:#c0392b;padding:20px 0'>Could not load the archive.</div>"; });
+}
+
+/* ── Overview inline actions (status / upload / reminder / files) ── */
+function ovSetStatus(id, selEl){
+  var m=document.getElementById("ovStat_"+id); m.style.color="var(--muted)"; m.textContent="saving…";
+  fetch("/api/agreements/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:selEl.value})})
+    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(j){ m.style.color="#1e7e34"; m.textContent="updated "+fmtWhen(j.status_updated_at); })
+    .catch(function(){ m.style.color="#c0392b"; m.textContent="failed"; });
+}
+function ovUpload(id, input){
+  if(!input.files||!input.files[0]) return;
+  var file=input.files[0], m=document.getElementById("ovUp_"+id);
+  if(file.size>15*1024*1024){ m.style.color="#c0392b"; m.textContent="Max 15 MB"; input.value=""; return; }
+  m.style.color="var(--muted)"; m.textContent="uploading…";
+  fetch("/api/agreements/"+id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name)},body:file})
+    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(){ loadArchive(); })
+    .catch(function(){ m.style.color="#c0392b"; m.textContent="upload failed"; })
+    .finally(function(){ input.value=""; });
+}
+function ovRemind(id, btn){
+  var m=document.getElementById("ovRem_"+id); btn.disabled=true; m.style.color="var(--muted)"; m.textContent="sending…";
+  fetch("/api/agreements/"+id+"/remind",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+    .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,j:x}; }); })
+    .then(function(res){
+      if(res.ok && res.j.sent){ m.style.color="#1e7e34"; m.textContent="sent "+fmtWhen(res.j.last_reminder_at); }
+      else { m.style.color="#c0392b"; m.textContent=res.j.reason||res.j.error||"not sent"; }
+    })
+    .catch(function(){ m.style.color="#c0392b"; m.textContent="error"; })
+    .finally(function(){ btn.disabled=false; });
+}
+function ovToggleFiles(id){
+  var row=document.getElementById("ovFilesRow_"+id), box=document.getElementById("ovFilesBox_"+id);
+  if(row.style.display!=="none"){ row.style.display="none"; return; }
+  row.style.display=""; box.innerHTML="Loading…";
+  fetch("/api/agreements/"+id+"/files").then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    var files=j.files||[];
+    if(!files.length){ box.innerHTML="<span style='color:var(--muted)'>No documents.</span>"; return; }
+    box.innerHTML=files.map(function(f){
+      var kb=Math.max(1,Math.round((f.size_bytes||0)/1024));
+      return "<div style='display:flex;align-items:center;gap:8px;padding:3px 0'>"
+        + "<a href='/api/agreements/"+id+"/files/"+f.id+"' style='color:var(--blue2);text-decoration:none'>&#128196; "+esc(f.filename)+"</a>"
+        + "<span style='color:var(--muted);font-size:11px'>"+kb+" KB · "+esc(f.uploaded_by||"")+" · "+esc(fmtWhen(f.uploaded_at))+"</span>"
+        + "<a onclick='ovRemoveFile("+id+","+f.id+")' style='color:#c0392b;cursor:pointer;font-size:11px'>remove</a></div>";
+    }).join("");
+  }).catch(function(){ box.innerHTML="<span style='color:#c0392b'>Could not load files.</span>"; });
+}
+function ovRemoveFile(id, fileId){
+  if(!confirm("Remove this document?")) return;
+  fetch("/api/agreements/"+id+"/files/"+fileId,{method:"DELETE"}).then(function(r){ if(!r.ok) throw 0; loadArchive(); })
+    .catch(function(){ alert("Could not remove the file."); });
 }
 
 function importFromLink(){

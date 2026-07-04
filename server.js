@@ -451,7 +451,7 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
     }
     await db.query(
       `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
-         counterparty_email=COALESCE($3,counterparty_email), updated_at=now()
+         counterparty_email=COALESCE($3,counterparty_email), status_updated_at=now(), updated_at=now()
          WHERE id=$4 AND status IN ('invited','submitted')`,
       [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
     );
@@ -465,8 +465,10 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
 app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const r = await db.query(
-      `SELECT id, type, counterparty_name, counterparty_email, status, created_by_name, created_at, updated_at
-       FROM agreements ORDER BY updated_at DESC LIMIT 500`
+      `SELECT a.id, a.type, a.counterparty_name, a.counterparty_email, a.status,
+              a.status_updated_at, a.last_reminder_at, a.created_by_name, a.created_at, a.updated_at,
+              (SELECT COUNT(*) FROM agreement_files f WHERE f.agreement_id = a.id)::int AS file_count
+       FROM agreements a ORDER BY a.updated_at DESC LIMIT 500`
     );
     res.json({ agreements: r.rows });
   } catch (err) {
@@ -519,9 +521,9 @@ app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, r
   try {
     const { status } = req.body || {};
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
-    const r = await db.query('UPDATE agreements SET status=$1, updated_at=now() WHERE id=$2 RETURNING id', [status, req.params.id]);
+    const r = await db.query('UPDATE agreements SET status=$1, status_updated_at=now(), updated_at=now() WHERE id=$2 RETURNING status_updated_at', [status, req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
-    res.json({ ok: true, status });
+    res.json({ ok: true, status, status_updated_at: r.rows[0].status_updated_at });
   } catch (err) {
     console.error('Set status error:', err.message);
     res.status(500).json({ error: 'Could not update status' });
@@ -564,8 +566,8 @@ app.post('/api/agreements/:id/files',
         [req.params.id, filename, mime, buf.length, buf, who]
       );
       // A countersigned upload means the deal is done.
-      await db.query("UPDATE agreements SET status='signed', updated_at=now() WHERE id=$1", [req.params.id]);
-      res.json({ file: r.rows[0], status: 'signed' });
+      const up = await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id]);
+      res.json({ file: r.rows[0], status: 'signed', status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
     } catch (err) {
       console.error('Upload file error:', err.message);
       res.status(500).json({ error: 'Could not store file' });
@@ -658,8 +660,9 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
           </div>
         </div>`,
     });
+    const rem = await db.query('UPDATE agreements SET last_reminder_at=now() WHERE id=$1 RETURNING last_reminder_at', [req.params.id]);
     console.log(`Reminder (${kind}) sent for agreement ${req.params.id} to ${row.counterparty_email}`);
-    res.json({ ok: true, sent: true, kind });
+    res.json({ ok: true, sent: true, kind, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
   } catch (err) {
     console.error('Reminder error:', err.message);
     res.status(500).json({ error: 'Could not send the reminder' });
