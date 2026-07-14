@@ -24979,52 +24979,66 @@ function showReviewMode(d) {
   var banner = document.createElement("div");
   banner.className = "review-banner";
   banner.innerHTML = "<h2>✅ " + esc(d.name||"Supplier") + " has submitted their details</h2>"
-    + "<p>All information has been pre-filled below. Review and click <strong>Generate &amp; Download</strong> to produce the final agreement.</p>";
+    + "<p>Review and <strong>adjust</strong> any of the submitted details below, consult the Contract Lawyer for wording changes, then generate the final agreement.</p>"
+    + "<button onclick='toggleAiDrawer()' style='margin-top:6px;background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer'>&#9878;&#65039; Discuss with the Contract Lawyer</button>";
 
-  var rows = isDA ? [
-    ["Supplier", d.name||"—"], ["Reg. no.", d.reg||"—"], ["Country", d.country||"—"],
-    ["Address", d.addr||"—"], ["VAT / Tax ID", d.vat||"N/A"],
-    ["Products", d.products||"—"],
-    ["Territory", d.terr||"—"], ["Exclusivity", d.excl||"—"],
-    ["Incoterms", (d.inco||"—")+" "+(d.incoy||"")+" — "+(d.delplace||"—")],
-    ["Payment", (d.curr||"—")+", "+(d.pay||"—")+" days net"],
-    ["Lead time", (d.lead||"—")+" working days"],
+  // Editable fields — bound to _reviewData so any adjustment flows straight into generation.
+  var idStyle = "width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:4px;font-size:13px;box-sizing:border-box";
+  var lblStyle = "display:block;font-size:11px;color:var(--muted);margin-bottom:3px";
+  function fld(label, key){
+    var v = d[key]!=null ? d[key] : "";
+    return "<div><label style='"+lblStyle+"'>"+esc(label)+"</label>"
+      + "<input value=\""+esc(v)+"\" oninput='rvSet(\""+key+"\",this.value)' style='"+idStyle+"'></div>";
+  }
+  var fieldDefs = isDA ? [
+    ["Supplier name","name"],["Reg. no.","reg"],["Country","country"],["Address","addr"],["VAT / Tax ID","vat"],
+    ["Products","products"],["Territory","terr"],["Exclusivity","excl"],
+    ["Incoterms","inco"],["Incoterms year","incoy"],["Place of delivery","delplace"],
+    ["Invoice currency","curr"],["Payment (days net)","pay"],["Lead time (days)","lead"]
   ] : [
-    ["Reseller", d.name||"—"], ["Reg. no.", d.reg||"—"], ["Country", d.country||"—"],
-    ["Address", d.addr||"—"],
-    ["Products", d.products||"—"], ["Territory", d.terr||"—"],
-    ["Payment", (d.curr||"—")+", "+(d.pay||"—")+" days net"],
-    ["Points of sale", ((d.pos_physical||[]).concat(d.pos_web||[])).join(", ") || "—"],
-    ["Reseller contacts", (function(){var rc=d.rcontacts||{};return RESELLER_ROLES.map(function(r){return rc[r.id]&&rc[r.id].n?r.label+": "+rc[r.id].n:null;}).filter(Boolean).join("; ")||"—";})()],
-    ["Signatory", (d.sig_name||"—")+(d.sig_email?" — "+d.sig_email:"")],
+    ["Reseller name","name"],["Reg. no.","reg"],["Country","country"],["Address","addr"],["VAT / Tax ID","vat"],
+    ["Products","products"],["Territory","terr"],
+    ["Invoice currency","curr"],["Payment (days net)","pay"],
+    ["Signatory name","sig_name"],["Signatory email","sig_email"]
   ];
+  var gridHtml = "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px'>"
+    + fieldDefs.map(function(f){ return fld(f[0],f[1]); }).join("") + "</div>";
 
-  var tableHtml = "<table class='review-table'>" + rows.map(function(r){
-    return "<tr><td>"+esc(r[0])+"</td><td>"+esc(r[1]||"—")+"</td></tr>";
-  }).join("") + "</table>";
-
-  // Contacts summary for DA
-  var contactHtml = "";
-  if (isDA && d.contacts) {
-    contactHtml = "<div class='card' style='margin-top:12px'><h2>Supplier Contacts</h2>";
-    DA_ROLES.forEach(function(r) {
-      var ct = d.contacts[r.id];
-      if (ct && ct.p && ct.p.n) {
-        contactHtml += "<div style='margin-bottom:8px;font-size:12px'><strong style='color:var(--navy)'>"
-          + esc(r.label) + "</strong><br>"
-          + esc(ct.p.n) + (ct.p.e?" — "+esc(ct.p.e):"") + (ct.p.p?", "+esc(ct.p.p):"") + "</div>";
-      }
+  // Editable contact people (the details the counterparty filled in).
+  var contactsHtml = "";
+  if (isDA){
+    contactsHtml = "<h2 style='margin-top:18px'>Supplier contacts</h2>";
+    DA_ROLES.forEach(function(r){
+      var c=(d.contacts&&d.contacts[r.id])||{}, pr=c.p||{};
+      contactsHtml += "<div style='margin-bottom:10px'><div style='font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px'>"+esc(r.label)+"</div>"
+        + "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>"
+        + "<input placeholder='Name' value=\""+esc(pr.n||"")+"\" oninput='rvSetContact(\""+r.id+"\",\"n\",this.value)' style='"+idStyle+"'>"
+        + "<input placeholder='Email' value=\""+esc(pr.e||"")+"\" oninput='rvSetContact(\""+r.id+"\",\"e\",this.value)' style='"+idStyle+"'>"
+        + "<input placeholder='Phone' value=\""+esc(pr.p||"")+"\" oninput='rvSetContact(\""+r.id+"\",\"p\",this.value)' style='"+idStyle+"'>"
+        + "</div></div>";
     });
-    contactHtml += "</div>";
+  } else {
+    contactsHtml = "<h2 style='margin-top:18px'>Reseller contacts</h2>";
+    RESELLER_ROLES.forEach(function(r){
+      var c=(d.rcontacts&&d.rcontacts[r.id])||{};
+      contactsHtml += "<div style='margin-bottom:10px'><div style='font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px'>"+esc(r.label)+"</div>"
+        + "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>"
+        + "<input placeholder='Name' value=\""+esc(c.n||"")+"\" oninput='rvSetRC(\""+r.id+"\",\"n\",this.value)' style='"+idStyle+"'>"
+        + "<input placeholder='Email' value=\""+esc(c.e||"")+"\" oninput='rvSetRC(\""+r.id+"\",\"e\",this.value)' style='"+idStyle+"'>"
+        + "<input placeholder='Phone' value=\""+esc(c.p||"")+"\" oninput='rvSetRC(\""+r.id+"\",\"p\",this.value)' style='"+idStyle+"'>"
+        + "</div></div>";
+    });
   }
 
   var reviewCard = document.createElement("div");
   reviewCard.className = "card";
-  reviewCard.innerHTML = "<h2>Agreement details</h2>" + tableHtml + contactHtml;
+  reviewCard.innerHTML = "<h2>Agreement details</h2>"
+    + "<div class='desc'>Everything below is editable — adjust anything the counterparty submitted, then generate.</div>"
+    + gridHtml + contactsHtml;
 
   var genBar = document.createElement("div");
   genBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
-  genBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>All details received from " + esc(d.name||"supplier") + " — ready to generate</span>"
+  genBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>Edit above &amp; consult the lawyer, then generate the final agreement</span>"
     + "<button class='btn-gen' onclick='generateFromReview()' id='reviewGenBtn'><span>Generate &amp; Download (.docx)</span><div class='spin' id='review_spin'></div></button>";
 
   var sucDiv = document.createElement("div");
@@ -25072,6 +25086,22 @@ function showReviewMode(d) {
 
   window._reviewData = d;
   window._reviewIsDA = isDA;
+}
+
+/* Bind edits in the review screen back to the submitted data object. */
+function rvSet(key, val){ if (window._reviewData) window._reviewData[key] = val; }
+function rvSetContact(role, field, val){
+  var d = window._reviewData; if (!d) return;
+  d.contacts = d.contacts || {};
+  d.contacts[role] = d.contacts[role] || { p:{}, b:{} };
+  d.contacts[role].p = d.contacts[role].p || {};
+  d.contacts[role].p[field] = val;
+}
+function rvSetRC(role, field, val){
+  var d = window._reviewData; if (!d) return;
+  d.rcontacts = d.rcontacts || {};
+  d.rcontacts[role] = d.rcontacts[role] || {};
+  d.rcontacts[role][field] = val;
 }
 
 function resolveProposal(key, decision) {
