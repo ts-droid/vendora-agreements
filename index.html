@@ -176,7 +176,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 </div>
 
 <div class="tabs">
-  <button class="tab active" onclick="switchTab(0)">Distributor Agreement</button>
+  <button class="tab active" id="daTabBtn" onclick="switchTab(0)">Distributor Agreement</button>
   <button class="tab" onclick="switchTab(1)">Reseller Agreement</button>
   <button class="tab" onclick="switchTab(2)">Reseller Agreement &mdash; Simplified</button>
   <button class="tab" id="archiveTabBtn" onclick="switchTab(3)" style="display:none">&#128193; Archive</button>
@@ -25521,6 +25521,12 @@ function onLoggedIn(user){
     + " &middot; <a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='doLogout()'>Log out</a>";
   document.getElementById("archiveTabBtn").style.display="inline-block";
   if (window._aiEnabled) showAiButton();
+  // Distributor Agreements are admin-only (sellers work with resellers): hide the tab and start sellers
+  // on the Reseller Agreement. The server refuses to create DAs for non-admins too.
+  if (!window._isAdmin){
+    document.getElementById("daTabBtn").style.display="none";
+    if (activeTab===0) switchTab(1);
+  }
   // The signed-in seller is Vendora's responsible salesperson by default (editable). This names them
   // in the agreement and routes the counterparty's "details submitted" notification to them.
   ["da","ra","rb"].forEach(function(p){
@@ -25546,7 +25552,7 @@ var GUIDE = {
     "Sign in with your <strong>@vendora.se</strong> Google account — no password or separate account needed.",
     "You only see <strong>your own agreements</strong>. Admins see everyone's.",
     "Your name and email are pre-filled as Vendora's <strong>responsible salesperson</strong>. Check they're right — you're the one notified when the customer replies.",
-    "Pick the agreement type in the tabs: <em>Reseller Agreement</em> (resellers), <em>Reseller Agreement — Simplified</em> (smaller resellers) or <em>Distributor Agreement</em> (when Vendora buys from a supplier)."
+    "Pick the agreement type in the tabs: <em>Reseller Agreement</em>, or <em>Reseller Agreement — Simplified</em> for smaller resellers."
   ],
   steps: [
     { short:"Create", t:"Create the agreement",

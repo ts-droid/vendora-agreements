@@ -474,6 +474,7 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const { type, counterpartyName, counterpartyEmail, data, status } = req.body || {};
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
+    if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
     const initial = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : 'draft';
     const r = await db.query(
@@ -494,6 +495,7 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const { type, counterpartyName, counterpartyEmail, data } = req.body || {};
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
+    if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
     const token = crypto.randomBytes(24).toString('base64url');
     const r = await db.query(
