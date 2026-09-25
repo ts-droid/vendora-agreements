@@ -54,6 +54,14 @@ async function init() {
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS update_token TEXT;`);
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ;`);
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;`);
+  // CEO signature workflow.
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_requested_by TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_requested_by_name TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_requested_at TIMESTAMPTZ;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_note TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_by TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_email TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_at TIMESTAMPTZ;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
   await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
