@@ -46,7 +46,9 @@ setInterval(function () {
   const now = Date.now();
   for (const [k, v] of rlBuckets) { if (now > v.reset) rlBuckets.delete(k); }
 }, 10 * 60 * 1000).unref();
-const authLimiter   = rateLimit('auth',   15, 15 * 60 * 1000); // 15 attempts / 15 min / IP
+// Sign-in is Google-only (tokens can't be guessed), so this only guards against request floods —
+// sized so a whole office behind one shared IP can sign in at once.
+const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 15 min / IP
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
 
 // Escape untrusted strings before putting them in email HTML.

@@ -316,8 +316,8 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="sec" style="margin-top:16px">Vendora contact person for this supplier</div>
   <div style="font-size:11px;color:var(--muted);margin-bottom:10px">The person at Vendora who manages this supplier relationship. Appears in Appendix 3.</div>
   <div class="g2">
-    <div class="f"><label>Name</label><input id="da_vname" value="Thomas S&ouml;derberg"></div>
-    <div class="f"><label>Email</label><input id="da_vemail" value="ts@vendora.se"></div>
+    <div class="f"><label>Name</label><input id="da_vname" placeholder="e.g. Thomas S&ouml;derberg"></div>
+    <div class="f"><label>Email</label><input id="da_vemail" placeholder="firstname@vendora.se"></div>
   </div>
 </div>
 <div class="invite-card">
@@ -25499,6 +25499,13 @@ function onLoggedIn(user){
     + " &middot; <a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='doLogout()'>Log out</a>";
   document.getElementById("archiveTabBtn").style.display="inline-block";
   if (window._aiEnabled) showAiButton();
+  // The signed-in seller is Vendora's responsible salesperson by default (editable). This names them
+  // in the agreement and routes the counterparty's "details submitted" notification to them.
+  ["da","ra","rb"].forEach(function(p){
+    var n=document.getElementById(p+"_vname"), e=document.getElementById(p+"_vemail");
+    if (n && !n.value.trim()) n.value = user.name || "";
+    if (e && !e.value.trim()) e.value = user.email || "";
+  });
   // A "Review & sign" link from the signer's email lands here once they're signed in.
   var m = (window.location.hash||"").match(/^#sign=(\d+)/);
   if (m) openSigningView(parseInt(m[1],10));
