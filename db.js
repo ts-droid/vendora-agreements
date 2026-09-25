@@ -63,6 +63,8 @@ async function init() {
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_email TEXT;`);
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_at TIMESTAMPTZ;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
+  // Set once the user has seen (or skipped) the first-login walkthrough.
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;`);
   await query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;`);
   // AI playbook: an evolving "house view" (settings) + discrete learned notes.

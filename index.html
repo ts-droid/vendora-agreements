@@ -22,6 +22,23 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--text);fon
 .tab:hover:not(.active){color:var(--blue)}
 .tab-panel{display:none}
 .tab-panel.active{display:block}
+/* Guide tab + first-login walkthrough */
+.gd-strip{display:flex;gap:4px;align-items:flex-start;margin:2px 0 18px}
+.gd-dot{flex:1;text-align:center;font-size:11px;color:var(--muted);line-height:1.3;min-width:0}
+.gd-dot b{display:flex;align-items:center;justify-content:center;width:26px;height:26px;margin:0 auto 5px;border-radius:50%;border:2px solid var(--border);background:#fff;color:var(--muted);font-size:12px}
+.gd-dot.done b{border-color:var(--navy);color:var(--navy)}
+.gd-dot.on b{background:var(--navy);border-color:var(--navy);color:#fff}
+.gd-dot.on{color:var(--navy);font-weight:600}
+.gd-steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.gd-step{border:1px solid var(--border);border-radius:8px;padding:14px 16px;background:#fff}
+.gd-step h3{margin:0 0 6px;font-size:14px;color:var(--navy);display:flex;align-items:center}
+.gd-num{display:inline-flex;flex:none;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:11px;margin-right:8px}
+.gd-body{font-size:13px;line-height:1.6;color:#333}
+.gd-body ul{margin:6px 0 0 18px;padding:0}.gd-body li{margin:4px 0}
+.gd-tip{font-size:12px;color:var(--muted);margin-top:8px;border-left:3px solid var(--border);padding-left:10px}
+.gd-table{width:100%;border-collapse:collapse;font-size:13px}
+.gd-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--border)}
+.gd-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
 .auth-overlay{position:fixed;inset:0;background:var(--navy);display:flex;align-items:center;justify-content:center;z-index:9999}
 .auth-box{background:#fff;border-radius:8px;padding:32px;width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .auth-box h2{margin:0 0 4px;color:var(--navy);font-size:20px}
@@ -163,6 +180,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <button class="tab" onclick="switchTab(1)">Reseller Agreement</button>
   <button class="tab" onclick="switchTab(2)">Reseller Agreement &mdash; Simplified</button>
   <button class="tab" id="archiveTabBtn" onclick="switchTab(3)" style="display:none">&#128193; Archive</button>
+  <button class="tab" id="guideTabBtn" onclick="switchTab(4)" style="display:none">&#128214; Guide</button>
   <span id="userChip" style="display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted)"></span>
 </div>
 
@@ -557,6 +575,9 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div id="archiveList"><div style="color:var(--muted);padding:20px 0">Loading&hellip;</div></div>
 </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════ TAB 4: GUIDE (rendered from GUIDE in JS) -->
+<div id="tab4" class="tab-panel"><div id="guideView"></div></div>
 
 <!-- STICKY GENERATE BAR -->
 <div class="genbar">
@@ -23728,8 +23749,9 @@ function switchTab(n) {
   activeTab = n;
   document.querySelectorAll(".tab").forEach(function(t,i){ t.classList.toggle("active", i===n); });
   document.querySelectorAll(".tab-panel").forEach(function(p,i){ p.classList.toggle("active", i===n); });
-  var gb = document.querySelector(".genbar"); if (gb) gb.style.display = (n===3) ? "none" : "";
+  var gb = document.querySelector(".genbar"); if (gb) gb.style.display = (n>=3) ? "none" : "";
   if (n===3) loadArchive();
+  if (n===4) renderGuideView();
 }
 
 function buildRoles(containerId, prefix, roles) {
@@ -25506,12 +25528,164 @@ function onLoggedIn(user){
     if (n && !n.value.trim()) n.value = user.name || "";
     if (e && !e.value.trim()) e.value = user.email || "";
   });
+  document.getElementById("guideTabBtn").style.display="inline-block";
   // A "Review & sign" link from the signer's email lands here once they're signed in.
   var m = (window.location.hash||"").match(/^#sign=(\d+)/);
   if (m) openSigningView(parseInt(m[1],10));
+  // First sign-in: walk sellers through the flow once. Not over a signing link, and not for the
+  // signer (who doesn't create agreements) — both can open it any time from the Guide tab.
+  else if (!user.onboarded && !window._isSigner) openOnboarding(true);
 }
 
 function doLogout(){ fetch("/api/auth/logout",{method:"POST"}).finally(function(){ window.location.reload(); }); }
+
+/* ── Seller guide: one source for the first-login walkthrough and the Guide tab ──
+   {CEO} is replaced with the signer's first name at render time. */
+var GUIDE = {
+  start: [
+    "Sign in with your <strong>@vendora.se</strong> Google account — no password or separate account needed.",
+    "You only see <strong>your own agreements</strong>. Admins see everyone's.",
+    "Your name and email are pre-filled as Vendora's <strong>responsible salesperson</strong>. Check they're right — you're the one notified when the customer replies.",
+    "Pick the agreement type in the tabs: <em>Reseller Agreement</em> (resellers), <em>Reseller Agreement — Simplified</em> (smaller resellers) or <em>Distributor Agreement</em> (when Vendora buys from a supplier)."
+  ],
+  steps: [
+    { short:"Create", t:"Create the agreement",
+      b:"Fill in the commercial terms: territory, payment terms, MDF and so on. The form's defaults are Vendora's standard agreement — anything you change shows up as a deviation for {CEO}." },
+    { short:"Invite", t:"Send the fill-in link",
+      b:"Enter the customer's contact person and email and click <em>Send invite</em>. The customer fills in their company details and contacts, and can propose changes to the terms. You get an email when they submit.",
+      tip:"Already have all the customer's details? Skip this step: fill everything in yourself and click <em>Generate &amp; Download</em>. The agreement is saved in the archive and sent to {CEO} from there." },
+    { short:"Negotiate", t:"Adjust and negotiate",
+      b:"Open the link in the email. Everything the customer filled in is editable, and you choose <em>Accept</em> or <em>Keep mine</em> on each of their proposals. Click <em>Discuss with the Contract Lawyer</em> for advice or reworded clauses." },
+    { short:"To {CEO}", t:"Send to {CEO} for signature",
+      b:"Click <em>Send to {CEO} for signature</em>. You see the cover sheet with the key terms and every deviation before you send. {CEO} approves in the app or returns it with a comment — you get an email either way." },
+    { short:"To customer", t:"Send to the customer",
+      b:"Once {CEO} has signed, download the agreement (<em>.docx</em>) from the archive — the signature is stamped in — and send it to the customer to sign. Set the status to <em>Sent to counterparty</em>." },
+    { short:"Upload", t:"Upload the countersigned copy",
+      b:"Use <em>Upload</em> on the agreement's row in the archive. The status changes to <em>Fully signed</em> automatically." }
+  ],
+  statuses: [
+    ["Draft", "Saved, not generated", "You"],
+    ["Invited", "Fill-in link sent", "Customer — send a reminder if needed"],
+    ["Submitted", "Customer has filled in their details", "You review and adjust"],
+    ["Generated", "Ready to send to {CEO}", "You"],
+    ["Awaiting CEO signature", "With {CEO}; the agreement is locked", "{CEO}"],
+    ["Signed by Vendora", "{CEO} has signed", "You send it to the customer"],
+    ["Sent to counterparty", "With the customer for signature", "Customer"],
+    ["Fully signed", "Countersigned copy uploaded", "Done"],
+    ["Imported", "Imported from an earlier link", "You"]
+  ],
+  tips: [
+    ["Locked during signature", "From the moment you send it to {CEO} — and after they sign — the agreement can't be changed. Need a change? Click <em>Withdraw</em>, edit, and send again. A signature already given is voided and {CEO} is told."],
+    ["Reminders", "<em>Remind</em> on the row emails the customer: to fill in their details if they haven't, otherwise to sign. The date of the last reminder shows under the button."],
+    ["Returned by {CEO}", "The agreement goes back to <em>Generated</em> and the comment shows in red under the status. Make the change and send it again."],
+    ["The cover sheet", "Generated automatically for {CEO}: the key terms plus every deviation from standard — accepted customer requests, changed terms, MDF, credit limit and reworded clauses. It's internal and never sent to the customer."],
+    ["Contract Lawyer", "Help with wording and negotiation based on Vendora's playbook — not legal advice. Learned something in a negotiation? Save it as a note in the playbook."],
+    ["The signature", "An internal approval in the app: {CEO}'s name, email and time are logged. It isn't a BankID signature — the customer signs as usual."]
+  ],
+  contact: "Questions about the tool: Thomas Söderberg, <a href='mailto:ts@vendora.se'>ts@vendora.se</a>."
+};
+function gtx(s){ return String(s).replace(/\{CEO\}/g, esc(firstName(window._signerName || "Andreas"))); }
+function guideStrip(active){
+  return "<div class='gd-strip'>" + GUIDE.steps.map(function(s,i){
+    var cls = i===active ? "on" : (active!=null && i<active ? "done" : "");
+    return "<div class='gd-dot "+cls+"'><b>"+(i+1)+"</b>"+gtx(s.short)+"</div>";
+  }).join("") + "</div>";
+}
+
+// Guide tab: the whole guide as a page.
+function renderGuideView(){
+  var el=document.getElementById("guideView"); if(!el) return;
+  var h = "<div class='card'><h2 style='display:flex;align-items:center;gap:12px;flex-wrap:wrap'>How to use Vendora Agreements"
+    + "<button onclick='openOnboarding(false)' style='font-size:12px;font-weight:500;padding:5px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer'>&#9654; Replay the walkthrough</button></h2>"
+    + "<div class='desc'>Create an agreement, let the customer fill in their details, negotiate, get it signed by "+gtx("{CEO}")+" and send it to the customer.</div>"
+    + "<div class='gd-body'><ul>"+GUIDE.start.map(function(x){ return "<li>"+gtx(x)+"</li>"; }).join("")+"</ul></div></div>";
+  h += "<div class='card'><h2>The flow, step by step</h2>" + guideStrip(null) + "<div class='gd-steps'>"
+    + GUIDE.steps.map(function(s,i){
+        return "<div class='gd-step'><h3><span class='gd-num'>"+(i+1)+"</span>"+gtx(s.t)+"</h3><div class='gd-body'>"+gtx(s.b)+"</div>"
+          + (s.tip ? "<div class='gd-tip'>"+gtx(s.tip)+"</div>" : "") + "</div>";
+      }).join("") + "</div></div>";
+  h += "<div class='card'><h2>Statuses in the archive</h2><div class='desc'>The status shows where an agreement stands and who acts next. Most are set automatically; change the others in the list on the row.</div>"
+    + "<table class='gd-table'><tr><th>Status</th><th>Means</th><th>Next step</th></tr>"
+    + GUIDE.statuses.map(function(r){ return "<tr><td>"+statusBadgeByLabel(r[0])+"</td><td>"+gtx(r[1])+"</td><td>"+gtx(r[2])+"</td></tr>"; }).join("")
+    + "</table></div>";
+  h += "<div class='card'><h2>Good to know</h2><div class='gd-body'><ul>"
+    + GUIDE.tips.map(function(t){ return "<li><strong>"+gtx(t[0])+".</strong> "+gtx(t[1])+"</li>"; }).join("")
+    + "</ul><p style='margin-top:12px;color:var(--muted)'>"+GUIDE.contact+"</p></div></div>";
+  el.innerHTML = h;
+}
+// Status labels in the guide use the same coloured badges as the archive.
+function statusBadgeByLabel(label){
+  for (var k in STATUS_META) if (STATUS_META[k].label===label) return statusBadge(k);
+  return esc(label);
+}
+
+// First-login walkthrough: welcome → the six steps → done. `first` = shown automatically at first
+// sign-in; closing it (finish or skip) records that server-side so it never auto-shows again.
+function openOnboarding(first){
+  var o=document.getElementById("onbOverlay");
+  if (!o){
+    o=document.createElement("div"); o.id="onbOverlay";
+    o.style.cssText="position:fixed;inset:0;z-index:8600;background:rgba(15,34,64,.55);display:flex;align-items:center;justify-content:center;padding:16px";
+    o.innerHTML="<div role='dialog' aria-modal='true' aria-labelledby='onbTitle' style='width:100%;max-width:580px;max-height:92vh;overflow-y:auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);padding:26px 28px'>"
+      + "<div id='onbBody'></div>"
+      + "<div style='display:flex;align-items:center;gap:10px;margin-top:22px'>"
+      + "<a id='onbSkip' style='font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline'>Skip</a>"
+      + "<span id='onbCount' style='font-size:11px;color:var(--muted);margin-left:auto'></span>"
+      + "<button id='onbBack' style='padding:9px 16px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>Back</button>"
+      + "<button id='onbNext' style='padding:9px 20px;border:none;background:var(--navy);color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>Next</button>"
+      + "</div></div>";
+    document.body.appendChild(o);
+    document.getElementById("onbSkip").onclick=function(){ closeOnboarding(); };
+    document.getElementById("onbBack").onclick=function(){ onbGo(window._onbPage-1); };
+    document.getElementById("onbNext").onclick=function(){ onbGo(window._onbPage+1); };
+    document.addEventListener("keydown", function(e){
+      if (document.getElementById("onbOverlay").style.display==="none") return;
+      if (e.key==="Escape") closeOnboarding();
+      else if (e.key==="ArrowRight") onbGo(window._onbPage+1);
+      else if (e.key==="ArrowLeft") onbGo(window._onbPage-1);
+    });
+  }
+  window._onbFirst = !!first;
+  o.style.display="flex";
+  onbGo(0);
+}
+function onbGo(p){
+  var last = GUIDE.steps.length + 1;          // 0 = welcome, 1..6 = steps, last = done
+  if (p < 0) return;
+  if (p > last){ closeOnboarding(); return; }
+  window._onbPage = p;
+  var body=document.getElementById("onbBody"), next=document.getElementById("onbNext");
+  var kicker = "font-size:11px;color:var(--blue2);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:4px";
+  if (p === 0){
+    var name = window._authUser && window._authUser.name ? ", "+esc(String(window._authUser.name).split(" ")[0]) : "";
+    body.innerHTML = "<div style='"+kicker+"'>Welcome</div><h2 id='onbTitle' style='margin:0 0 8px'>Welcome to Vendora Agreements"+name+"</h2>"
+      + "<div class='gd-body'>Here you create agreements with your resellers, negotiate with the customer and get them signed by "+gtx("{CEO}")+". This walkthrough takes about a minute."
+      + "<ul>"+GUIDE.start.map(function(x){ return "<li>"+gtx(x)+"</li>"; }).join("")+"</ul></div>";
+  } else if (p === last){
+    body.innerHTML = "<div style='"+kicker+"'>All set</div><h2 id='onbTitle' style='margin:0 0 8px'>You're ready to go</h2>"
+      + "<div class='gd-body'>Your agreements and their status live under <strong>Archive</strong>, and this guide is always under the <strong>Guide</strong> tab at the top — including what every status means.</div>"
+      + guideStrip(GUIDE.steps.length)
+      + "<div class='gd-body' style='color:var(--muted)'>"+GUIDE.contact+"</div>";
+  } else {
+    var s = GUIDE.steps[p-1];
+    body.innerHTML = "<div style='"+kicker+"'>Step "+p+" of "+GUIDE.steps.length+"</div>"
+      + "<h2 id='onbTitle' style='margin:0 0 14px'>"+gtx(s.t)+"</h2>" + guideStrip(p-1)
+      + "<div class='gd-body'>"+gtx(s.b)+"</div>" + (s.tip ? "<div class='gd-tip'>"+gtx(s.tip)+"</div>" : "");
+  }
+  document.getElementById("onbBack").style.visibility = p===0 ? "hidden" : "visible";
+  document.getElementById("onbSkip").style.visibility = p===last ? "hidden" : "visible";
+  document.getElementById("onbCount").textContent = (p+1)+" / "+(last+1);
+  next.textContent = p===0 ? "Show me how" : (p===last ? "Get started" : "Next");
+  next.focus();
+}
+function closeOnboarding(){
+  var o=document.getElementById("onbOverlay"); if (o) o.style.display="none";
+  if (window._onbFirst){
+    window._onbFirst = false;
+    if (window._authUser) window._authUser.onboarded = true;
+    fetch("/api/me/onboarded",{method:"POST"}).catch(function(){});
+  }
+}
 
 function saveToArchive(type, data){
   if (!window._archiveEnabled || !window._authUser || !data) return Promise.resolve();

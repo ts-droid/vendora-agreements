@@ -90,7 +90,8 @@ function stripServerFields(data) {
   return data;
 }
 function userPayload(u) {
-  return { id: u.id != null ? u.id : u.uid, email: u.email, name: u.name, isAdmin: isAdmin(u), isSigner: isSigner(u) };
+  return { id: u.id != null ? u.id : u.uid, email: u.email, name: u.name, isAdmin: isAdmin(u), isSigner: isSigner(u),
+    onboarded: !!u.onboarded_at };
 }
 
 // Strip characters that could break a Content-Disposition header or path.
@@ -428,7 +429,7 @@ app.post('/api/auth/google', authLimiter, requireDb, async (req, res) => {
          VALUES ($1,$2,$3)
        ON CONFLICT (email) DO UPDATE SET google_sub = EXCLUDED.google_sub,
          name = COALESCE(NULLIF(EXCLUDED.name,''), users.name)
-       RETURNING id, email, name`,
+       RETURNING id, email, name, onboarded_at`,
       [g.email, g.sub, g.name || null]
     );
     const u = r.rows[0];
@@ -445,10 +446,27 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   const u = auth.readUser(req);
   if (!u) return res.status(401).json({ error: 'Not authenticated' });
-  res.json({ user: userPayload(u) });
+  // The session token doesn't carry onboarding state; look it up (best-effort).
+  let onboarded_at = null;
+  if (db.enabled) {
+    try { const r = await db.query('SELECT onboarded_at FROM users WHERE id=$1', [u.uid]); onboarded_at = r.rows[0] && r.rows[0].onboarded_at; }
+    catch (e) { console.error('Onboarding lookup error:', e.message); }
+  }
+  res.json({ user: userPayload(Object.assign({}, u, { onboarded_at })) });
+});
+
+// The user finished or skipped the first-login walkthrough — don't show it again (on any device).
+app.post('/api/me/onboarded', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    await db.query('UPDATE users SET onboarded_at = COALESCE(onboarded_at, now()) WHERE id=$1', [req.user.uid]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Onboarded error:', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
 });
 
 // ── Agreements archive (auth required) ─────────────────────────────────────────
