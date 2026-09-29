@@ -343,8 +343,14 @@ function ownedReview(req, id) {
   return r && r.uid === req.user.uid && Date.now() - r.created <= REVIEW_TTL_MS ? r : null;
 }
 
-// Review an uploaded counterparty contract against Vendora's agreement. The body is JSON sent as
-// text/plain so it bypasses the global 2 MB JSON cap (a PDF arrives base64-encoded).
+// A review can take several minutes, so it runs as a background job: POST starts it and returns a
+// job id at once; the browser polls GET /api/ai/review/:jobId. No long-lived HTTP request to time out.
+const reviewJobs = new Map(); // id -> {uid, status:'running'|'done'|'error', started, finished, result, error}
+const JOB_TTL_MS = 60 * 60 * 1000;
+function sweepJobs() { const now = Date.now(); for (const [k, v] of reviewJobs) if (now - v.started > JOB_TTL_MS) reviewJobs.delete(k); }
+
+// Start a review of an uploaded counterparty contract against Vendora's agreement. The body is JSON
+// sent as text/plain so it bypasses the global 2 MB JSON cap (a PDF arrives base64-encoded).
 app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: '25mb' }), async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   let body;
@@ -357,18 +363,40 @@ app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type:
   if (doc.kind === 'text' && doc.data.length > 600000) return res.status(413).json({ error: 'Document too long for a single review' });
   if (typeof ourText !== 'string' || ourText.trim().length < 200) return res.status(400).json({ error: 'Vendora\'s agreement text is missing' });
   if (ourText.length > 400000) return res.status(413).json({ error: 'Vendora agreement text too long' });
-  const filename = safeFilename(doc.filename || 'contract');
-  try {
-    const playbook = await loadPlaybook();
-    const review = await ai.reviewContract({ type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, agreement: agreement || null, playbook });
-    const reviewId = storeReview({ uid: req.user.uid, type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, filename, review, created: Date.now() });
-    console.log(`Contract review (${type}, ${doc.kind}, ${filename}) by ${req.user.email}: ${review.findings.length} findings, verdict ${review.overall_verdict}`);
-    res.json({ reviewId, review });
-  } catch (err) {
-    console.error('AI review error:', err.message);
-    if (err.code === 'refusal' || err.code === 'incomplete' || err.code === 'malformed') return res.status(422).json({ error: err.message });
-    res.status(500).json({ error: 'The AI lawyer could not review the document right now.' });
+  sweepJobs();
+  for (const v of reviewJobs.values()) {
+    if (v.uid === req.user.uid && v.status === 'running') return res.status(429).json({ error: 'A review is already running — wait for it to finish.' });
   }
+  const filename = safeFilename(doc.filename || 'contract');
+  const jobId = crypto.randomBytes(12).toString('base64url');
+  const job = { uid: req.user.uid, status: 'running', started: Date.now(), finished: null, result: null, error: null };
+  reviewJobs.set(jobId, job);
+  res.json({ jobId });
+  // Runs on after the response; the client polls for the outcome.
+  (async () => {
+    try {
+      const playbook = await loadPlaybook();
+      const review = await ai.reviewContract({ type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, agreement: agreement || null, playbook });
+      const reviewId = storeReview({ uid: req.user.uid, type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, filename, review, created: Date.now() });
+      job.result = { reviewId, review }; job.status = 'done';
+      console.log(`Contract review (${type}, ${doc.kind}, ${filename}) by ${req.user.email}: ${review.findings.length} findings, verdict ${review.overall_verdict}, ${Math.round((Date.now() - job.started) / 1000)}s`);
+    } catch (err) {
+      console.error('AI review error:', err.message);
+      job.error = (err.code === 'refusal' || err.code === 'incomplete' || err.code === 'malformed') ? err.message : 'The AI lawyer could not review the document right now.';
+      job.status = 'error';
+    }
+    job.finished = Date.now();
+  })();
+});
+
+// Poll a review job. Only its owner can see it.
+app.get('/api/ai/review/:jobId', auth.requireAuth, (req, res) => {
+  const job = reviewJobs.get(String(req.params.jobId));
+  if (!job || job.uid !== req.user.uid) return res.status(404).json({ error: 'Unknown review job' });
+  const out = { status: job.status, elapsed: Math.round(((job.finished || Date.now()) - job.started) / 1000) };
+  if (job.status === 'done') Object.assign(out, job.result);
+  if (job.status === 'error') out.error = job.error;
+  res.json(out);
 });
 
 // AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far,

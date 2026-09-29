@@ -26446,7 +26446,7 @@ function renderContractReviewCards(){
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Review against our agreement &rarr;</button>"
       + "<span id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted)'></span></div>"
-      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 15 MB. The review takes a minute or two.</div>"
+      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 15 MB. A full review of a real contract takes a few minutes — you can keep working meanwhile.</div>"
       + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
   });
 }
@@ -26519,11 +26519,24 @@ async function runContractReview(type){
     var doc=await readContractFile(file);
     msg.textContent="Building Vendora's agreement for comparison…";
     var ourText=await buildOurAgreementText(type);
-    msg.textContent="The Contract Lawyer is reviewing — this takes a minute or two…";
+    msg.textContent="Sending to the Contract Lawyer…";
     var r=await fetch("/api/ai/review",{method:"POST",headers:{"Content-Type":"text/plain"},
       body:JSON.stringify({ type:type, doc:doc, ourText:ourText, agreement:getAiContext() })});
     var j=await r.json().catch(function(){ return {}; });
     if(!r.ok) throw new Error(j.error||"The review failed");
+    // The review runs as a background job on the server — poll until it's done (a real contract
+    // takes a few minutes), showing elapsed time so the wait is visibly alive.
+    var t0=Date.now();
+    while(true){
+      await new Promise(function(res){ setTimeout(res, 3000); });
+      var s=await fetch("/api/ai/review/"+encodeURIComponent(j.jobId)).then(function(x){ return x.json().then(function(y){ return {ok:x.ok, y:y}; }); }).catch(function(){ return {ok:false, y:{}}; });
+      if(!s.ok) throw new Error(s.y.error||"Lost contact with the review");
+      if(s.y.status==="done"){ j=s.y; break; }
+      if(s.y.status==="error") throw new Error(s.y.error||"The review failed");
+      var sec=Math.round((Date.now()-t0)/1000);
+      msg.textContent="The Contract Lawyer is reviewing… "+Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0")+" — a real contract takes a few minutes.";
+      if(sec>20*60) throw new Error("The review is taking too long — please try again.");
+    }
     window._crResults=window._crResults||{};
     window._crResults[type]={ id:j.reviewId, filename:file.name, type:type, review:j.review, when:new Date() };
     msg.style.color="#1e7e34"; msg.textContent="Review ready.";

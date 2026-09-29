@@ -11,10 +11,13 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5';
 // account/SDK combination), we note it once and continue without it — never a hard failure.
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 let fallbacksOk = process.env.AI_FALLBACKS !== '0';
-async function createMessage(params) {
+// stream=true uses the streaming transport and returns the final message — required for large
+// max_tokens (a multi-minute review), where a plain request would hit HTTP timeouts.
+async function runMessage(params, stream) {
+  const call = function (api, p) { return stream ? api.messages.stream(p).finalMessage() : api.messages.create(p); };
   if (fallbacksOk) {
     try {
-      return await client.beta.messages.create(Object.assign({}, params, { betas: [FALLBACK_BETA], fallbacks: 'default' }));
+      return await call(client.beta, Object.assign({}, params, { betas: [FALLBACK_BETA], fallbacks: 'default' }));
     } catch (e) {
       if (e instanceof Anthropic.BadRequestError && /fallback|beta/i.test(String(e.message || ''))) {
         fallbacksOk = false;
@@ -24,8 +27,9 @@ async function createMessage(params) {
       }
     }
   }
-  return client.messages.create(params);
+  return call(client, params);
 }
+const createMessage = function (params) { return runMessage(params, false); };
 
 /* ─────────────────────────────────────────────── PROMPTS ──────────────────────────────────
    One shared core (who the lawyer is, whom it works for, the law it knows, security) and two
@@ -271,7 +275,7 @@ async function chat(agreement, messages, opts) {
   // Manual tool loop: capture clause proposals, feed a lightweight tool_result back, continue.
   for (let i = 0; i < 4; i++) {
     const resp = await createMessage({
-      model: MODEL, max_tokens: 8192,
+      model: MODEL, max_tokens: 16000,
       thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
       system, messages: convo, tools,
     });
@@ -305,8 +309,10 @@ async function reviewContract(args) {
   system.push(benchmarkBlock(args.ourText));
   if (args.agreement) system.push(agreementBlock(args.agreement));
 
-  const resp = await createMessage({
-    model: MODEL, max_tokens: 16000,
+  // Streamed, with a large output budget: the model's thinking counts against max_tokens, and a
+  // full review of a real contract (many findings, each with paste-ready wording) is long.
+  const resp = await runMessage({
+    model: MODEL, max_tokens: 64000,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'high', format: { type: 'json_schema', schema: REVIEW_SCHEMA } },
     system,
@@ -317,9 +323,9 @@ async function reviewContract(args) {
         { type: 'text', text: 'Review the attached counterparty contract against Vendora\'s agreement and return the structured review.' },
       ],
     }],
-  });
+  }, true);
   if (resp.stop_reason === 'refusal') { const e = new Error('The lawyer declined to review this document.'); e.code = 'refusal'; throw e; }
-  if (resp.stop_reason === 'max_tokens') { const e = new Error('The review was cut off — the document is too long for a single review. Try the relevant part of it.'); e.code = 'incomplete'; throw e; }
+  if (resp.stop_reason === 'max_tokens') { const e = new Error('The review ran out of room before it was complete — the document is unusually long. Try uploading the relevant part of it.'); e.code = 'incomplete'; throw e; }
   const text = (resp.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('').trim();
   let review;
   try { review = JSON.parse(text); }
