@@ -338,6 +338,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Email</label><input id="da_vemail" placeholder="firstname@vendora.se"></div>
   </div>
 </div>
+<div id="cr_slot_da"></div>
 <div class="invite-card">
   <h3>&#x1F4E7; Invite supplier to fill in their details</h3>
   <p>Enter the supplier contact below, then generate a link to send them. They will fill in company identity and contact persons only &mdash; all commercial terms, targets and MDF you set above will be locked.</p>
@@ -466,6 +467,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="desc">Optional &mdash; named contacts at the reseller for each function. Pre-fill them here, or leave them for the reseller to complete when they fill in their details. Shown in Appendix 1.</div>
   <div id="ra_rc"></div>
 </div>
+<div id="cr_slot_ra"></div>
 <div class="invite-card">
   <h3>&#x1F4E7; Invite reseller to fill in their details</h3>
   <p>Enter the reseller contact below, then generate a link to send them. They will fill in company identity and signatory details only &mdash; all commercial terms you set above will be locked.</p>
@@ -556,6 +558,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Phone <em>(optional)</em></label><input id="rb_sig_phone" placeholder="e.g. +46 70 000 00 00"></div>
   </div>
 </div>
+<div id="cr_slot_rb"></div>
 <div class="suc" id="rb_suc"><strong>Agreement downloaded.</strong> Open the .html file in Word (File &rarr; Open) and save as .docx.</div>
 </div>
 
@@ -25521,6 +25524,7 @@ function onLoggedIn(user){
     + " &middot; <a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='doLogout()'>Log out</a>";
   document.getElementById("archiveTabBtn").style.display="inline-block";
   if (window._aiEnabled) showAiButton();
+  if (window._aiEnabled) renderContractReviewCards();
   // Distributor Agreements are admin-only (sellers work with resellers): hide the tab and start sellers
   // on the Reseller Agreement. The server refuses to create DAs for non-admins too.
   if (!window._isAdmin){
@@ -26327,8 +26331,10 @@ function toggleAiDrawer(){
 function renderAiMessages(){
   var box=document.getElementById("aiMessages");
   if (!window._aiMessages.length){
-    var ctx=getAiContext();
-    var hint = ctx && ctx._proposals && Object.keys(ctx._proposals).length
+    var ctx=getAiContext(), rv=window._aiReview;
+    var hint = rv
+      ? "I've reviewed <strong>"+esc(rv.filename)+"</strong> against our "+esc(TYPE_NAME[rv.type]||"agreement")+". Ask me to <a onclick=\"aiQuick('Draft the counter-proposal we send back: for every deal-breaker and red flag, the replacement wording, in order of importance, with one line of justification each that we can share with the counterparty.')\" style='color:var(--blue2);cursor:pointer;text-decoration:underline'>draft the counter-proposal</a>, explain a finding, or rewrite a clause."
+      : ctx && ctx._proposals && Object.keys(ctx._proposals).length
       ? "The counterparty proposed changes on this agreement. Ask me to <a onclick=\"aiQuick('Analyse the counterparty\\'s proposed changes and recommend accept / counter / reject for each, with reasoning.')\" style='color:var(--blue2);cursor:pointer;text-decoration:underline'>analyse their proposals</a>, or ask anything."
       : "Ask about this agreement — a clause, a counterparty request, or how to hold Vendora's position.";
     box.innerHTML = "<div style='color:var(--muted);font-size:13px;line-height:1.6'>"+hint+"</div>";
@@ -26395,9 +26401,10 @@ function sendAi(){
   thinking.id="aiThinking"; thinking.style.cssText="margin:10px 0;color:var(--muted);font-size:13px";
   thinking.textContent="The lawyer is thinking…"; box.appendChild(thinking); box.scrollTop=box.scrollHeight;
   document.getElementById("aiSend").disabled=true;
-  var ctx=getAiContext();
+  var ctx=getAiContext(), rv=window._aiReview||null;
   fetch("/api/ai/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ agreement:ctx, messages:window._aiMessages, clauses: ctx?getEditableClauses(ctx._type, ctx):[] })
+    body: JSON.stringify({ agreement: ctx || (rv ? {_type:rv.type} : null), messages:window._aiMessages,
+      clauses: ctx?getEditableClauses(ctx._type, ctx):[], reviewId: rv ? rv.id : null })
   }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
     .then(function(res){
       if (res.ok && res.j.reply){ window._aiMessages.push({role:"assistant",content:res.j.reply}); }
@@ -26406,6 +26413,215 @@ function sendAi(){
       if (res.ok && res.j.proposals && res.j.proposals.length) renderProposals(res.j.proposals);
     }).catch(function(){ window._aiMessages.push({role:"assistant",content:"⚠ Network error."}); renderAiMessages(); })
     .finally(function(){ document.getElementById("aiSend").disabled=false; var t=document.getElementById("aiThinking"); if(t) t.remove(); });
+}
+
+/* ── CONTRACT REVIEW: upload a counterparty's own contract, compare it with ours ──────────── */
+var CR_CLASS = {
+  deal_breaker: {label:"Deal-breaker", plural:"Deal-breakers",  bg:"#fdece9", fg:"#c0392b", desc:"Vendora cannot sign with this in — strike or rewrite it"},
+  red_flag:     {label:"Red flag",     plural:"Red flags",      bg:"#fde8d0", fg:"#9a4b00", desc:"Serious risk or a clear deviation from our standard — negotiate hard"},
+  missing:      {label:"Missing",      plural:"Missing from theirs", bg:"#e7f0fb", fg:"#1A3C6E", desc:"In our agreement but not in theirs — must be added"},
+  negotiate:    {label:"Negotiate",    plural:"To negotiate",   bg:"#fff3cd", fg:"#856404", desc:"Worth pushing back on; acceptable with changes"},
+  acceptable:   {label:"Acceptable",   plural:"Acceptable",     bg:"#e6f2ea", fg:"#1e7e34", desc:"Fine as drafted, or immaterial"}
+};
+var CR_ORDER = ["deal_breaker","red_flag","missing","negotiate","acceptable"];
+var CR_VERDICT = {
+  sign_as_is:  {label:"Acceptable as drafted", bg:"#e6f2ea", fg:"#1e7e34"},
+  negotiate:   {label:"Negotiate before signing", bg:"#fff3cd", fg:"#856404"},
+  do_not_sign: {label:"Do not sign as drafted", bg:"#fdece9", fg:"#c0392b"}
+};
+function crCounterpartyWord(type){ return type==="da" ? "supplier" : "reseller"; }
+
+// The upload card, rendered into each agreement tab once the lawyer is available.
+function renderContractReviewCards(){
+  ["ra","rb","da"].forEach(function(t){
+    var slot=document.getElementById("cr_slot_"+t); if(!slot || slot.innerHTML) return;
+    var who=crCounterpartyWord(t);
+    slot.innerHTML = "<div class='card'>"
+      + "<h2>&#9878;&#65039; Review the "+who+"'s own contract</h2>"
+      + "<div class='desc'>If the "+who+" wants to use their own paper, upload it here. The Contract Lawyer compares it clause by clause with Vendora's "+esc(TYPE_NAME[t])+" as set up above — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
+      + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+      + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
+      + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Review against our agreement &rarr;</button>"
+      + "<span id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted)'></span></div>"
+      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 15 MB. The review takes a minute or two.</div>"
+      + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
+  });
+}
+
+// ── Reading documents in the browser (no server-side parsing needed) ──
+// A .docx is a zip; the text lives in word/document.xml. Read the zip's central directory and
+// inflate that one entry with the browser's built-in DecompressionStream.
+async function zipEntryText(buf, wantName){
+  var u8=new Uint8Array(buf), dv=new DataView(buf);
+  var eocd=u8.length-22; while(eocd>=0 && dv.getUint32(eocd,true)!==0x06054b50) eocd--;
+  if(eocd<0) throw new Error("That file isn't a valid .docx");
+  var n=dv.getUint16(eocd+10,true), p=dv.getUint32(eocd+16,true);
+  for(var i=0;i<n;i++){
+    var method=dv.getUint16(p+10,true), csize=dv.getUint32(p+20,true), fl=dv.getUint16(p+28,true), el=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true), off=dv.getUint32(p+42,true);
+    var name=new TextDecoder().decode(u8.subarray(p+46,p+46+fl));
+    if(name===wantName){
+      var lfl=dv.getUint16(off+26,true), lel=dv.getUint16(off+28,true), start=off+30+lfl+lel;
+      var data=u8.slice(start,start+csize);
+      if(method===0) return new TextDecoder().decode(data);
+      if(method!==8) throw new Error("Unsupported .docx compression");
+      var s=new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return await new Response(s).text();
+    }
+    p+=46+fl+el+cl;
+  }
+  throw new Error("No document text found in that .docx");
+}
+function docxXmlToText(xml){
+  return xml.replace(/<w:tab\/>/g,"\t").replace(/<w:br\/>|<w:cr\/>/g,"\n").replace(/<\/w:p>/g,"\n").replace(/<\/w:tc>/g," | ")
+    .replace(/<[^>]+>/g,"")
+    .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'")
+    .replace(/&#(\d+);/g,function(_,c){ return String.fromCharCode(+c); })
+    .replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+}
+async function docxToText(buf){ return docxXmlToText(await zipEntryText(buf,"word/document.xml")); }
+async function readContractFile(file){
+  var name=(file.name||"").toLowerCase();
+  if(name.endsWith(".pdf") || file.type==="application/pdf"){
+    var b64=await new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ res(String(fr.result).split(",")[1]||""); }; fr.onerror=function(){ rej(new Error("Could not read the file")); }; fr.readAsDataURL(file); });
+    if(!b64) throw new Error("Could not read the PDF");
+    return {kind:"pdf", data:b64, filename:file.name};
+  }
+  var text;
+  if(name.endsWith(".docx")) text=await docxToText(await file.arrayBuffer());
+  else if(name.endsWith(".txt") || name.endsWith(".md") || /^text\//.test(file.type||"")) text=await file.text();
+  else throw new Error("Unsupported file type — use PDF, Word (.docx) or text.");
+  if(!text || text.trim().length<50) throw new Error("No readable text found in that file. If it's a scan, upload it as PDF.");
+  return {kind:"text", data:text, filename:file.name};
+}
+// Vendora's own agreement, as the deal is set up in the form right now, as plain text: build the
+// .docx exactly as Generate would, then extract its text — so the benchmark is the real thing.
+async function buildOurAgreementText(type){
+  var data=readForm(type); data._type=type;
+  if(!data.name) data.name = type==="da" ? "[Supplier]" : "[Reseller]";
+  data.clauseOverrides = window._clauseOverrides || (window._editing && window._editing.base && window._editing.base.clauseOverrides) || {};
+  var fn = type==="da" ? buildDA : (type==="rb" ? buildRB : buildRA);
+  var r=await fn(data); if(!r) throw new Error("Could not build Vendora's agreement");
+  return docxToText(await r.blob.arrayBuffer());
+}
+
+async function runContractReview(type){
+  var inp=document.getElementById("cr_file_"+type), msg=document.getElementById("cr_msg_"+type), btn=document.getElementById("cr_btn_"+type), out=document.getElementById("cr_out_"+type);
+  var file=inp.files && inp.files[0];
+  msg.style.color="#c0392b";
+  if(!file){ msg.textContent="Choose the "+crCounterpartyWord(type)+"'s contract first (PDF, DOCX or TXT)."; return; }
+  if(file.size>15*1024*1024){ msg.textContent="Max 15 MB."; return; }
+  btn.disabled=true; msg.style.color="var(--muted)"; out.innerHTML="";
+  try{
+    msg.textContent="Reading the document…";
+    var doc=await readContractFile(file);
+    msg.textContent="Building Vendora's agreement for comparison…";
+    var ourText=await buildOurAgreementText(type);
+    msg.textContent="The Contract Lawyer is reviewing — this takes a minute or two…";
+    var r=await fetch("/api/ai/review",{method:"POST",headers:{"Content-Type":"text/plain"},
+      body:JSON.stringify({ type:type, doc:doc, ourText:ourText, agreement:getAiContext() })});
+    var j=await r.json().catch(function(){ return {}; });
+    if(!r.ok) throw new Error(j.error||"The review failed");
+    window._crResults=window._crResults||{};
+    window._crResults[type]={ id:j.reviewId, filename:file.name, type:type, review:j.review, when:new Date() };
+    msg.style.color="#1e7e34"; msg.textContent="Review ready.";
+    renderContractReview(type);
+    crOpenLawyer(type, true);
+  }catch(e){ msg.style.color="#c0392b"; msg.textContent=(e&&e.message)||"The review failed"; }
+  finally{ btn.disabled=false; }
+}
+
+function crBadge(cls){ var m=CR_CLASS[cls]||{label:cls,bg:"#eef1f5",fg:"#555"}; return "<span style='display:inline-block;background:"+m.bg+";color:"+m.fg+";font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;white-space:nowrap'>"+esc(m.label)+"</span>"; }
+function renderContractReview(type){
+  var res=window._crResults && window._crResults[type]; var out=document.getElementById("cr_out_"+type); if(!res||!out) return;
+  var rv=res.review, v=CR_VERDICT[rv.overall_verdict]||CR_VERDICT.negotiate;
+  var counts={}; rv.findings.forEach(function(f){ counts[f.classification]=(counts[f.classification]||0)+1; });
+  var h = "<div style='border:1px solid var(--border);border-radius:8px;overflow:hidden'>"
+    + "<div style='background:"+v.bg+";color:"+v.fg+";padding:12px 16px'><div style='font-size:15px;font-weight:600'>"+esc(v.label)+"</div>"
+    + "<div style='font-size:13px;margin-top:4px'>"+esc(rv.overall_rationale||"")+"</div></div>"
+    + "<div style='padding:12px 16px;font-size:13px;line-height:1.55'>"
+    + "<div style='color:var(--muted);font-size:11px;margin-bottom:6px'>"+esc(res.filename)+" · reviewed "+esc(fmtWhen(res.when.toISOString()))+"</div>"
+    + "<div>"+esc(rv.document_summary||"")+"</div>"
+    + (rv.governing_law_and_forum ? "<div style='margin-top:8px'><strong>Governing law &amp; forum:</strong> "+esc(rv.governing_law_and_forum)+"</div>" : "")
+    + (rv.refer_to_counsel ? "<div style='margin-top:8px;background:#fdece9;color:#c0392b;border-radius:6px;padding:8px 12px'><strong>&#9888; Outside counsel before signing:</strong> "+esc(rv.counsel_reason||"")+"</div>" : "")
+    + "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:12px'>"+CR_ORDER.filter(function(c){return counts[c];}).map(function(c){ return crBadge(c).replace("</span>"," · "+counts[c]+"</span>"); }).join("")+"</div>"
+    + "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:14px'>"
+    + "<button onclick='crOpenLawyer(\""+type+"\")' style='padding:8px 14px;border:none;background:var(--navy);color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>&#9878;&#65039; Discuss with the Contract Lawyer</button>"
+    + "<button onclick='crDownloadReview(\""+type+"\")' style='padding:8px 14px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>&#8681; Review memo (.docx)</button>"
+    + "</div></div></div>";
+  CR_ORDER.forEach(function(cls){
+    var items=rv.findings.filter(function(f){ return f.classification===cls; }); if(!items.length) return;
+    var m=CR_CLASS[cls];
+    h += "<h3 style='margin:18px 0 4px;font-size:14px;color:"+m.fg+"'>"+esc(m.plural)+" <span style='font-weight:400;color:var(--muted);font-size:12px'>— "+esc(m.desc)+"</span></h3>";
+    items.forEach(function(f,i){
+      var wid="crw_"+type+"_"+cls+"_"+i;
+      h += "<div style='border:1px solid var(--border);border-left:4px solid "+m.fg+";border-radius:6px;padding:10px 14px;margin-top:8px;font-size:13px;line-height:1.55'>"
+        + "<div style='display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap'><strong>"+esc(f.topic||"")+"</strong>"+(f.their_clause_ref?"<span style='color:var(--muted);font-size:12px'>their "+esc(f.their_clause_ref)+"</span>":"")+"</div>"
+        + (f.their_position ? "<div style='margin-top:6px'><span style='color:var(--muted)'>Their position:</span> "+esc(f.their_position)+"</div>" : "")
+        + (f.our_position ? "<div style='margin-top:4px'><span style='color:var(--muted)'>Vendora's position:</span> "+esc(f.our_position)+"</div>" : "")
+        + (f.why_it_matters ? "<div style='margin-top:4px'><span style='color:var(--muted)'>Why it matters:</span> "+esc(f.why_it_matters)+"</div>" : "")
+        + (f.legal_note ? "<div style='margin-top:4px;font-style:italic;color:#555'>&#9878;&#65039; "+esc(f.legal_note)+"</div>" : "")
+        + (f.proposed_wording ? "<div style='margin-top:8px;background:#f7f8fa;border-radius:6px;padding:8px 10px'><div style='display:flex;justify-content:space-between;align-items:center;gap:8px'><span style='font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em'>Proposed wording</span>"
+          + "<button onclick='crCopy(\""+wid+"\",this)' style='font-size:11px;padding:2px 8px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer'>Copy</button></div>"
+          + "<div id='"+wid+"' style='white-space:pre-wrap;margin-top:4px'>"+esc(f.proposed_wording)+"</div></div>" : "")
+        + "</div>";
+    });
+  });
+  if(rv.questions_for_seller.length){
+    h += "<h3 style='margin:18px 0 4px;font-size:14px'>Questions to clarify</h3><ul style='margin:0 0 0 18px;padding:0;font-size:13px;line-height:1.6'>"
+      + rv.questions_for_seller.map(function(q){ return "<li>"+esc(q)+"</li>"; }).join("")+"</ul>";
+  }
+  h += "<div style='font-size:11px;color:var(--muted);margin-top:14px'>Drafting assistance from Vendora's AI Contract Lawyer — not formal legal advice.</div>";
+  out.innerHTML=h;
+}
+function crCopy(id, btn){
+  var el=document.getElementById(id); if(!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function(){ btn.textContent="Copied ✓"; setTimeout(function(){ btn.textContent="Copy"; },1500); }).catch(function(){});
+}
+// Hand the review to the chat: the lawyer keeps the counterparty document and its findings in context.
+function crOpenLawyer(type, silent){
+  var res=window._crResults && window._crResults[type]; if(!res) return;
+  var changed = !window._aiReview || window._aiReview.id!==res.id;
+  window._aiReview={ id:res.id, filename:res.filename, type:type };
+  var bar=document.getElementById("aiReviewBar"), txt=document.getElementById("aiReviewBarText");
+  if(bar){ bar.style.display="flex"; txt.innerHTML="&#128196; Reviewing <strong>"+esc(res.filename)+"</strong> vs our "+esc(TYPE_NAME[type]||"agreement"); }
+  if(changed){ window._aiMessages=[]; renderAiMessages(); }
+  if(silent) return;
+  var d=document.getElementById("aiDrawer"); if(d && d.style.display!=="flex") toggleAiDrawer();
+}
+function crClearLawyerContext(){
+  window._aiReview=null; window._aiMessages=[];
+  var bar=document.getElementById("aiReviewBar"); if(bar) bar.style.display="none";
+  renderAiMessages();
+}
+// An internal memo of the review, in the house style.
+function crDownloadReview(type){
+  var res=window._crResults && window._crResults[type]; if(!res) return;
+  var h=docxHelpers(), dx=window.docx, rv=res.review, v=CR_VERDICT[rv.overall_verdict]||CR_VERDICT.negotiate, ch=[];
+  ch.push(h.h1("Contract review — "+res.filename));
+  ch.push(h.par([{t:"Benchmark: ",b:true},"Vendora "+(TYPE_NAME[type]||"agreement")+"   ·   ",{t:"Reviewed: ",b:true},fmtWhen(res.when.toISOString())]));
+  ch.push(h.note("Internal — drafting assistance from Vendora's AI Contract Lawyer, not formal legal advice. Do not send to the counterparty; use the proposed wording."));
+  ch.push(h.h2("Verdict: "+v.label));
+  ch.push(h.par(rv.overall_rationale||""));
+  if(rv.document_summary) ch.push(h.par([{t:"The document. ",b:true},rv.document_summary]));
+  if(rv.governing_law_and_forum) ch.push(h.par([{t:"Governing law and forum. ",b:true},rv.governing_law_and_forum]));
+  if(rv.refer_to_counsel) ch.push(h.par([{t:"Outside counsel before signing: ",b:true},rv.counsel_reason||""]));
+  CR_ORDER.forEach(function(cls){
+    var items=rv.findings.filter(function(f){ return f.classification===cls; }); if(!items.length) return;
+    ch.push(h.h2(CR_CLASS[cls].plural+" ("+items.length+")"));
+    items.forEach(function(f){
+      ch.push(h.h3(f.topic+(f.their_clause_ref?" — their "+f.their_clause_ref:"")));
+      if(f.their_position) ch.push(h.par([{t:"Their position: ",b:true},f.their_position]));
+      if(f.our_position) ch.push(h.par([{t:"Vendora's position: ",b:true},f.our_position]));
+      if(f.why_it_matters) ch.push(h.par([{t:"Why it matters: ",b:true},f.why_it_matters]));
+      if(f.legal_note) ch.push(h.par([{t:"Legal note: ",b:true,i:true},{t:f.legal_note,i:true}]));
+      if(f.proposed_wording){ ch.push(h.par([{t:"Proposed wording:",b:true}])); ch.push(h.note(f.proposed_wording)); }
+    });
+  });
+  if(rv.questions_for_seller.length){ ch.push(h.h2("Questions to clarify")); rv.questions_for_seller.forEach(function(q){ ch.push(h.bul(q)); }); }
+  dx.Packer.toBlob(h.makeDoc(ch)).then(function(blob){
+    var safe=res.filename.replace(/\.[^.]+$/,"").replace(/[^\w]/g,"_").replace(/_+/g,"_");
+    window.saveAs(blob,"Vendora_Contract_Review_"+safe+"_"+new Date().toISOString().slice(0,10)+".docx");
+  }).catch(function(e){ alert("Could not build the memo: "+((e&&e.message)||e)); });
 }
 
 /* ── AI PLAYBOOK (smart, learns over time) ───────────────────────────────────── */
@@ -26509,6 +26725,10 @@ initApp();
       <button onclick="openPlaybook()" title="Edit the playbook" style="background:none;border:none;color:#fff;font-size:15px;cursor:pointer;line-height:1">&#9881;&#65039;</button>
       <button onclick="toggleAiDrawer()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">&times;</button>
     </div>
+  </div>
+  <div id="aiReviewBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#fde8d0;border-bottom:1px solid #f5cfa3;padding:7px 12px;font-size:12px;color:#9a4b00">
+    <span id="aiReviewBarText" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <a onclick="crClearLawyerContext()" style="cursor:pointer;text-decoration:underline;white-space:nowrap">clear</a>
   </div>
   <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
   <div id="aiUpdatedBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#eaf7ee;border-top:1px solid #cfe8d6;padding:8px 12px;font-size:12px;color:#1e7e34">
