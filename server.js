@@ -50,6 +50,7 @@ setInterval(function () {
 // sized so a whole office behind one shared IP can sign in at once.
 const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 15 min / IP
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
+const reviewLimiter = rateLimit('review', 20, 60 * 60 * 1000); // 20 contract reviews / hour / IP (each is a large model call)
 
 // Escape untrusted strings before putting them in email HTML.
 function escHtml(s) {
@@ -319,14 +320,71 @@ async function loadPlaybook() {
   return { guidance: (g.rows[0] && g.rows[0].value) || '', notes: n.rows };
 }
 
-// AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far.
+// ── Counterparty-contract reviews ─────────────────────────────────────────────
+// A review's document + result are kept in memory for a few hours so the chat can continue from
+// it without re-uploading. Bounded by age and total size; lost on restart (the user re-runs it).
+const reviews = new Map(); // id -> {uid, type, doc, ourText, filename, review, created}
+const REVIEW_TTL_MS = 8 * 60 * 60 * 1000, REVIEW_MAX_BYTES = 64 * 1024 * 1024;
+function storeReview(entry) {
+  const now = Date.now();
+  for (const [k, v] of reviews) if (now - v.created > REVIEW_TTL_MS) reviews.delete(k);
+  const id = crypto.randomBytes(12).toString('base64url');
+  reviews.set(id, entry);
+  let bytes = 0; for (const v of reviews.values()) bytes += v.doc.data.length + v.ourText.length;
+  while (bytes > REVIEW_MAX_BYTES && reviews.size > 1) {
+    const oldest = [...reviews.entries()].sort(function (a, b) { return a[1].created - b[1].created; })[0];
+    bytes -= oldest[1].doc.data.length + oldest[1].ourText.length;
+    reviews.delete(oldest[0]);
+  }
+  return id;
+}
+function ownedReview(req, id) {
+  const r = id ? reviews.get(String(id)) : null;
+  return r && r.uid === req.user.uid && Date.now() - r.created <= REVIEW_TTL_MS ? r : null;
+}
+
+// Review an uploaded counterparty contract against Vendora's agreement. The body is JSON sent as
+// text/plain so it bypasses the global 2 MB JSON cap (a PDF arrives base64-encoded).
+app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: '25mb' }), async (req, res) => {
+  if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
+  let body;
+  try { body = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'Malformed request' }); }
+  const { type, doc, ourText, agreement } = body || {};
+  if (!['ra', 'rb', 'da'].includes(type)) return res.status(400).json({ error: 'Unknown agreement type' });
+  if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
+  if (!doc || !['pdf', 'text'].includes(doc.kind) || typeof doc.data !== 'string' || !doc.data.trim()) return res.status(400).json({ error: 'No document content' });
+  if (doc.kind === 'pdf' && doc.data.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'PDF too large (max 15 MB)' });
+  if (doc.kind === 'text' && doc.data.length > 600000) return res.status(413).json({ error: 'Document too long for a single review' });
+  if (typeof ourText !== 'string' || ourText.trim().length < 200) return res.status(400).json({ error: 'Vendora\'s agreement text is missing' });
+  if (ourText.length > 400000) return res.status(413).json({ error: 'Vendora agreement text too long' });
+  const filename = safeFilename(doc.filename || 'contract');
+  try {
+    const playbook = await loadPlaybook();
+    const review = await ai.reviewContract({ type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, agreement: agreement || null, playbook });
+    const reviewId = storeReview({ uid: req.user.uid, type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, filename, review, created: Date.now() });
+    console.log(`Contract review (${type}, ${doc.kind}, ${filename}) by ${req.user.email}: ${review.findings.length} findings, verdict ${review.overall_verdict}`);
+    res.json({ reviewId, review });
+  } catch (err) {
+    console.error('AI review error:', err.message);
+    if (err.code === 'refusal' || err.code === 'incomplete' || err.code === 'malformed') return res.status(422).json({ error: err.message });
+    res.status(500).json({ error: 'The AI lawyer could not review the document right now.' });
+  }
+});
+
+// AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far,
+// optionally continuing from a contract review (reviewId).
 app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   try {
-    const { agreement, messages, clauses } = req.body || {};
+    const { agreement, messages, clauses, reviewId } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
+    let review = null;
+    if (reviewId) {
+      review = ownedReview(req, reviewId);
+      if (!review) return res.status(404).json({ error: 'That contract review has expired — run the review again to continue.' });
+    }
     const playbook = await loadPlaybook();
-    const out = await ai.chat(agreement || null, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null });
+    const out = await ai.chat(agreement || null, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null, review });
     res.json(out);
   } catch (err) {
     console.error('AI chat error:', err.message);
