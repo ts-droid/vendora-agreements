@@ -91,7 +91,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 .spin{width:15px;height:15px;border:2px solid rgba(15,34,64,.2);border-top-color:var(--navy);border-radius:50%;animation:sp .6s linear infinite;display:none}
 .suc{background:var(--lite);border-left:3px solid var(--gold);padding:12px 18px;margin-top:12px;font-size:12px;color:var(--muted);display:none}
 .suc strong{color:var(--navy)}
-@media(max-width:680px){.g2,.g3,.crow{grid-template-columns:1fr 1fr}.tabs{overflow-x:auto}}
+@media(max-width:680px){.g2,.g3,.crow{grid-template-columns:1fr 1fr}.tabs{overflow-x:auto}.hdr{flex-wrap:wrap}}
 .invite-card{background:#F0F7FF;border:1px solid #2E6DA4;padding:18px 22px;margin-bottom:14px}
 .invite-card h3{font-family:"Playfair Display",serif;font-size:15px;color:var(--navy);margin-bottom:4px}
 .invite-card p{font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5}
@@ -171,8 +171,10 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="logo">VENDORA<br>NORDIC</div>
   <div>
     <h1>Agreement Generator</h1>
-    <p>Fill in the form and download a complete, ready-to-sign agreement as a Word-compatible HTML file</p>
+    <p>Create, negotiate and sign Vendora's reseller and distributor agreements &mdash; downloaded as Word documents (.docx)</p>
   </div>
+  <!-- Signed-in user: lives in the header so the tab row never has to wrap it -->
+  <span id="userChip" style="display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right"></span>
 </div>
 
 <div class="tabs">
@@ -181,7 +183,6 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <button class="tab" onclick="switchTab(2)">Reseller Agreement &mdash; Simplified</button>
   <button class="tab" id="archiveTabBtn" onclick="switchTab(3)" style="display:none">&#128193; Archive</button>
   <button class="tab" id="guideTabBtn" onclick="switchTab(4)" style="display:none">&#128214; Guide</button>
-  <span id="userChip" style="display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted)"></span>
 </div>
 
 <div id="editBar" style="display:none;align-items:center;gap:12px;background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin-bottom:16px">
@@ -222,6 +223,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 
 <!-- ═══════════════════════════════════════════════════════ TAB 0: DA -->
 <div id="tab0" class="tab-panel active">
+<div id="cr_slot_da"></div>
 <div class="card">
   <h2>Supplier Identity</h2>
   <div class="desc">Legal details used throughout the agreement and in Appendix 3.</div>
@@ -338,7 +340,6 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Email</label><input id="da_vemail" placeholder="firstname@vendora.se"></div>
   </div>
 </div>
-<div id="cr_slot_da"></div>
 <div class="invite-card">
   <h3>&#x1F4E7; Invite supplier to fill in their details</h3>
   <p>Enter the supplier contact below, then generate a link to send them. They will fill in company identity and contact persons only &mdash; all commercial terms, targets and MDF you set above will be locked.</p>
@@ -353,6 +354,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 
 <!-- ═══════════════════════════════════════════════════════ TAB 1: RA FULL -->
 <div id="tab1" class="tab-panel">
+<div id="cr_slot_ra"></div>
 <div class="card">
   <h2>Reseller Identity</h2>
   <div class="g2">
@@ -467,7 +469,6 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="desc">Optional &mdash; named contacts at the reseller for each function. Pre-fill them here, or leave them for the reseller to complete when they fill in their details. Shown in Appendix 1.</div>
   <div id="ra_rc"></div>
 </div>
-<div id="cr_slot_ra"></div>
 <div class="invite-card">
   <h3>&#x1F4E7; Invite reseller to fill in their details</h3>
   <p>Enter the reseller contact below, then generate a link to send them. They will fill in company identity and signatory details only &mdash; all commercial terms you set above will be locked.</p>
@@ -482,6 +483,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 
 <!-- ═══════════════════════════════════════════════════════ TAB 2: RA BASIC -->
 <div id="tab2" class="tab-panel">
+<div id="cr_slot_rb"></div>
 <div class="card">
   <h2>Reseller Identity</h2>
   <div class="g2">
@@ -558,7 +560,6 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Phone <em>(optional)</em></label><input id="rb_sig_phone" placeholder="e.g. +46 70 000 00 00"></div>
   </div>
 </div>
-<div id="cr_slot_rb"></div>
 <div class="suc" id="rb_suc"><strong>Agreement downloaded.</strong> Open the .html file in Word (File &rarr; Open) and save as .docx.</div>
 </div>
 
@@ -26440,7 +26441,7 @@ function renderContractReviewCards(){
     var who=crCounterpartyWord(t);
     slot.innerHTML = "<div class='card'>"
       + "<h2>&#9878;&#65039; Review the "+who+"'s own contract</h2>"
-      + "<div class='desc'>If the "+who+" wants to use their own paper, upload it here. The Contract Lawyer compares it clause by clause with Vendora's "+esc(TYPE_NAME[t])+" as set up above — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
+      + "<div class='desc'>If the "+who+" wants to use their own paper, upload it here. The Contract Lawyer compares it clause by clause with Vendora's "+esc(TYPE_NAME[t])+" as set up on this tab — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Review against our agreement &rarr;</button>"
