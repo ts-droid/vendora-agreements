@@ -149,27 +149,84 @@ app.get('/api/invite/:code', publicLimiter, (req, res) => {
 });
 
 // ── Shared mailer ─────────────────────────────────────────────────────────────
-// Turn a nodemailer/SMTP failure into a sentence the Vendora user can act on. (All callers are
-// signed-in Vendora staff, so naming the cause is fine — it's the only way they can fix it.)
+// ── Outgoing email ─────────────────────────────────────────────────────────────
+// Preferred: the Gmail API through a Google Workspace service account with domain-wide
+// delegation (GOOGLE_SERVICE_ACCOUNT_JSON + MAIL_FROM). The service account has its own key, so
+// delivery does not depend on anyone's account password — a Gmail app password is revoked the
+// moment that person changes their password, which is what broke invites in October 2026.
+// Fallback: SMTP with an app password (SMTP_USER / SMTP_PASS), kept so nothing stops working
+// before the service account is set up.
+const { JWT } = require('google-auth-library');
+const MailComposer = require('nodemailer/lib/mail-composer');
+const MAIL_FROM = (process.env.MAIL_FROM || process.env.SMTP_USER || '').trim(); // mailbox we send as
+
+// Turn a mail failure into a sentence the Vendora user can act on. (All callers are signed-in
+// Vendora staff, so naming the cause is fine — it's the only way they can fix it.)
 function mailErrorHint(err) {
   const m = String((err && err.message) || '');
-  if (/535|EAUTH|Username and Password not accepted|BadCredentials|Invalid login/i.test(m)) {
-    return 'The email account rejected the login — the SMTP password (the Gmail app password) is wrong, expired or revoked. Update SMTP_PASS on the server.';
+  if (/Precondition check failed|unauthorized_client|Delegation denied|Not Authorized to access this resource|Gmail API 40[13]/i.test(m)) {
+    return 'The Google service account is not authorised to send as ' + MAIL_FROM + ' — check the domain-wide delegation in the Google Admin console (the service account\'s client ID with scope https://www.googleapis.com/auth/gmail.send) and that the mailbox exists.';
   }
-  if (/ECONN|ETIMEDOUT|ENOTFOUND|EDNS|ESOCKET|getaddrinfo/i.test(m)) return 'Could not reach the mail server (SMTP connection problem).';
+  if (/invalid_grant|Invalid JWT|invalid_client|DECODER routines|PEM|private key|no start line/i.test(m)) {
+    return 'The Google service-account key is invalid or revoked — check GOOGLE_SERVICE_ACCOUNT_JSON on the server.';
+  }
+  if (/535|EAUTH|Username and Password not accepted|BadCredentials|Invalid login/i.test(m)) {
+    return 'The email account rejected the login — the SMTP password (the Gmail app password) is wrong, expired or revoked. Update SMTP_PASS on the server, or switch to the service account.';
+  }
+  if (/ECONN|ETIMEDOUT|ENOTFOUND|EDNS|ESOCKET|getaddrinfo|fetch failed/i.test(m)) return 'Could not reach the mail server (connection problem).';
   return 'The mail server refused the message: ' + m.slice(0, 160);
 }
 let lastMailError = null; // most recent sendMailSafe failure, surfaced to the UI
 
+let gmailSa; // parsed service account, false when absent/invalid (decided once)
+function gmailServiceAccount() {
+  if (gmailSa !== undefined) return gmailSa;
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) return (gmailSa = false);
+  try {
+    const sa = JSON.parse(raw);
+    gmailSa = sa && sa.client_email && sa.private_key ? sa : false;
+    if (!gmailSa) console.error('[mail] GOOGLE_SERVICE_ACCOUNT_JSON lacks client_email/private_key — falling back to SMTP');
+  } catch (e) {
+    console.error('[mail] GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON — falling back to SMTP');
+    gmailSa = false;
+  }
+  if (gmailSa && !MAIL_FROM) { console.error('[mail] MAIL_FROM is not set — the service account needs a mailbox to send as; falling back to SMTP'); gmailSa = false; }
+  return gmailSa;
+}
+let gmailJwt = null;
+// Same interface as a nodemailer transport (sendMail(msg)), so call sites don't care which is in use.
+function gmailApiTransport(sa) {
+  if (!gmailJwt) gmailJwt = new JWT({ email: sa.client_email, key: sa.private_key, scopes: ['https://www.googleapis.com/auth/gmail.send'], subject: MAIL_FROM });
+  return {
+    mode: 'Gmail API as ' + MAIL_FROM,
+    sendMail: async function (msg) {
+      const mime = await new MailComposer(msg).compile().build();
+      const tok = await gmailJwt.getAccessToken(); // cached; refreshed by the library when expired
+      const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + tok.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw: Buffer.from(mime).toString('base64url') }),
+      });
+      if (!r.ok) throw new Error('Gmail API ' + r.status + ': ' + (await r.text()).slice(0, 400));
+      return r.json();
+    },
+  };
+}
 function getTransporter() {
+  const sa = gmailServiceAccount();
+  if (sa) return gmailApiTransport(sa);
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return null;
-  return nodemailer.createTransport({
+  const t = nodemailer.createTransport({
     host:   process.env.SMTP_HOST   || 'smtp.gmail.com',
     port:   parseInt(process.env.SMTP_PORT || '587'),
     secure: process.env.SMTP_SECURE === 'true',
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
+  t.mode = 'SMTP ' + (process.env.SMTP_HOST || 'smtp.gmail.com') + ' as ' + process.env.SMTP_USER;
+  return t;
 }
+const MAIL_NOT_CONFIGURED = 'Email is not configured on the server — set GOOGLE_SERVICE_ACCOUNT_JSON + MAIL_FROM (recommended) or SMTP_USER / SMTP_PASS.';
 
 // ── Send invite email to supplier/reseller ────────────────────────────────────
 app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
@@ -198,7 +255,7 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
 
   try {
     await transporter.sendMail({
-      from:    `"Vendora Nordic AB" <${process.env.SMTP_USER}>`,
+      from:    `"Vendora Nordic AB" <${MAIL_FROM}>`,
       to:      `${toName ? toName + ' <' + toEmail + '>' : toEmail}`,
       ...(ccList.length ? { cc: ccList.join(', ') } : {}),
       ...(bccList.length ? { bcc: bccList.join(', ') } : {}),
@@ -270,7 +327,7 @@ app.post('/api/notify', publicLimiter, async (req, res) => {
 
   try {
     await transporter.sendMail({
-      from:    `"Vendora Agreements" <${process.env.SMTP_USER}>`,
+      from:    `"Vendora Agreements" <${MAIL_FROM}>`,
       to:      recipients.join(', '),
       subject: `${pCount > 0 ? '[' + pCount + ' proposed changes] ' : ''}${aType} details submitted — ${sName}`,
       html: `
@@ -571,14 +628,14 @@ app.post('/api/me/onboarded', requireDb, auth.requireAuth, async (req, res) => {
 // email delivery (and to see why it fails) without sending a real invite.
 app.post('/api/admin/mail-test', auth.requireAuth, requireAdmin, async (req, res) => {
   const transporter = getTransporter();
-  if (!transporter) return res.json({ ok: false, reason: 'Email is not configured on the server (SMTP_USER / SMTP_PASS are not set).' });
+  if (!transporter) return res.json({ ok: false, reason: MAIL_NOT_CONFIGURED });
   try {
     await transporter.sendMail({
-      from: `"Vendora Agreements" <${process.env.SMTP_USER}>`, to: req.user.email,
+      from: `"Vendora Agreements" <${MAIL_FROM}>`, to: req.user.email,
       subject: 'Vendora Agreements — test email',
-      html: mailShell('Email delivery works', `<p style="color:#555;font-size:14px">This test was sent from Vendora Agreements by ${escHtml(req.user.name || req.user.email)} at ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC via ${escHtml(process.env.SMTP_HOST || 'smtp.gmail.com')} as ${escHtml(process.env.SMTP_USER)}.</p>`),
+      html: mailShell('Email delivery works', `<p style="color:#555;font-size:14px">This test was sent from Vendora Agreements by ${escHtml(req.user.name || req.user.email)} at ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC via ${escHtml(transporter.mode)}.</p>`),
     });
-    res.json({ ok: true, to: req.user.email, via: (process.env.SMTP_HOST || 'smtp.gmail.com') + ' as ' + process.env.SMTP_USER });
+    res.json({ ok: true, to: req.user.email, via: transporter.mode });
   } catch (err) {
     console.error('Mail test error:', err.message);
     res.json({ ok: false, reason: mailErrorHint(err), detail: String(err.message || '').slice(0, 300) });
@@ -856,7 +913,7 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
       : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please sign the agreement you received and return the countersigned copy to us.</p>`;
 
     await transporter.sendMail({
-      from:    `"Vendora Nordic AB" <${process.env.SMTP_USER}>`,
+      from:    `"Vendora Nordic AB" <${MAIL_FROM}>`,
       to:      row.counterparty_email,
       replyTo: 'ts@vendora.se',
       subject: `Reminder: ${typeLabel} with Vendora Nordic AB`,
@@ -926,8 +983,8 @@ function btnHtml(href, label) {
 }
 async function sendMailSafe(msg) {
   const t = getTransporter();
-  if (!t) { lastMailError = 'Email is not configured on the server (SMTP_USER / SMTP_PASS).'; return false; }
-  try { await t.sendMail(Object.assign({ from: `"Vendora Agreements" <${process.env.SMTP_USER}>` }, msg)); lastMailError = null; return true; }
+  if (!t) { lastMailError = MAIL_NOT_CONFIGURED; return false; }
+  try { await t.sendMail(Object.assign({ from: `"Vendora Agreements" <${MAIL_FROM}>` }, msg)); lastMailError = null; return true; }
   catch (e) { console.error('Mail error:', e.message); lastMailError = mailErrorHint(e); return false; }
 }
 function cpName(row) { return row.counterparty_name || (row.data && row.data.name) || 'the counterparty'; }
