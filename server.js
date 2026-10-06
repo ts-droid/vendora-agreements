@@ -149,6 +149,18 @@ app.get('/api/invite/:code', publicLimiter, (req, res) => {
 });
 
 // ── Shared mailer ─────────────────────────────────────────────────────────────
+// Turn a nodemailer/SMTP failure into a sentence the Vendora user can act on. (All callers are
+// signed-in Vendora staff, so naming the cause is fine — it's the only way they can fix it.)
+function mailErrorHint(err) {
+  const m = String((err && err.message) || '');
+  if (/535|EAUTH|Username and Password not accepted|BadCredentials|Invalid login/i.test(m)) {
+    return 'The email account rejected the login — the SMTP password (the Gmail app password) is wrong, expired or revoked. Update SMTP_PASS on the server.';
+  }
+  if (/ECONN|ETIMEDOUT|ENOTFOUND|EDNS|ESOCKET|getaddrinfo/i.test(m)) return 'Could not reach the mail server (SMTP connection problem).';
+  return 'The mail server refused the message: ' + m.slice(0, 160);
+}
+let lastMailError = null; // most recent sendMailSafe failure, surfaced to the UI
+
 function getTransporter() {
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return null;
   return nodemailer.createTransport({
@@ -231,7 +243,7 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
     res.json({ ok: true, sent: true });
   } catch (err) {
     console.error('Send invite error:', err.message);
-    res.status(500).json({ ok: false, error: 'Could not send the invitation email' });
+    res.status(502).json({ ok: false, sent: false, reason: mailErrorHint(err) });
   }
 });
 
@@ -555,6 +567,24 @@ app.post('/api/me/onboarded', requireDb, auth.requireAuth, async (req, res) => {
   }
 });
 
+// Admin: send a test email to yourself and get the real SMTP outcome back — the way to verify
+// email delivery (and to see why it fails) without sending a real invite.
+app.post('/api/admin/mail-test', auth.requireAuth, requireAdmin, async (req, res) => {
+  const transporter = getTransporter();
+  if (!transporter) return res.json({ ok: false, reason: 'Email is not configured on the server (SMTP_USER / SMTP_PASS are not set).' });
+  try {
+    await transporter.sendMail({
+      from: `"Vendora Agreements" <${process.env.SMTP_USER}>`, to: req.user.email,
+      subject: 'Vendora Agreements — test email',
+      html: mailShell('Email delivery works', `<p style="color:#555;font-size:14px">This test was sent from Vendora Agreements by ${escHtml(req.user.name || req.user.email)} at ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC via ${escHtml(process.env.SMTP_HOST || 'smtp.gmail.com')} as ${escHtml(process.env.SMTP_USER)}.</p>`),
+    });
+    res.json({ ok: true, to: req.user.email, via: (process.env.SMTP_HOST || 'smtp.gmail.com') + ' as ' + process.env.SMTP_USER });
+  } catch (err) {
+    console.error('Mail test error:', err.message);
+    res.json({ ok: false, reason: mailErrorHint(err), detail: String(err.message || '').slice(0, 300) });
+  }
+});
+
 // ── Agreements archive (auth required) ─────────────────────────────────────────
 app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
@@ -848,7 +878,7 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
     res.json({ ok: true, sent: true, kind, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
   } catch (err) {
     console.error('Reminder error:', err.message);
-    res.status(500).json({ error: 'Could not send the reminder' });
+    res.status(502).json({ error: mailErrorHint(err) });
   }
 });
 
@@ -896,9 +926,9 @@ function btnHtml(href, label) {
 }
 async function sendMailSafe(msg) {
   const t = getTransporter();
-  if (!t) return false;
-  try { await t.sendMail(Object.assign({ from: `"Vendora Agreements" <${process.env.SMTP_USER}>` }, msg)); return true; }
-  catch (e) { console.error('Mail error:', e.message); return false; }
+  if (!t) { lastMailError = 'Email is not configured on the server (SMTP_USER / SMTP_PASS).'; return false; }
+  try { await t.sendMail(Object.assign({ from: `"Vendora Agreements" <${process.env.SMTP_USER}>` }, msg)); lastMailError = null; return true; }
+  catch (e) { console.error('Mail error:', e.message); lastMailError = mailErrorHint(e); return false; }
 }
 function cpName(row) { return row.counterparty_name || (row.data && row.data.name) || 'the counterparty'; }
 
@@ -930,7 +960,7 @@ app.post('/api/agreements/:id/request-signature', requireDb, auth.requireAuth, a
         + coverHtml(summary) + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Review & sign →')),
     });
     res.json({ ok: true, status: 'pending_signature', status_updated_at: up.rows[0].status_updated_at,
-      signature_requested_at: up.rows[0].signature_requested_at, notified });
+      signature_requested_at: up.rows[0].signature_requested_at, notified, mailReason: notified ? null : lastMailError });
   } catch (err) {
     console.error('Request signature error:', err.message);
     res.status(500).json({ error: 'Could not request the signature' });

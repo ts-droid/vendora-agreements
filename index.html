@@ -24665,8 +24665,9 @@ function proceedInvite(d, invEmail, invName, btns) {
   .then(function(result){
     if (timedOut) return;
     clearTimeout(timer);
-    showResult(result.inviteUrl, result.emailResult.sent !== false,
-               result.emailResult.reason || "SMTP not configured.");
+    // Only a definite `sent: true` counts as delivered — a server error must never read as success.
+    showResult(result.inviteUrl, result.emailResult.sent === true,
+               result.emailResult.reason || result.emailResult.error || "Email could not be sent.");
   })
   .catch(function(e){
     if (timedOut) return;
@@ -25611,7 +25612,8 @@ function renderGuideView(){
   var h = "<div class='card'><h2 style='display:flex;align-items:center;gap:12px;flex-wrap:wrap'>How to use Vendora Agreements"
     + "<button onclick='openOnboarding(false)' style='font-size:12px;font-weight:500;padding:5px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer'>&#9654; Replay the walkthrough</button></h2>"
     + "<div class='desc'>Create an agreement, let the customer fill in their details, negotiate, get it signed by "+gtx("{CEO}")+" and send it to the customer.</div>"
-    + "<div class='gd-body'><ul>"+GUIDE.start.map(function(x){ return "<li>"+gtx(x)+"</li>"; }).join("")+"</ul></div></div>";
+    + "<div class='gd-body'><ul>"+GUIDE.start.map(function(x){ return "<li>"+gtx(x)+"</li>"; }).join("")+"</ul></div>"
+    + (window._isAdmin ? adminToolsHtml() : "") + "</div>";
   h += "<div class='card'><h2>The flow, step by step</h2>" + guideStrip(null) + "<div class='gd-steps'>"
     + GUIDE.steps.map(function(s,i){
         return "<div class='gd-step'><h3><span class='gd-num'>"+(i+1)+"</span>"+gtx(s.t)+"</h3><div class='gd-body'>"+gtx(s.b)+"</div>"
@@ -25625,6 +25627,23 @@ function renderGuideView(){
     + GUIDE.tips.map(function(t){ return "<li><strong>"+gtx(t[0])+".</strong> "+gtx(t[1])+"</li>"; }).join("")
     + "</ul><p style='margin-top:12px;color:var(--muted)'>"+GUIDE.contact+"</p></div></div>";
   el.innerHTML = h;
+}
+// Admin-only block in the Guide: check that outgoing email actually works.
+function adminToolsHtml(){
+  return "<div style='border-top:1px solid var(--border);margin-top:16px;padding-top:12px'>"
+    + "<div style='font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px'>Admin · email delivery</div>"
+    + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+    + "<button id='mailTestBtn' onclick='adminMailTest()' style='font-size:12px;padding:6px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer'>&#9993; Send me a test email</button>"
+    + "<span id='mailTestMsg' style='font-size:12px;color:var(--muted)'>Invites, reminders and signature requests all go through the same mailbox. If this fails, so do they.</span></div></div>";
+}
+function adminMailTest(){
+  var b=document.getElementById("mailTestBtn"), m=document.getElementById("mailTestMsg");
+  b.disabled=true; m.style.color="var(--muted)"; m.textContent="Sending…";
+  fetch("/api/admin/mail-test",{method:"POST"}).then(function(r){ return r.json(); }).then(function(j){
+    if (j.ok){ m.style.color="#1e7e34"; m.textContent="Sent to "+j.to+" via "+j.via+" — check your inbox (and spam)."; }
+    else { m.style.color="#c0392b"; m.textContent=(j.reason||"Failed")+(j.detail?" — "+j.detail:""); }
+  }).catch(function(){ m.style.color="#c0392b"; m.textContent="Network error"; })
+    .finally(function(){ b.disabled=false; });
 }
 // Status labels in the guide use the same coloured badges as the archive.
 function statusBadgeByLabel(label){
@@ -26050,7 +26069,7 @@ function requestCeoSignature(id){
       sigPost("/api/agreements/"+id+"/request-signature", {summary:summary}).then(function(x){
         m.style.color="#1e7e34";
         m.textContent = x.notified ? "Sent ✓ — "+window._signerName+" has been notified by email."
-          : "Status set to “Awaiting CEO signature”, but the email could not be sent (email not configured) — let "+firstName(window._signerName)+" know.";
+          : "Status set to “Awaiting CEO signature”, but the email could not be sent — let "+firstName(window._signerName)+" know. "+(x.mailReason||"");
         b.style.display="none";
         refreshEditing(id); loadArchive();
       }).catch(function(e){ b.disabled=false; m.style.color="#c0392b"; m.textContent=e.message; });
