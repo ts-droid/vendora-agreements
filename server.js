@@ -3,9 +3,11 @@ const path         = require('path');
 const crypto       = require('crypto');
 const nodemailer   = require('nodemailer');
 const cookieParser = require('cookie-parser');
-const db           = require('./db');
-const auth         = require('./auth');
-const ai           = require('./ai');
+const db               = require('./db');
+const auth             = require('./auth');
+const ai               = require('./ai');
+const agreementExport  = require('./agreement-export');
+const webhook          = require('./webhook');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -51,6 +53,7 @@ setInterval(function () {
 const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 15 min / IP
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
 const reviewLimiter = rateLimit('review', 20, 60 * 60 * 1000); // 20 contract reviews / hour / IP (each is a large model call)
+const exportLimiter = rateLimit('export', 30, 10 * 60 * 1000); // 30 exports / 10 min / IP
 
 // Escape untrusted strings before putting them in email HTML.
 function escHtml(s) {
@@ -230,11 +233,15 @@ const MAIL_NOT_CONFIGURED = 'Email is not configured on the server — set GOOGL
 
 // ── Send invite email to supplier/reseller ────────────────────────────────────
 app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
-  const { toEmail, toName, fromName, agreementType, inviteUrl, salespersonEmail } = req.body;
+  const { toEmail, toName, fromName, agreementType, inviteUrl, salespersonEmail, agreementId } = req.body;
   if (!toEmail || !inviteUrl) return res.status(400).json({ error: 'Missing fields' });
 
   const transporter = getTransporter();
   if (!transporter) {
+    publishEmailFailure('invite', 'Email is not configured on the server', {
+      agreementId: agreementId, user: req.user, type: agreementType || null,
+      contactName: toName || null, contactEmail: toEmail || null,
+    });
     return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
   }
 
@@ -300,7 +307,12 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
     res.json({ ok: true, sent: true });
   } catch (err) {
     console.error('Send invite error:', err.message);
-    res.status(502).json({ ok: false, sent: false, reason: mailErrorHint(err) });
+    const reason = mailErrorHint(err);
+    publishEmailFailure('invite', reason, {
+      agreementId: agreementId, user: req.user, type: agreementType || null,
+      contactName: toName || null, contactEmail: toEmail || null,
+    });
+    res.status(502).json({ ok: false, sent: false, reason: reason });
   }
 });
 
@@ -564,6 +576,105 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// ── Read-only export + outgoing webhook ───────────────────────────────────────
+// Both are no-ops until their env vars are set, so a deploy without the new
+// secrets behaves exactly as before (the export route answers 404).
+function requireExportConfigured(req, res, next) {
+  if (!agreementExport.exportKey()) return res.status(404).json({ error: 'Not found' });
+  next();
+}
+function requireExportAuth(req, res, next) {
+  if (agreementExport.authorized(req.get('authorization')) !== 'ok') {
+    res.set('WWW-Authenticate', 'Bearer');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+function publishAgreement(event, id, extra) {
+  extra = extra || {};
+  webhook.schedule(async function () {
+    const loaded = await agreementExport.loadById(db, id);
+    if (!loaded) return null;
+    const body = {
+      event: event,
+      occurred_at: new Date().toISOString(),
+      agreement: Object.assign({}, loaded.meta, { previous_status: extra.previous_status || null }),
+    };
+    if (extra.email_kind) body.email_kind = extra.email_kind;
+    if (extra.reminder_kind) body.reminder_kind = extra.reminder_kind;
+    if (extra.error) body.error = publicWebhookError(extra.error);
+    return body;
+  });
+}
+function publicWebhookError(s) {
+  return String(s == null ? '' : s)
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .slice(0, 300);
+}
+function publishStatusChange(id, previousStatus, nextStatus) {
+  if (!nextStatus || nextStatus === previousStatus) return;
+  publishAgreement('agreement.status_changed', id, { previous_status: previousStatus || null });
+}
+// Invite failures may not have a saved row (or the caller may not own the id they sent).
+function publishEmailFailure(kind, errorSummary, opts) {
+  opts = opts || {};
+  webhook.schedule(async function () {
+    let agreement = null;
+    const id = agreementExport.parseId(opts.agreementId);
+    if (id && db.enabled) {
+      try {
+        const loaded = await agreementExport.loadById(db, id);
+        const user = opts.user;
+        if (loaded && user && (isAdmin(user) || Number(loaded.createdBy) === Number(user.uid))) {
+          agreement = Object.assign({}, loaded.meta, { previous_status: null });
+        }
+      } catch (err) {
+        console.error('[webhook] could not load agreement ' + id + ': ' + err.message);
+      }
+    }
+    if (!agreement) {
+      agreement = agreementExport.blankMeta({
+        type: opts.type || null,
+        contact_name: opts.contactName || null,
+        contact_email: opts.contactEmail || null,
+        counterparty_name: opts.contactName || null,
+      });
+    }
+    return {
+      event: 'agreement.email_failed',
+      occurred_at: new Date().toISOString(),
+      error: publicWebhookError(errorSummary || 'Email could not be sent'),
+      email_kind: kind,
+      agreement: agreement,
+    };
+  });
+}
+
+app.get('/api/export/agreements', requireExportConfigured, exportLimiter, requireExportAuth, function (req, res, next) {
+  const parsed = agreementExport.parseFilters(req.query, STATUSES);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  req.exportFilters = parsed;
+  next();
+}, requireDb, async function (req, res) {
+  try {
+    const filters = req.exportFilters;
+    const out = await agreementExport.list(db, filters);
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Export-Truncated', out.truncated ? 'true' : 'false');
+    if (filters.format === 'csv') {
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="agreements.csv"');
+      return res.send(agreementExport.toCsv(out.agreements));
+    }
+    res.json({ agreements: out.agreements, truncated: out.truncated });
+  } catch (err) {
+    console.error('Export agreements error:', err.message);
+    res.status(500).json({ error: 'Could not export agreements' });
+  }
+});
+
 // Sign-in is Google-only (domain-restricted). Password registration/login were removed so the
 // only way into the archive is a verified @vendora.se Google account.
 
@@ -655,6 +766,7 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at`,
       [type, counterpartyName || null, counterpartyEmail || null, data, initial, req.user.uid, req.user.name || req.user.email]
     );
+    publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
     res.json({ id: r.rows[0].id, created_at: r.rows[0].created_at });
   } catch (err) {
     console.error('Save agreement error:', err.message);
@@ -676,6 +788,7 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,'invited',$5,$6,$7) RETURNING id`,
       [type, counterpartyName || null, counterpartyEmail || null, data, token, req.user.uid, req.user.name || req.user.email]
     );
+    publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
     res.json({ id: r.rows[0].id, token });
   } catch (err) {
     console.error('Create invite error:', err.message);
@@ -697,12 +810,14 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
     if (!['invited', 'submitted'].includes(cur.rows[0].status)) {
       return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
     }
-    await db.query(
+    const prevStatus = cur.rows[0].status;
+    const upd = await db.query(
       `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
          counterparty_email=COALESCE($3,counterparty_email), status_updated_at=now(), updated_at=now()
          WHERE id=$4 AND status IN ('invited','submitted')`,
       [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
     );
+    if (upd.rowCount) publishStatusChange(req.params.id, prevStatus, 'submitted');
     res.json({ ok: true });
   } catch (err) {
     console.error('Submit error:', err.message);
@@ -762,6 +877,7 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
          status=COALESCE($4,status), updated_at=now() WHERE id=$5 RETURNING id, updated_at`,
       [counterpartyName || null, counterpartyEmail || null, data, nextStatus, req.params.id]
     );
+    publishStatusChange(row.id, row.status, nextStatus);
     res.json({ id: r.rows[0].id, updated_at: r.rows[0].updated_at });
   } catch (err) {
     console.error('Update agreement error:', err.message);
@@ -795,6 +911,7 @@ app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, r
       return res.status(409).json({ error: 'Already signed by Vendora — withdraw (voids the signature) to move it back.' });
     }
     const r = await db.query('UPDATE agreements SET status=$1, status_updated_at=now(), updated_at=now() WHERE id=$2 RETURNING status_updated_at', [status, req.params.id]);
+    publishStatusChange(row.id, row.status, status);
     res.json({ ok: true, status, status_updated_at: r.rows[0].status_updated_at });
   } catch (err) {
     console.error('Set status error:', err.message);
@@ -828,7 +945,8 @@ app.post('/api/agreements/:id/files',
     try {
       const buf = req.body;
       if (!buf || !buf.length) return res.status(400).json({ error: 'Empty file' });
-      if (!(await loadOwned(req, res))) return;
+      const row = await loadOwned(req, res);
+      if (!row) return;
       const filename = safeFilename(decodeURIComponent(req.get('X-Filename') || 'signed-agreement'));
       const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].slice(0, 120);
       const who = req.user.name || req.user.email;
@@ -839,6 +957,7 @@ app.post('/api/agreements/:id/files',
       );
       // A countersigned upload means the deal is done.
       const up = await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id]);
+      publishStatusChange(req.params.id, row.status, 'signed');
       res.json({ file: r.rows[0], status: 'signed', status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
     } catch (err) {
       console.error('Upload file error:', err.message);
@@ -884,13 +1003,18 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
   try {
     const row = await loadOwned(req, res); if (!row) return;
     if (!row.counterparty_email) return res.status(400).json({ error: 'No counterparty email on file for this agreement.' });
+    const kind = row.status === 'invited' ? 'fill' : 'sign';
     const transporter = getTransporter();
-    if (!transporter) return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
+    if (!transporter) {
+      publishAgreement('agreement.email_failed', row.id, {
+        error: 'Email is not configured on the server', email_kind: 'reminder', reminder_kind: kind,
+      });
+      return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
+    }
 
     const TYPE = { da: 'Distributor Agreement', ra: 'Reseller Agreement', rb: 'Reseller Agreement — Simplified' };
     const typeLabel = TYPE[row.type] || 'agreement';
     const name = escHtml(row.counterparty_name || 'there');
-    const kind = row.status === 'invited' ? 'fill' : 'sign';
 
     let link = '';
     if (kind === 'fill') {
@@ -912,27 +1036,37 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
       ? `<p style="color:#333;font-size:14px">This is a friendly reminder to fill in your company details for the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. It only takes a few minutes.</p>`
       : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please sign the agreement you received and return the countersigned copy to us.</p>`;
 
-    await transporter.sendMail({
-      from:    `"Vendora Nordic AB" <${MAIL_FROM}>`,
-      to:      row.counterparty_email,
-      replyTo: 'ts@vendora.se',
-      subject: `Reminder: ${typeLabel} with Vendora Nordic AB`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
-          <div style="background:#0F2240;padding:20px 28px"><h1 style="color:#fff;font-size:18px;margin:0">Vendora Nordic AB</h1></div>
-          <div style="padding:24px 28px;border:1px solid #e0e0e0;border-top:none">
-            <p style="color:#333;font-size:14px">Hi ${name},</p>
-            ${body}
-            ${btn}
-            <p style="color:#999;font-size:12px">If you have any questions, just reply to this email or contact us at ts@vendora.se.</p>
-            <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
-            <p style="color:#999;font-size:12px">Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden</p>
-          </div>
-        </div>`,
-    });
-    const rem = await db.query('UPDATE agreements SET last_reminder_at=now() WHERE id=$1 RETURNING last_reminder_at', [req.params.id]);
-    console.log(`Reminder (${kind}) sent for agreement ${req.params.id} to ${row.counterparty_email}`);
-    res.json({ ok: true, sent: true, kind, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
+    let mailed = false;
+    try {
+      await transporter.sendMail({
+        from:    `"Vendora Nordic AB" <${MAIL_FROM}>`,
+        to:      row.counterparty_email,
+        replyTo: 'ts@vendora.se',
+        subject: `Reminder: ${typeLabel} with Vendora Nordic AB`,
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
+            <div style="background:#0F2240;padding:20px 28px"><h1 style="color:#fff;font-size:18px;margin:0">Vendora Nordic AB</h1></div>
+            <div style="padding:24px 28px;border:1px solid #e0e0e0;border-top:none">
+              <p style="color:#333;font-size:14px">Hi ${name},</p>
+              ${body}
+              ${btn}
+              <p style="color:#999;font-size:12px">If you have any questions, just reply to this email or contact us at ts@vendora.se.</p>
+              <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+              <p style="color:#999;font-size:12px">Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden</p>
+            </div>
+          </div>`,
+      });
+      mailed = true;
+      const rem = await db.query('UPDATE agreements SET last_reminder_at=now() WHERE id=$1 RETURNING last_reminder_at', [req.params.id]);
+      publishAgreement('agreement.reminder_sent', row.id, { email_kind: 'reminder', reminder_kind: kind });
+      console.log(`Reminder (${kind}) sent for agreement ${req.params.id} to ${row.counterparty_email}`);
+      res.json({ ok: true, sent: true, kind, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
+    } catch (err) {
+      console.error('Reminder error:', err.message);
+      if (mailed) publishAgreement('agreement.reminder_sent', row.id, { email_kind: 'reminder', reminder_kind: kind });
+      else publishAgreement('agreement.email_failed', row.id, { error: mailErrorHint(err), email_kind: 'reminder', reminder_kind: kind });
+      res.status(502).json({ error: mailErrorHint(err) });
+    }
   } catch (err) {
     console.error('Reminder error:', err.message);
     res.status(502).json({ error: mailErrorHint(err) });
@@ -1008,6 +1142,7 @@ app.post('/api/agreements/:id/request-signature', requireDb, auth.requireAuth, a
          data = data - '_vendoraSignature'
        WHERE id=$3 RETURNING status_updated_at, signature_requested_at`,
       [req.user.email, who, req.params.id]);
+    publishStatusChange(row.id, row.status, 'pending_signature');
     const type = TYPE_LABEL[row.type] || 'Agreement';
     const notified = await sendMailSafe({
       to: SIGNER_EMAIL, replyTo: req.user.email,
@@ -1038,6 +1173,7 @@ app.post('/api/agreements/:id/sign', requireDb, auth.requireAuth, async (req, re
        WHERE id=$4 AND status='pending_signature' RETURNING vendora_signed_at, data`,
       [SIGNER_NAME, req.user.email, JSON.stringify(stamp), req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
+    publishStatusChange(row.id, row.status, 'vendora_signed');
     if (row.signature_requested_by) {
       const type = TYPE_LABEL[row.type] || 'agreement';
       await sendMailSafe({
@@ -1068,6 +1204,7 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
        WHERE id=$2 AND status='pending_signature' RETURNING status_updated_at`,
       [note, req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
+    publishStatusChange(row.id, row.status, 'generated');
     if (row.signature_requested_by) {
       const type = TYPE_LABEL[row.type] || 'agreement';
       await sendMailSafe({
@@ -1097,6 +1234,7 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
          vendora_signed_by=NULL, vendora_signed_email=NULL, vendora_signed_at=NULL, signature_note=NULL,
          data = data - '_vendoraSignature'
        WHERE id=$1 RETURNING status_updated_at`, [req.params.id]);
+    publishStatusChange(row.id, row.status, 'generated');
     // Voiding an actual signature is worth telling the signer about.
     if (row.vendora_signed_at && SIGNER_EMAIL) {
       await sendMailSafe({
@@ -1118,4 +1256,8 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
 app.get('/i/:code', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('*',        (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-app.listen(PORT, () => console.log(`Vendora Agreement Generator on port ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Vendora Agreement Generator on port ${PORT}`));
+}
+
+module.exports = app;

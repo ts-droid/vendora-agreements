@@ -21,6 +21,24 @@ async function query(text, params) {
   return pool.query(text, params);
 }
 
+// Run SELECT work in a transaction that Postgres itself will reject writes from.
+// Used by the read-only export API and by webhook metadata loads.
+async function withReadOnly(fn) {
+  if (!pool) throw new Error('Database not configured');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN READ ONLY');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e) { /* connection already doomed */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function init() {
   if (!pool) return false;
   await query(`
@@ -101,4 +119,4 @@ async function init() {
   return true;
 }
 
-module.exports = { enabled, pool, query, init };
+module.exports = { enabled, pool, query, withReadOnly, init };

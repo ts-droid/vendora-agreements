@@ -24657,7 +24657,8 @@ function proceedInvite(d, invEmail, invName, btns) {
         toEmail: invEmail, toName: invName,
         fromName: d.vname || "Vendora Nordic AB",
         salespersonEmail: d.vemail || null,
-        agreementType: d._type, inviteUrl: inviteUrl
+        agreementType: d._type, inviteUrl: inviteUrl,
+        agreementId: d._aid || null
       })
     }).then(function(r2){ return r2.json(); })
       .then(function(r2){ return { inviteUrl:inviteUrl, emailResult:r2 }; });
