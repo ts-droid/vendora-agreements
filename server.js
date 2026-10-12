@@ -402,26 +402,32 @@ async function loadPlaybook() {
 }
 
 // ── Counterparty-contract reviews ─────────────────────────────────────────────
-// A review's document + result are kept in memory for a few hours so the chat can continue from
-// it without re-uploading. Bounded by age and total size; lost on restart (the user re-runs it).
-const reviews = new Map(); // id -> {uid, type, doc, ourText, filename, review, created}
-const REVIEW_TTL_MS = 8 * 60 * 60 * 1000, REVIEW_MAX_BYTES = 64 * 1024 * 1024;
-function storeReview(entry) {
-  const now = Date.now();
-  for (const [k, v] of reviews) if (now - v.created > REVIEW_TTL_MS) reviews.delete(k);
-  const id = crypto.randomBytes(12).toString('base64url');
-  reviews.set(id, entry);
-  let bytes = 0; for (const v of reviews.values()) bytes += v.doc.data.length + v.ourText.length;
-  while (bytes > REVIEW_MAX_BYTES && reviews.size > 1) {
-    const oldest = [...reviews.entries()].sort(function (a, b) { return a[1].created - b[1].created; })[0];
-    bytes -= oldest[1].doc.data.length + oldest[1].ourText.length;
-    reviews.delete(oldest[0]);
-  }
-  return id;
+// Reviews live in the database (contract_reviews) — with the counterparty document and the
+// benchmark — so they can be reopened, continued in the chat and exported later. Visibility
+// follows the archive: owners see their own, admins see everything.
+function reviewVisible(req, row) { return !!row && (isAdmin(req.user) || row.created_by === req.user.uid); }
+async function saveReview(req, r) {
+  const docBytes = r.doc.kind === 'pdf' ? Buffer.from(r.doc.data, 'base64') : Buffer.from(r.doc.data, 'utf8');
+  const dealBreakers = r.review.findings.filter(function (f) { return f.classification === 'deal_breaker'; }).length;
+  const ins = await db.query(
+    `INSERT INTO contract_reviews (name, type, filename, doc_kind, doc, our_text, review, verdict, findings_count, deal_breakers,
+                                   counterparty_name, agreement_id, created_by, created_by_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, created_at`,
+    [r.name, r.type, r.filename, r.doc.kind, docBytes, r.ourText, JSON.stringify(r.review), r.review.overall_verdict || null,
+     r.review.findings.length, dealBreakers, r.counterpartyName || null, r.agreementId || null, req.user.uid, req.user.name || req.user.email]
+  );
+  return ins.rows[0];
 }
-function ownedReview(req, id) {
-  const r = id ? reviews.get(String(id)) : null;
-  return r && r.uid === req.user.uid && Date.now() - r.created <= REVIEW_TTL_MS ? r : null;
+// The full review for the chat (document included), owner or admin only.
+async function ownedReview(req, id) {
+  if (!/^\d+$/.test(String(id))) return null;
+  const r = await db.query('SELECT * FROM contract_reviews WHERE id=$1', [id]);
+  const row = r.rows[0];
+  if (!reviewVisible(req, row)) return null;
+  return {
+    id: row.id, type: row.type, filename: row.filename, name: row.name, ourText: row.our_text, review: row.review,
+    doc: { kind: row.doc_kind, filename: row.filename, data: row.doc_kind === 'pdf' ? row.doc.toString('base64') : row.doc.toString('utf8') },
+  };
 }
 
 // A review can take several minutes, so it runs as a background job: POST starts it and returns a
@@ -432,7 +438,7 @@ function sweepJobs() { const now = Date.now(); for (const [k, v] of reviewJobs) 
 
 // Start a review of an uploaded counterparty contract against Vendora's agreement. The body is JSON
 // sent as text/plain so it bypasses the global 2 MB JSON cap (a PDF arrives base64-encoded).
-app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: '25mb' }), async (req, res) => {
+app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: '25mb' }), async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   let body;
   try { body = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'Malformed request' }); }
@@ -449,6 +455,15 @@ app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type:
     if (v.uid === req.user.uid && v.status === 'running') return res.status(429).json({ error: 'A review is already running — wait for it to finish.' });
   }
   const filename = safeFilename(doc.filename || 'contract');
+  // Name given at run time, or a sensible default; the counterparty from the form; and the archive
+  // record it was run from, if any (only if the user may see that record).
+  const name = String(body.name || '').trim().slice(0, 120) || (filename.replace(/\.[^.]+$/, '') + ' — ' + new Date().toISOString().slice(0, 10));
+  const counterpartyName = String(body.counterpartyName || '').trim().slice(0, 200) || null;
+  let agreementId = null;
+  if (body.agreementId && /^\d+$/.test(String(body.agreementId))) {
+    const a = await db.query('SELECT id, created_by FROM agreements WHERE id=$1', [body.agreementId]);
+    if (a.rows[0] && (isAdmin(req.user) || a.rows[0].created_by === req.user.uid)) agreementId = a.rows[0].id;
+  }
   const jobId = crypto.randomBytes(12).toString('base64url');
   const job = { uid: req.user.uid, status: 'running', started: Date.now(), finished: null, result: null, error: null };
   reviewJobs.set(jobId, job);
@@ -458,8 +473,14 @@ app.post('/api/ai/review', auth.requireAuth, reviewLimiter, express.text({ type:
     try {
       const playbook = await loadPlaybook();
       const review = await ai.reviewContract({ type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, agreement: agreement || null, playbook });
-      const reviewId = storeReview({ uid: req.user.uid, type, doc: { kind: doc.kind, data: doc.data, filename }, ourText, filename, review, created: Date.now() });
-      job.result = { reviewId, review }; job.status = 'done';
+      // Save to the archive. A save failure must not throw away a multi-minute review: the result is
+      // still returned (without an id, so it can't be continued in the chat) and flagged.
+      let saved = null, saveError = null;
+      try { saved = await saveReview(req, { name, type, filename, doc: { kind: doc.kind, data: doc.data }, ourText, review, counterpartyName, agreementId }); }
+      catch (e) { saveError = e.message; console.error('Save review error:', e.message); }
+      job.result = { reviewId: saved ? saved.id : null, name, review, created_at: saved ? saved.created_at : new Date().toISOString(),
+        saveError: saveError ? 'The review could not be saved to the archive.' : null };
+      job.status = 'done';
       console.log(`Contract review (${type}, ${doc.kind}, ${filename}) by ${req.user.email}: ${review.findings.length} findings, verdict ${review.overall_verdict}, ${Math.round((Date.now() - job.started) / 1000)}s`);
     } catch (err) {
       console.error('AI review error:', err.message);
@@ -480,8 +501,50 @@ app.get('/api/ai/review/:jobId', auth.requireAuth, (req, res) => {
   res.json(out);
 });
 
+// ── Saved contract reviews ─────────────────────────────────────────────────────
+app.get('/api/reviews', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, name, type, filename, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
+       FROM contract_reviews WHERE $1::boolean OR created_by = $2 ORDER BY created_at DESC LIMIT 300`,
+      [isAdmin(req.user), req.user.uid]);
+    res.json({ reviews: r.rows });
+  } catch (err) { console.error('List reviews error:', err.message); res.status(500).json({ error: 'Could not list the reviews' }); }
+});
+// One review with its findings (never the document bytes — the chat fetches those server-side).
+app.get('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const r = await db.query(
+      `SELECT id, name, type, filename, doc_kind, review, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
+       FROM contract_reviews WHERE id=$1`, [req.params.id]);
+    if (!reviewVisible(req, r.rows[0])) return res.status(404).json({ error: 'Not found' });
+    res.json({ review: r.rows[0] });
+  } catch (err) { console.error('Get review error:', err.message); res.status(500).json({ error: 'Could not load the review' }); }
+});
+app.put('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const name = String((req.body || {}).name || '').trim().slice(0, 120);
+    if (!name) return res.status(400).json({ error: 'A name is required' });
+    if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const cur = await db.query('SELECT id, created_by FROM contract_reviews WHERE id=$1', [req.params.id]);
+    if (!reviewVisible(req, cur.rows[0])) return res.status(404).json({ error: 'Not found' });
+    await db.query('UPDATE contract_reviews SET name=$1 WHERE id=$2', [name, req.params.id]);
+    res.json({ ok: true, name });
+  } catch (err) { console.error('Rename review error:', err.message); res.status(500).json({ error: 'Could not rename the review' }); }
+});
+app.delete('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const cur = await db.query('SELECT id, created_by FROM contract_reviews WHERE id=$1', [req.params.id]);
+    if (!reviewVisible(req, cur.rows[0])) return res.status(404).json({ error: 'Not found' });
+    await db.query('DELETE FROM contract_reviews WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { console.error('Delete review error:', err.message); res.status(500).json({ error: 'Could not delete the review' }); }
+});
+
 // AI contract-lawyer chat (auth required). Takes the agreement context + the conversation so far,
-// optionally continuing from a contract review (reviewId).
+// optionally continuing from a saved contract review (reviewId).
 app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   try {
@@ -489,8 +552,8 @@ app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
     if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
     let review = null;
     if (reviewId) {
-      review = ownedReview(req, reviewId);
-      if (!review) return res.status(404).json({ error: 'That contract review has expired — run the review again to continue.' });
+      review = db.enabled ? await ownedReview(req, reviewId) : null;
+      if (!review) return res.status(404).json({ error: 'That contract review is no longer available — open it from the archive or run it again.' });
     }
     const playbook = await loadPlaybook();
     const out = await ai.chat(agreement || null, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null, review });
