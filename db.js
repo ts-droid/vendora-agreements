@@ -116,6 +116,30 @@ async function init() {
     );
   `);
   await query(`CREATE INDEX IF NOT EXISTS agreement_files_agreement_idx ON agreement_files (agreement_id);`);
+  // Contract reviews: a counterparty's own contract compared with Vendora's agreement. Kept with
+  // the document and benchmark so a review can be reopened, continued in the lawyer chat and
+  // exported later.
+  await query(`
+    CREATE TABLE IF NOT EXISTS contract_reviews (
+      id                SERIAL PRIMARY KEY,
+      name              TEXT NOT NULL,
+      type              TEXT NOT NULL,
+      filename          TEXT NOT NULL,
+      doc_kind          TEXT NOT NULL,
+      doc               BYTEA NOT NULL,
+      our_text          TEXT NOT NULL,
+      review            JSONB NOT NULL,
+      verdict           TEXT,
+      findings_count    INTEGER NOT NULL DEFAULT 0,
+      deal_breakers     INTEGER NOT NULL DEFAULT 0,
+      counterparty_name TEXT,
+      agreement_id      INTEGER REFERENCES agreements(id) ON DELETE SET NULL,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_by_name   TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS contract_reviews_created_idx ON contract_reviews (created_at DESC);`);
   return true;
 }
 
