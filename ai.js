@@ -1,6 +1,7 @@
 // AI contract-lawyer layer. Optional: enabled only when ANTHROPIC_API_KEY is set, so the app
 // degrades gracefully without it. Calls Claude server-side so the key never reaches the browser.
 const Anthropic = require('@anthropic-ai/sdk');
+const lawyerChanges = require('./lawyer-changes');
 
 const enabled = !!process.env.ANTHROPIC_API_KEY;
 const client = enabled ? new Anthropic() : null; // reads ANTHROPIC_API_KEY from env
@@ -217,27 +218,24 @@ function benchmarkBlock(ourText) {
   return { type: 'text', text: 'VENDORA\'S OWN AGREEMENT FOR THIS DEAL — the benchmark (Vendora\'s standard text with this deal\'s terms filled in):\n<vendora_agreement>\n' + ourText + '\n</vendora_agreement>' };
 }
 
-// Editable clauses block + the tool the model uses to propose a redraft of one.
-function clausesBlock(clauses) {
-  if (!Array.isArray(clauses) || !clauses.length) return '';
-  return 'EDITABLE CLAUSES — you may propose a redraft of any of these via the propose_clause_change tool, referencing the exact id. Do NOT invent ids. When the user asks to reword/redraft/soften/strengthen a clause, or when you recommend concrete wording, call the tool (you can call it more than once). Always also explain your change in text.\n\n'
-    + clauses.map(function (c) { return '[' + c.id + '] ' + (c.label || '') + ':\n"' + c.text + '"'; }).join('\n\n');
+// Flat tool payload, including a legacy single-clause call, as a list of change objects.
+function changesFromTool(input) {
+  if (!input || typeof input !== 'object') return [];
+  if (Array.isArray(input.changes)) return input.changes;
+  if (input.clause_id || input.clauseId) {
+    return [{
+      target_kind: 'clause',
+      target_id: input.clause_id || input.clauseId,
+      op: 'replace',
+      old_text: input.old_text || input.oldText || '',
+      new_text: input.new_text || input.newText || '',
+      label: input.label || '',
+      rationale: input.rationale || '',
+      anchor: input.anchor || '',
+    }];
+  }
+  return [];
 }
-const CLAUSE_TOOL = {
-  name: 'propose_clause_change',
-  description: 'Propose a redrafted version of a specific editable clause. Use the exact clause id from the editable-clauses list. new_text is the full replacement text of that clause (plain prose, no numbering).',
-  input_schema: {
-    type: 'object',
-    properties: {
-      clause_id: { type: 'string', description: 'Exact id from the editable-clauses list' },
-      new_text: { type: 'string', description: 'Full replacement text for the clause' },
-      rationale: { type: 'string', description: 'One or two sentences on why, from Vendora\'s side' },
-    },
-    required: ['clause_id', 'new_text', 'rationale'],
-    additionalProperties: false,
-  },
-  strict: true,
-};
 
 // messages: [{role, content}]
 // opts: {playbook:{guidance,notes}, clauses:[{id,label,text}],
@@ -257,8 +255,7 @@ async function chat(agreement, messages, opts) {
     system.push({ type: 'text', text: 'YOUR EARLIER REVIEW OF THE ATTACHED COUNTERPARTY DOCUMENT "' + String(review.filename || '').slice(0, 120) + '" (your own findings — build on them; the user may ask you to explain a finding, draft or tighten the counter-wording, or write the cover note to the counterparty):\n' + JSON.stringify(review.review) });
   }
   system.push(agreementBlock(agreement));
-  const editable = clausesBlock(opts.clauses);
-  if (editable) system.push({ type: 'text', text: editable });
+  system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, agreement, opts.clauses) });
 
   const convo = (messages || []).slice(-20).map(function (m) {
     return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') };
@@ -268,11 +265,11 @@ async function chat(agreement, messages, opts) {
     // Consecutive user messages are merged by the API, so no synthetic assistant turn is needed.
     convo.unshift({ role: 'user', content: [documentBlock(review.doc), { type: 'text', text: 'Counterparty document attached for reference.' }] });
   }
-  const tools = editable ? [CLAUSE_TOOL] : undefined;
+  const tools = [lawyerChanges.PROPOSE_CHANGES_TOOL];
   const proposals = [];
   const textParts = [];
 
-  // Manual tool loop: capture clause proposals, feed a lightweight tool_result back, continue.
+  // Manual tool loop: validate each proposed change, keep only the ones that match the schema.
   for (let i = 0; i < 4; i++) {
     const resp = await createMessage({
       model: MODEL, max_tokens: 16000,
@@ -287,8 +284,13 @@ async function chat(agreement, messages, opts) {
     convo.push({
       role: 'user',
       content: toolUses.map(function (t) {
-        proposals.push({ clauseId: t.input.clause_id, newText: t.input.new_text, rationale: t.input.rationale });
-        return { type: 'tool_result', tool_use_id: t.id, content: 'Recorded. It will be shown to the user as a redline for approval.' };
+        const checked = lawyerChanges.validateProposals(changesFromTool(t.input));
+        checked.proposals.forEach(function (p) { proposals.push(p); });
+        const note = checked.rejected.length
+          ? 'Rejected (not shown to the user — fix these and call propose_changes again with only the fixes): '
+            + checked.rejected.map(function (r) { return 'item ' + r.index + ': ' + r.errors.join('; '); }).join(' | ')
+          : 'Recorded. Each change is shown to the user as a redline they can approve. Do not ask them to paste it.';
+        return { type: 'tool_result', tool_use_id: t.id, content: note };
       }),
     });
   }

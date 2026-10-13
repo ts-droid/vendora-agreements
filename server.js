@@ -1316,6 +1316,13 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
 });
 
 // ── Static routes ─────────────────────────────────────────────────────────────
+// The lawyer helper is the one script the page loads from disk. It must be registered
+// before the HTML catch-all, and it is not express.static of the project root.
+app.get('/lawyer-changes.js', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'lawyer-changes.js'));
+});
 app.get('/i/:code', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('*',        (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 

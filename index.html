@@ -23689,6 +23689,7 @@ if(typeof docx!=='undefined'&&typeof window!=='undefined')window.docx=docx;
 //# sourceMappingURL=FileSaver.min.js.map
 if(typeof saveAs!=='undefined'&&typeof window!=='undefined')window.saveAs=saveAs;
 </script>
+<script src="/lawyer-changes.js"></script>
 <script>
 var activeTab = 0;
 
@@ -23919,9 +23920,8 @@ function generate() {
     data = cloneData(window._editing.base); data._type = type;
   } else {
     data = readForm(type);
-    data.clauseOverrides = window._clauseOverrides
-      || (window._editing && window._editing.base && window._editing.base.clauseOverrides)
-      || {};
+    data = lawyerCarry(data);
+    data._type = type;
   }
   fn(data).then(function(result) {
     window.saveAs(result.blob, result.filename);
@@ -24012,8 +24012,10 @@ function docxHelpers() {
     });
   }
 
-  function makeDoc(children){
+  function makeDoc(children, opts){
+    opts = opts || {};
     return new d.Document({
+      features: opts.track ? { trackRevisions: true } : undefined,
       numbering:{config:[{reference:"bul",levels:[{level:0,format:d.LevelFormat.BULLET,text:"•",alignment:d.AlignmentType.LEFT,style:{paragraph:{indent:{left:680,hanging:340}}}}]}]},
       styles:{default:{document:{run:{font:"Calibri",size:20}}},
         paragraphStyles:[
@@ -24065,11 +24067,161 @@ function getEditableClauses(type, data){
   return list.map(function(c){ return { id:c.id, label:c.label, text:(ov[c.id]!=null&&String(ov[c.id]).trim())?String(ov[c.id]):c.text }; });
 }
 
+// Lawyer edits live on the agreement (clauses, annexes, cover-sheet fields, redlines).
+// The document builders call these so an approved change is in the .docx, with w:ins/w:del when tracked.
+function beginLawyerDoc(data){
+  window._lawyerDocData = data || {};
+  window._renderedClauseIds = {};
+  window._renderedAnnexIds = {};
+  window._revSeq = 1;
+}
+function lawyerCarry(data){
+  data = data || {};
+  var src = window._lawyerState || (window._editing && window._editing.base) || {};
+  ["clauseOverrides","clauseInserts","clauseDeletes","annexOverrides","annexDeletes","redlines"].forEach(function(k){
+    if (data[k] == null && src[k] != null) data[k] = src[k];
+  });
+  if (!data.clauseOverrides) data.clauseOverrides = window._clauseOverrides || {};
+  return data;
+}
+function lawyerPlain(kind, id, fallback){
+  var data = window._lawyerDocData || {};
+  var LC = window.LawyerChanges;
+  if (kind === "clause") {
+    if (LC && LC.isDeleted(data, "clause", id)) return "";
+    var ov = data.clauseOverrides && data.clauseOverrides[id];
+    if (ov != null && String(ov).trim()) return String(ov);
+    var ins = (data.clauseInserts || []).filter(function(c){ return c && c.id === id; });
+    if (ins.length && String(ins[ins.length - 1].text || "").trim()) return String(ins[ins.length - 1].text);
+    return fallback == null ? "" : String(fallback);
+  }
+  if (LC && LC.isDeleted(data, "annex", id)) return "";
+  var av = data.annexOverrides && data.annexOverrides[id];
+  if (av != null && String(av).trim()) return String(av);
+  return fallback == null ? "" : String(fallback);
+}
+function trackedParagraph(h, oldText, newText, prefixItems, parOpts){
+  var d = window.docx;
+  var runs = [];
+  (prefixItems || []).forEach(function(p){
+    if (p == null) return;
+    if (typeof p === "string") runs.push(h.t(p, {bold:true}));
+    else runs.push(h.t(p.t, {bold:!!p.b, italics:!!p.i, size:p.sz || 20, color:p.c}));
+  });
+  var segs = (window.LawyerChanges && LawyerChanges.redlineSegments)
+    ? LawyerChanges.redlineSegments(oldText || "", newText || "")
+    : [{type:"del", text:oldText || ""}, {type:"ins", text:newText || ""}];
+  var author = "Vendora Contract Lawyer";
+  var date = "2026-10-13T00:00:00Z";
+  segs.forEach(function(s){
+    if (!s.text) return;
+    var id = window._revSeq++;
+    if (s.type === "eq") runs.push(h.t(s.text));
+    else if (s.type === "del") runs.push(new d.DeletedTextRun({ id:id, author:author, date:date, text:s.text, font:"Calibri", size:20 }));
+    else runs.push(new d.InsertedTextRun({ id:id, author:author, date:date, text:s.text, font:"Calibri", size:20 }));
+  });
+  return new d.Paragraph(Object.assign({ spacing:{before:60, after:100}, children: runs.length ? runs : [h.t("")] }, parOpts || {}));
+}
+function clauseNode(h, id, fallback, prefixItems, parOpts){
+  window._renderedClauseIds = window._renderedClauseIds || {};
+  window._renderedClauseIds[id] = 1;
+  var data = window._lawyerDocData || {};
+  var LC = window.LawyerChanges;
+  var deleted = LC && LC.isDeleted(data, "clause", id);
+  var rl = (data._trackChanges && LC) ? LC.redlineFor(data, "clause", id) : null;
+  if (deleted) {
+    if (!(rl && data._trackChanges)) return null;
+    return trackedParagraph(h, (rl && rl.oldText) || fallback || "", "", prefixItems, parOpts);
+  }
+  var text = lawyerPlain("clause", id, fallback);
+  if (rl && data._trackChanges && (rl.op === "replace" || rl.op === "insert")) {
+    var oldT = (rl.oldText && String(rl.oldText).trim()) ? rl.oldText : (rl.op === "insert" ? "" : (fallback || ""));
+    return trackedParagraph(h, oldT, rl.newText || text, prefixItems, parOpts);
+  }
+  var items = (prefixItems || []).slice();
+  items.push(text);
+  return h.par(items, parOpts);
+}
+function flushAnchored(h, anchorId){
+  var LC = window.LawyerChanges;
+  if (!LC) return [];
+  var data = window._lawyerDocData || {};
+  var out = [];
+  (data.clauseInserts || []).forEach(function(c){
+    if (!c || (window._renderedClauseIds || {})[c.id]) return;
+    if ((c.anchor || "") !== anchorId) return;
+    window._renderedClauseIds[c.id] = 1;
+    var prefix = [{t:(c.label || c.id) + ". ", b:true}];
+    var rl = data._trackChanges ? LC.redlineFor(data, "clause", c.id) : null;
+    if (rl && data._trackChanges) out.push(trackedParagraph(h, rl.oldText || "", rl.newText || c.text || "", prefix));
+    else out.push(h.par(prefix.concat([c.text || ""])));
+  });
+  return out;
+}
+function annexNode(h, id, fallback){
+  var data = window._lawyerDocData || {};
+  var LC = window.LawyerChanges;
+  var has = data.annexOverrides && String(data.annexOverrides[id] || "").trim();
+  var deleted = LC && LC.isDeleted(data, "annex", id);
+  if (!has && !deleted) return fallback == null ? null : h.par(fallback);
+  window._renderedAnnexIds = window._renderedAnnexIds || {};
+  window._renderedAnnexIds[id] = 1;
+  var rl = (data._trackChanges && LC) ? LC.redlineFor(data, "annex", id) : null;
+  var text = deleted ? "" : String(data.annexOverrides[id]);
+  if (rl && data._trackChanges) return trackedParagraph(h, rl.oldText || fallback || "", deleted ? "" : (rl.newText || text));
+  if (deleted) return null;
+  return h.par(text);
+}
+function lawyerBodyExtras(h){
+  var LC = window.LawyerChanges;
+  if (!LC) return [];
+  var data = window._lawyerDocData || {};
+  var pending = LC.pendingBody(data, Object.keys(window._renderedClauseIds || {}));
+  if (!pending.length) return [];
+  var out = [h.h2("Additional clauses")];
+  pending.forEach(function(p){
+    var prefix = [{t:(p.label || p.id) + ". ", b:true}];
+    if (data._trackChanges) out.push(trackedParagraph(h, p.oldText, p.op === "delete" ? "" : (p.newText || p.text || ""), prefix));
+    else if (p.op === "delete") out.push(h.par([{t:(p.label || p.id) + " — deleted.", i:true}]));
+    else out.push(h.par(prefix.concat([p.text || p.newText || ""])));
+  });
+  return out;
+}
+function lawyerAnnexPages(h){
+  var LC = window.LawyerChanges;
+  if (!LC) return [];
+  var data = window._lawyerDocData || {};
+  var pending = LC.pendingAnnexes(data, Object.keys(window._renderedAnnexIds || {}));
+  var out = [];
+  pending.forEach(function(p){
+    out.push(h.pgBrk());
+    out.push(h.appHdr("APPENDIX " + p.id, h.NAVY));
+    out.push(h.sp());
+    if (data._trackChanges) out.push(trackedParagraph(h, p.oldText, p.newText));
+    else if (p.op === "delete") out.push(h.par("This annex is deleted."));
+    else out.push(h.par(p.text || p.newText || ""));
+  });
+  return out;
+}
+function finishLawyerDoc(h, children, data){
+  lawyerAnnexPages(h).forEach(function(n){ children.push(n); });
+  return h.makeDoc(children.filter(Boolean), { track: !!(data && data._trackChanges) });
+}
+function gtcWarrantyText(fallback){
+  var data = window._lawyerDocData || {};
+  var ov = data.annexOverrides && data.annexOverrides["3"];
+  if (ov == null || !String(ov).trim()) return fallback;
+  window._renderedAnnexIds = window._renderedAnnexIds || {};
+  window._renderedAnnexIds["3"] = 1;
+  return String(ov);
+}
+
 async function buildDA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readDAForm();
   if (!data.name) { alert("Please enter the Supplier name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
+  beginLawyerDoc(data);
   if (!data.contacts) data.contacts = {};
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = overrideData ? !!overrideData.targetsOn : (document.getElementById("da_targets_on") && document.getElementById("da_targets_on").checked);
@@ -24132,7 +24284,7 @@ async function buildDA(overrideData) {
     h.par("If another Incoterm is expressly agreed in writing between the Parties for a particular shipment or Product line, the allocation of costs and risks shall follow that agreed Incoterm (Incoterms 2020), and the Prices shall be adjusted accordingly."),
     h.par("The Supplier shall maintain up-to-date Product Prices and shall notify the Distributor of any price change in accordance with this section. The Prices do not include Market Development Funds (MDF) support, Return Merchandise Authorization (RMA) support, or any other backend rebate as stated in Appendix 1."),
     h.h3("Payment"),
-    h.par("The Distributor shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date, or such other payment term as set out in Appendix 1. Invoices shall be sent electronically to "+data.invmail+" only after dispatch."),
+    clauseNode(h, "da.s5.payment", "The Distributor shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date, or such other payment term as set out in Appendix 1. Invoices shall be sent electronically to "+data.invmail+" only after dispatch."),
     h.h3("Price Protection"),
     h.par("If the Supplier reduces its transfer price or the MSRP for any Product by more than five (5) per cent (other than by promotional or temporary discounts), the Supplier shall issue a credit equal to the price difference for all units of that Product remaining in the Distributor\u2019s inventory as of the effective date of the reduction. For the purposes of this clause, \u201cinventory\u201d includes all units purchased within the preceding one hundred and eighty (180) calendar days that have not yet been invoiced to a customer. The Supplier shall provide no less than thirty (30) days\u2019 written advance notice before any permanent price reduction takes effect. If the Supplier implements a price reduction without providing the required notice, the Distributor shall be entitled to apply the credit retroactively."),
     h.h3("Price Increases"),
@@ -24140,7 +24292,7 @@ async function buildDA(overrideData) {
     // §6
     h.h1("6   Product Information and Warranty"),
     h.h3("Warranty"),
-    h.par("The Supplier warrants that the Products delivered under this Agreement are free from defects in materials and workmanship and conform to their specifications for a period of twenty-four (24) months from the date of delivery to the Distributor."),
+    clauseNode(h, "da.s6.warranty", "The Supplier warrants that the Products delivered under this Agreement are free from defects in materials and workmanship and conform to their specifications for a period of twenty-four (24) months from the date of delivery to the Distributor."),
     h.h3("Certifications and Compliance Documentation"),
     h.par("The Supplier shall provide all required certifications, compliance documentation, CE markings, RoHS, REACH declarations, and all documentation necessary for the lawful sale and distribution of the Products in each country within the Territory, kept up-to-date throughout the term."),
     h.h3("Product Data (PIM)"),
@@ -24240,6 +24392,7 @@ async function buildDA(overrideData) {
     h.h1("20   Governing Law",{keepNext:true}),
     h.par("This Agreement is governed by and construed in accordance with Swedish law, without regard to its conflict of law provisions. Disputes shall first be resolved through good-faith negotiations. If not resolved within thirty (30) days of a written request, the Parties agree to submit to SCC mediation, unless one Party objects. If mediation fails, the dispute shall be finally settled by SCC arbitration. Rules for Expedited Arbitrations apply unless the SCC determines otherwise. Seat: Malm\u00f6. Language: English.",{keepNext:true}),
     h.sp(),h.sp(),
+    ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE SUPPLIER]","[Authorised signatory / name]",h.LITE,h.GREY,vendoraStamp(data)),
     h.pgBrk(),
     // Appendix 1
@@ -24302,7 +24455,7 @@ async function buildDA(overrideData) {
   if (data._isPreview) {
     children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
   }
-  var doc = h.makeDoc(children);
+  var doc = finishLawyerDoc(h, children, data);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Supplier").replace(/[^\w]/g,"_").replace(/_+/g,"_");
   window._lastBuild = {type:"da", data:data};
@@ -24315,6 +24468,7 @@ async function buildRA(overrideData) {
   var data = overrideData || readRAForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
+  beginLawyerDoc(data);
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var targetsOn = !!data.targetsOn;
   var TW=[1500,2535,2535,2936], MW=[3000,3253,3253];
@@ -24350,60 +24504,62 @@ async function buildRA(overrideData) {
     h.par("This Agreement consists of a main agreement body and three (3) appendices. In the event of any inconsistency, the following order of precedence applies: (1) main agreement body; (2) Appendix 1; (3) Appendix 2; (4) Appendix 3; (5) any order placed under the Agreement."),
     // §3
     h.h1("3   Appointment and Territory"),
-    h.par("The Supplier hereby grants to the Reseller a "+data.excl+" right to market and sell the Products within the Territory during the term of this Agreement. The Supplier has the right to amend its offered product range and/or product specifications at any time and at its sole discretion. This Agreement does not restrict the Supplier from appointing other resellers within the Territory or from selling the Products directly. Within the EU/EEA, passive sales (unsolicited orders) cannot be restricted regardless of territory."),
-    h.par([{t:"No sub-reselling. ",b:true},cl("ra.no_subreselling")]),
+    clauseNode(h, "ra.s3.appointment", "The Supplier hereby grants to the Reseller a "+data.excl+" right to market and sell the Products within the Territory during the term of this Agreement. The Supplier has the right to amend its offered product range and/or product specifications at any time and at its sole discretion. This Agreement does not restrict the Supplier from appointing other resellers within the Territory or from selling the Products directly. Within the EU/EEA, passive sales (unsolicited orders) cannot be restricted regardless of territory."),
+    clauseNode(h, "ra.no_subreselling", cl("ra.no_subreselling"), [{t:"No sub-reselling. ",b:true}]),
     h.par("Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products."),
-    h.par(cl("ra.marketplaces")),
+    clauseNode(h, "ra.marketplaces", cl("ra.marketplaces")),
     // §4
     h.h1("4   Orders and Payment"),
     h.h3("Orders"),
-    h.par("Orders shall be placed through the Supplier\u2019s designated ordering channel and are subject to acceptance by the Supplier. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence beyond this period constitutes acceptance."),
+    clauseNode(h, "ra.s4.orders", "Orders shall be placed through the Supplier\u2019s designated ordering channel and are subject to acceptance by the Supplier. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence beyond this period constitutes acceptance."),
+    ...flushAnchored(h, "ra.s4.orders"),
     h.h3("Prices"),
-    h.par("Prices are as stated in the Supplier\u2019s current price list or web portal, excluding any applicable value added tax or sales tax. It is the Reseller\u2019s responsibility to ensure it uses the Supplier\u2019s current prices at all times. Current prices are made available (i) on the Supplier\u2019s website, and (ii) via a downloadable price file (XML or CSV) which the Supplier makes available for continuous retrieval. The Reseller shall not rely on any previously downloaded, cached, or historical price data. Shipping costs shall be governed by the shipping terms in Appendix 1 and Appendix 3. The Supplier reserves the right to amend Prices at any time; price changes apply to orders placed after the date the amended price list is published and shall not apply retroactively to orders already confirmed."),
+    clauseNode(h, "ra.s4.prices", "Prices are as stated in the Supplier\u2019s current price list or web portal, excluding any applicable value added tax or sales tax. It is the Reseller\u2019s responsibility to ensure it uses the Supplier\u2019s current prices at all times. Current prices are made available (i) on the Supplier\u2019s website, and (ii) via a downloadable price file (XML or CSV) which the Supplier makes available for continuous retrieval. The Reseller shall not rely on any previously downloaded, cached, or historical price data. Shipping costs shall be governed by the shipping terms in Appendix 1 and Appendix 3. The Supplier reserves the right to amend Prices at any time; price changes apply to orders placed after the date the amended price list is published and shall not apply retroactively to orders already confirmed."),
     h.h3("Payment"),
-    h.par("The Reseller shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date. In the event of late payment, the Supplier is entitled to charge statutory interest, reminder fees, and collection costs. The Supplier also has the right to withhold further deliveries until full payment has been received."),
+    clauseNode(h, "ra.s4.payment", "The Reseller shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date. In the event of late payment, the Supplier is entitled to charge statutory interest, reminder fees, and collection costs. The Supplier also has the right to withhold further deliveries until full payment has been received."),
+    ...flushAnchored(h, "ra.s4.payment"),
     h.h3("Credit Assessment and Credit Limit"),
-    h.par("The Supplier shall determine, at its sole discretion, whether to extend credit to the Reseller and the credit limit applicable (\u201cCredit Limit\u201d). The Credit Limit shall be communicated to the Reseller in writing and may be adjusted at any time upon no less than seven (7) days\u2019 written notice, except where the Supplier has reasonable grounds to suspect the Reseller\u2019s insolvency, in which case the Supplier may reduce or withdraw the Credit Limit with immediate effect. Credit Limit: "+(data.credit||"as agreed in writing")+"."),
+    clauseNode(h, "ra.s4.credit", "The Supplier shall determine, at its sole discretion, whether to extend credit to the Reseller and the credit limit applicable (\u201cCredit Limit\u201d). The Credit Limit shall be communicated to the Reseller in writing and may be adjusted at any time upon no less than seven (7) days\u2019 written notice, except where the Supplier has reasonable grounds to suspect the Reseller\u2019s insolvency, in which case the Supplier may reduce or withdraw the Credit Limit with immediate effect. Credit Limit: "+(data.credit||"as agreed in writing")+"."),
     h.h3("Title Retention"),
-    h.par("Title to all delivered Products shall remain vested in the Supplier until full payment of the purchase price has been received. In the event of the Reseller\u2019s insolvency, the Supplier has the right to reclaim unpaid Products without delay."),
+    clauseNode(h, "ra.s4.title", "Title to all delivered Products shall remain vested in the Supplier until full payment of the purchase price has been received. In the event of the Reseller\u2019s insolvency, the Supplier has the right to reclaim unpaid Products without delay."),
     // §5
     h.h1("5   Reseller\u2019s Sales and Brand Compliance"),
     h.par("The Reseller is recommended, but not obligated, to adhere to the Suggested Retail Price (SRP) provided by the Supplier. The Reseller is free to set its own retail prices, provided that such practices comply with all applicable competition and antitrust laws."),
     h.par("The Reseller shall market and sell the Products in a professional manner consistent with the Supplier\u2019s brand guidelines. The Reseller shall not modify the Products, their packaging, or any labelling without the prior written consent of the Supplier."),
-    h.par([{t:"Warranty representations. ",b:true},"The Reseller shall not misrepresent the scope, duration, or terms of the Supplier\u2019s standard warranty to end customers. The Reseller is free to offer end customers a commercial guarantee that exceeds the Supplier\u2019s standard warranty; any such additional guarantee is the Reseller\u2019s own commercial commitment and shall be fulfilled entirely at the Reseller\u2019s cost."]),
+    clauseNode(h, "ra.s5.warranty", "The Reseller shall not misrepresent the scope, duration, or terms of the Supplier\u2019s standard warranty to end customers. The Reseller is free to offer end customers a commercial guarantee that exceeds the Supplier\u2019s standard warranty; any such additional guarantee is the Reseller\u2019s own commercial commitment and shall be fulfilled entirely at the Reseller\u2019s cost.", [{t:"Warranty representations. ",b:true}]),
     h.par([{t:"Marketing material approval. ",b:true},"Where marketing materials use the Supplier\u2019s trademarks, logos, or product claims, the Reseller shall submit such materials to the Supplier for approval prior to publication. The Supplier shall approve or provide comments within five (5) business days. If the Supplier does not respond within this period, the material shall be deemed approved for use in the Territory."]),
     // §6
     h.h1("6   Compliance with Laws"),
-    h.par("Each Party shall comply with all applicable laws, regulations, business ethics, and industry standards, including: anti-bribery and anti-corruption laws; competition and antitrust laws; consumer protection and product safety laws; customs and export control laws; and sustainability and labour laws."),
+    clauseNode(h, "ra.s6.compliance", "Each Party shall comply with all applicable laws, regulations, business ethics, and industry standards, including: anti-bribery and anti-corruption laws; competition and antitrust laws; consumer protection and product safety laws; customs and export control laws; and sustainability and labour laws."),
     h.par([{t:"Anti-grey market and anti-counterfeiting. ",b:true},"The Reseller shall not knowingly purchase, sell, or distribute Products sourced outside the Supplier\u2019s authorised supply chain. If the Reseller encounters or reasonably suspects the presence of grey market or counterfeit products in the Territory, the Reseller shall promptly notify the Supplier in writing and shall cooperate with the Supplier in any investigation or enforcement action at the Supplier\u2019s cost."]),
     // §7
     h.h1("7   Reporting"),
-    h.par("The Reseller shall provide the Supplier with sell-through reports on a monthly basis, no later than ten (10) calendar days after the end of each calendar month. Each Sell-Through Report shall include: (i) units sold per Product SKU during the month; (ii) current closing inventory per SKU; and (iii) any significant developments in market conditions relevant to the Products."),
+    clauseNode(h, "ra.s7.reporting", "The Reseller shall provide the Supplier with sell-through reports on a monthly basis, no later than ten (10) calendar days after the end of each calendar month. Each Sell-Through Report shall include: (i) units sold per Product SKU during the month; (ii) current closing inventory per SKU; and (iii) any significant developments in market conditions relevant to the Products."),
     hasMDFra ? h.par([{t:"MDF eligibility linked to reporting. ",b:true},"Receipt of accurate and timely Sell-Through Reports is a condition for the Reseller\u2019s eligibility for Market Development Funds (MDF) in the following period. If the Reseller fails to submit a Sell-Through Report within the period specified, the Supplier may withhold MDF payments for the relevant period until the report has been received and verified."]) : null,
     // §8
     h.h1("8   Confidentiality"),
-    h.par("During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement."),
+    clauseNode(h, "ra.s8.confidentiality", "During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement."),
     h.par("This confidentiality undertaking shall not apply to information that the receiving Party can prove it learned of in a manner other than through this Agreement, or which is or becomes public knowledge other than through a breach of this Agreement. Nor does this undertaking apply where the receiving Party is required to disclose information in accordance with any law, enactment, stock market regulation, or decision by a governmental authority or court."),
     // §9
     h.h1("9   GDPR and Data Protection"),
     h.par("Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. The Parties shall enter into a Data Processing Agreement (DPA) if personal data is shared or processed by one Party on behalf of the other. Data breaches must be reported to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery."),
     // §10
     h.h1("10   Limitation of Liability"),
-    h.par(cl("ra.liability_indirect")),
-    h.par("The aggregate liability of either Party in any twelve (12) month period shall not exceed the total amount paid or payable by the Reseller for the Products during the preceding twelve (12) months."),
+    clauseNode(h, "ra.liability_indirect", cl("ra.liability_indirect")),
+    clauseNode(h, "ra.s10.cap", "The aggregate liability of either Party in any twelve (12) month period shall not exceed the total amount paid or payable by the Reseller for the Products during the preceding twelve (12) months."),
     h.par("Nothing in this Agreement shall limit either Party\u2019s liability for: (i) death or personal injury caused by negligence; (ii) fraud or fraudulent misrepresentation; or (iii) any other liability that cannot be limited or excluded under applicable law."),
-    h.par(cl("ra.warranty_asis")),
+    clauseNode(h, "ra.warranty_asis", cl("ra.warranty_asis")),
     h.h3("IP and Product Liability Indemnity"),
-    h.par("The Supplier warrants that, to its knowledge, the sale of the Products in the Territory does not infringe any third-party intellectual property rights. If the Reseller receives a third-party IP claim relating to the Products as supplied, the Supplier shall indemnify the Reseller against finally determined liability, damages, and reasonable legal costs, provided the Reseller: (i) gives prompt written notice; (ii) makes no admission of liability without the Supplier\u2019s prior written consent; and (iii) provides reasonable cooperation at the Supplier\u2019s cost. The Supplier\u2019s indemnity does not cover claims arising from the Reseller\u2019s own modifications to the Products or warranties given by the Reseller beyond the Supplier\u2019s standard warranty."),
+    clauseNode(h, "ra.s10.ip", "The Supplier warrants that, to its knowledge, the sale of the Products in the Territory does not infringe any third-party intellectual property rights. If the Reseller receives a third-party IP claim relating to the Products as supplied, the Supplier shall indemnify the Reseller against finally determined liability, damages, and reasonable legal costs, provided the Reseller: (i) gives prompt written notice; (ii) makes no admission of liability without the Supplier\u2019s prior written consent; and (iii) provides reasonable cooperation at the Supplier\u2019s cost. The Supplier\u2019s indemnity does not cover claims arising from the Reseller\u2019s own modifications to the Products or warranties given by the Reseller beyond the Supplier\u2019s standard warranty."),
     // §11
     h.h1("11   Audit Rights"),
-    h.par("To ensure compliance with the terms of this Agreement, the Reseller shall, upon receiving at least fourteen (14) days\u2019 prior written notice, grant the Supplier or its appointed representatives reasonable access to relevant sales reports, inventory records, and other documentation as may be reasonably required to verify compliance. Audits shall not be conducted more than once per calendar year, unless there is reasonable documented suspicion of material non-compliance. If an audit reveals material non-compliance, the Reseller shall remedy it within thirty (30) days of written notice. Failure to remedy constitutes a material breach."),
+    clauseNode(h, "ra.s11.audit", "To ensure compliance with the terms of this Agreement, the Reseller shall, upon receiving at least fourteen (14) days\u2019 prior written notice, grant the Supplier or its appointed representatives reasonable access to relevant sales reports, inventory records, and other documentation as may be reasonably required to verify compliance. Audits shall not be conducted more than once per calendar year, unless there is reasonable documented suspicion of material non-compliance. If an audit reveals material non-compliance, the Reseller shall remedy it within thirty (30) days of written notice. Failure to remedy constitutes a material breach."),
     // §12
     h.h1("12   Notices"),
     h.par("Any notice required under this Agreement to be in writing shall be sent to the registered addresses of the Parties or as later updated in writing. Notice shall be deemed received: (i) if delivered by courier, upon delivery; (ii) if sent by registered letter, five (5) business days after posting; and (iii) if sent by email, at the time of transmission, if receipt is confirmed by the recipient Party or if the transmitting Party also sent the notice by registered letter the same day. Written confirmation showing that a notice has been delivered by courier or sent by registered letter shall constitute proof of receipt. Address changes must be communicated within fourteen (14) calendar days."),
     // §13
     h.h1("13   Term and Termination"),
-    h.par("This Agreement shall enter into force when signed by both Parties and shall remain in force until terminated by either Party upon the notice period stated in Appendix 1. If no notice period is specified in Appendix 1, the notice period shall be ninety (90) days."),
+    clauseNode(h, "ra.s13.term", "This Agreement shall enter into force when signed by both Parties and shall remain in force until terminated by either Party upon the notice period stated in Appendix 1. If no notice period is specified in Appendix 1, the notice period shall be ninety (90) days."),
     h.par("Upon termination, neither Party shall be entitled to any compensation or indemnity, except for payment of any outstanding and due invoices. Following termination, the Reseller remains obligated to adhere to the terms of this Agreement for any remaining Product inventory until sold or returned."),
     // §14
     h.h1("14   Premature Termination"),
@@ -24412,29 +24568,32 @@ async function buildRA(overrideData) {
     h.par("Following termination due to material breach, the breaching Party shall immediately cease all activities under this Agreement. In the case of the Reseller\u2019s breach, the Reseller shall, at the Supplier\u2019s discretion, either resell all unsold Products to the Supplier at the Reseller\u2019s expense or continue to sell such Products subject to the terms of this Agreement until all inventory is depleted."),
     // §15
     h.h1("15   Force Majeure"),
-    h.par("Neither Party shall be deemed in default of this Agreement to the extent that performance of obligations (excluding payment obligations) is delayed or prevented by reason of war, pandemic, strike, fire, natural disaster, civil disturbance, act or ordinance of any governmental authority, terrorism, or any other cause genuinely beyond the reasonable control of such Party and not foreseeable at the time of signing (a \u201cForce Majeure Event\u201d). In the event that either Party\u2019s performance is affected by a Force Majeure Event, such Party shall promptly notify the other Party in writing, providing details of the event and an estimate of the period during which the delay or prevention shall continue. Both Parties agree to use their best efforts to alleviate and mitigate the effects of the Force Majeure Event as promptly as possible. If the Force Majeure Event continues for more than thirty (30) calendar days, either Party may terminate upon written notice without further liability, except for obligations accrued prior to the Force Majeure Event."),
+    clauseNode(h, "ra.s15.fm", "Neither Party shall be deemed in default of this Agreement to the extent that performance of obligations (excluding payment obligations) is delayed or prevented by reason of war, pandemic, strike, fire, natural disaster, civil disturbance, act or ordinance of any governmental authority, terrorism, or any other cause genuinely beyond the reasonable control of such Party and not foreseeable at the time of signing (a \u201cForce Majeure Event\u201d). In the event that either Party\u2019s performance is affected by a Force Majeure Event, such Party shall promptly notify the other Party in writing, providing details of the event and an estimate of the period during which the delay or prevention shall continue. Both Parties agree to use their best efforts to alleviate and mitigate the effects of the Force Majeure Event as promptly as possible. If the Force Majeure Event continues for more than thirty (30) calendar days, either Party may terminate upon written notice without further liability, except for obligations accrued prior to the Force Majeure Event."),
     // §16
     h.h1("16   Miscellaneous"),
     h.par([{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."]),
     h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Contract & Notices contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."]),
     h.par([{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party."]),
     h.par([{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."]),
-    h.par([{t:"Anti-bribery. ",b:true},cl("ra.antibribery")]),
+    clauseNode(h, "ra.antibribery", cl("ra.antibribery"), [{t:"Anti-bribery. ",b:true}]),
     h.par([{t:"Survival. ",b:true},"Sections 8 (confidentiality), 10 (limitation of liability), 13 (term and termination), 14 (premature termination), and 17 (governing law and disputes) survive termination or expiry of this Agreement."]),
 
     // §17
     h.h1("17   Governing Law",{keepNext:true}),
-    h.par("This Agreement is governed by and construed in accordance with Swedish law. Disputes shall first be resolved through good-faith negotiation. If not resolved within thirty (30) days, the Parties agree to SCC mediation. If mediation fails, the dispute shall be finally settled by SCC arbitration. Seat: Malm\u00f6. Language: English.",{keepNext:true}),
+    clauseNode(h, "ra.s17.law", "This Agreement is governed by and construed in accordance with Swedish law. Disputes shall first be resolved through good-faith negotiation. If not resolved within thirty (30) days, the Parties agree to SCC mediation. If mediation fails, the dispute shall be finally settled by SCC arbitration. Seat: Malm\u00f6. Language: English.", null, {keepNext:true}),
     h.sp(),h.sp(),
+    ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")):"[Authorised signatory / name]"),h.LITE,h.GREY,vendoraStamp(data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
     h.h2("A   Products and Territory"),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),    h.fldRow("Shipping terms",data.inco+" "+(data.incoplace||"Vendora Nordic AB, Lomma, Sweden")),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
+    annexNode(h, "1A", null),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.sp(),
     ...posRows,
+    annexNode(h, "1B", null),
     h.sp(),
     h.h2("C   Vendora Contact Points"),
     h.par("For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:"),
@@ -24454,14 +24613,14 @@ async function buildRA(overrideData) {
     h.note("The Contract & Notices contact set out in Section A above is the address to which all amendments, updated versions, and notices under this Agreement are sent (see section 16). The Reseller shall keep it active and monitored at all times."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
-    h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
+    annexNode(h, "2", "All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
     h.pgBrk(),
     h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS",h.TEAL),h.sp(),
     h.par("The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail."),
     h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
     h.sp(),
   ];
-  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
+  var GTC=[["Warranty",gtcWarrantyText("12 months from invoice date. Claims via rma@vendora.se.")],["Shipping",(data.inco&&data.inco!=="EXW")?(data.inco+" "+(data.incoplace||"")).trim():"EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
@@ -24469,8 +24628,7 @@ async function buildRA(overrideData) {
   if (data._isPreview) {
     children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
   }
-  children = children.filter(Boolean);
-  var doc = h.makeDoc(children);
+  var doc = finishLawyerDoc(h, children, data);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
   window._lastBuild = {type:"ra", data:data};
@@ -24482,6 +24640,7 @@ async function buildRB(overrideData) {
   var data = overrideData || readRBForm();
   if (!data.name) { alert("Please enter the Reseller name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
+  beginLawyerDoc(data);
   var dt = data.date ? new Date(data.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "[date]";
   var vendoraAM = data.vname?(data.vname+(data.vemail?" ("+data.vemail+")":" ")):"(to be assigned)";
 
@@ -24496,17 +24655,19 @@ async function buildRB(overrideData) {
     h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladugårdsvägen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:'(the “Supplier”)',i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"—")+" — "+(data.country||"—")),(data.addr?h.par(data.addr):h.sp()),h.sp(),h.par([{t:'(the “Reseller”)',i:true}])]),
     h.sp(),
     h.h1("1   Appointment"),h.par("Vendora grants the Reseller a non-exclusive right to actively market and sell "+( data.products||"the Products")+" in "+(data.terr||"the Territory")+". Within the EU/EEA, passive sales cannot be restricted. No sub-resellers without prior written consent."),
-    h.h1("2   Orders and Payment"),h.par("Orders through Vendora’s designated channel. Payment: "+data.pay+" days net in "+data.curr+". Late payment triggers statutory interest. Title remains with Vendora until full payment."),
+    h.h1("2   Orders and Payment"),clauseNode(h, "rb.s2.payment", "Orders through Vendora’s designated channel. Payment: "+data.pay+" days net in "+data.curr+". Late payment triggers statutory interest. Title remains with Vendora until full payment."),
     h.h1("3   Compliance and Brand"),h.par("Each Party complies with all applicable laws. The Reseller shall not misrepresent Vendora’s standard warranty. Any additional warranty the Reseller offers end customers is solely the Reseller’s own commitment and cost. The Reseller shall promptly notify Vendora of any suspected counterfeit or grey market products."),
     h.h1("4   Confidentiality"),h.par("Each Party keeps the other’s Confidential Information confidential. Obligation continues 3 years after termination."),
     h.h1("5   Limitation of Liability"),h.par("Neither Party liable for indirect or consequential damages. Aggregate liability capped at 12 months’ purchases. Vendora warrants no IP infringement and indemnifies the Reseller for finally determined IP claims relating to the Products as supplied."),
-    h.h1("6   Term and Termination"),h.par("Terminable by either party on "+data.notice+" days’ written notice. Immediate termination for uncured material breach or insolvency."),
+    h.h1("6   Term and Termination"),clauseNode(h, "rb.s6.term", "Terminable by either party on "+data.notice+" days’ written notice. Immediate termination for uncured material breach or insolvency."),
     h.h1("7   Governing Law",{keepNext:true}),h.par("Swedish law. SCC arbitration, seat Malmö, language English.",{keepNext:true}),
     h.sp(),h.sp(),
+    ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY,vendoraStamp(data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS",h.NAVY),h.sp(),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" Vendora Nordic AB, Lomma, Sweden"),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
+    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" "+(data.incoplace||"Vendora Nordic AB, Lomma, Sweden")),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
+    annexNode(h, "1A", null),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.sp(),
@@ -24528,19 +24689,19 @@ async function buildRB(overrideData) {
     h.note("The Contract & Notices contact set out above is the address to which all amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent — or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
     h.pgBrk(),
     h.appHdr("APPENDIX 2 — RETURNS AND RMA",h.BL),h.sp(),
-    h.par("All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
+    annexNode(h, "2", "All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
     h.pgBrk(),
     h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS",h.TEAL),h.sp(),
     h.par("The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail."),
     h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
     h.sp(),
   ];
-  var GTC=[["Warranty","12 months from invoice date. Claims via rma@vendora.se."],["Shipping","EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
+  var GTC=[["Warranty",gtcWarrantyText("12 months from invoice date. Claims via rma@vendora.se.")],["Shipping",(data.inco&&data.inco!=="EXW")?(data.inco+" "+(data.incoplace||"")).trim():"EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
 
-  var doc = h.makeDoc(children);
+  var doc = finishLawyerDoc(h, children, data);
   var blob = await d.Packer.toBlob(doc);
   var safe = (data.name||"Reseller").replace(/[^\w]/g,"_").replace(/_+/g,"_");
   window._lastBuild = {type:"rb", data:data};
@@ -25974,6 +26135,20 @@ function coverDeviations(type, d){
     var t=ov[c.id]; if (t==null || !String(t).trim() || String(t).trim()===c.text.trim()) return;
     var s=String(t).trim(); out.push("Clause reworded — "+c.label+": “"+(s.length>220?s.slice(0,220)+"…":s)+"”");
   });
+  if (window.LawyerChanges) {
+    var seenLine = {};
+    out.forEach(function(x){ seenLine[x] = 1; });
+    LawyerChanges.deviationLines(d).forEach(function(line){
+      if (seenLine[line]) return;
+      if (line.indexOf("Clause reworded — ") === 0) {
+        var id = line.slice("Clause reworded — ".length).split(":")[0];
+        var dup = (CLAUSES[type]||[]).some(function(c){ return c.id === id && ov[c.id] && String(ov[c.id]).trim() && String(ov[c.id]).trim() !== c.text.trim(); });
+        if (dup) return;
+      }
+      seenLine[line] = 1;
+      out.push(line);
+    });
+  }
   return out;
 }
 function buildCoverSummary(type, d){ return { terms: coverTerms(type, d||{}), deviations: coverDeviations(type, d||{}) }; }
@@ -26199,6 +26374,8 @@ function archiveEdit(id){
     switchTab(type==="da"?0:(type==="rb"?2:1));
     hydrateForm(type, data);
     window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at };
+    window._lawyerState = data;
+    window._clauseOverrides = data.clauseOverrides || {};
     var bar=document.getElementById("editBar"); bar.style.display="flex";
     document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
     document.getElementById("editBarStatus").textContent = "";
@@ -26208,6 +26385,8 @@ function archiveEdit(id){
 }
 function exitEdit(){
   window._editing=null;
+  window._lawyerState=null;
+  window._clauseOverrides={};
   var b=document.getElementById("editBar"); if(b) b.style.display="none";
   var p=document.getElementById("archivePanel"); if(p) p.style.display="none";
   var s=document.getElementById("editSaveBtn"); if(s){ s.disabled=false; s.style.opacity=1; s.title=""; }
@@ -26379,47 +26558,188 @@ function renderAiMessages(){
       + (mine?"background:var(--navy);color:#fff":"background:#f1f3f7;color:#1a1a1a")+"'>"+esc(m.content)+"</div></div>";
   }).join("");
   box.scrollTop = box.scrollHeight;
-}
-function aiQuick(text){ document.getElementById("aiInput").value=text; sendAi(); }
-function renderProposals(proposals){
-  var box=document.getElementById("aiMessages");
-  var ctx=getAiContext();
-  proposals.forEach(function(p){
-    var reg=CLAUSE_BY_ID[p.clauseId];
-    var ov=ctx&&ctx.clauseOverrides&&ctx.clauseOverrides[p.clauseId];
-    var current=(ov!=null&&String(ov).trim())?String(ov):(reg?reg.text:"(unknown clause: "+esc(p.clauseId)+")");
-    var label=reg?reg.label:p.clauseId;
-    var card=document.createElement("div");
-    card.style.cssText="margin:10px 0;border:1px solid #ffe69c;background:#FFFDF5;border-radius:8px;padding:10px;font-size:12px;line-height:1.5";
-    card.innerHTML="<div style='font-weight:600;color:#856404;margin-bottom:6px'>&#9998; Proposed redraft — "+esc(label)+"</div>"
-      + (p.rationale?"<div style='color:#666;margin-bottom:8px'>"+esc(p.rationale)+"</div>":"")
-      + "<div><span style='color:#c0392b;font-weight:600'>Current</span><div style='background:#fdece9;border-radius:4px;padding:6px;margin:2px 0 6px;white-space:pre-wrap'>"+esc(current)+"</div></div>"
-      + "<div><span style='color:#1e7e34;font-weight:600'>Proposed</span><div style='background:#eaf7ee;border-radius:4px;padding:6px;margin-top:2px;white-space:pre-wrap'>"+esc(p.newText)+"</div></div>"
-      + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Accept</button>"
-      + "<button class='pbRej' style='background:#fff;border:1px solid var(--border);border-radius:5px;padding:6px 12px;cursor:pointer'>Dismiss</button></div>";
-    box.appendChild(card);
-    card.querySelector(".pbAcc").onclick=function(){ acceptProposal(p.clauseId, p.newText); var a=card.querySelector(".pbAcc"); a.textContent="Accepted ✓"; a.disabled=true; a.style.opacity=.7; };
-    card.querySelector(".pbRej").onclick=function(){ card.remove(); };
-  });
-  box.scrollTop=box.scrollHeight;
-}
-function acceptProposal(clauseId, newText){
-  var locked = window._signData || editingLocked();
-  if (locked){ alert("This agreement is locked for the CEO's signature. Return it to the seller (or withdraw the request) to change the wording."); return; }
-  var ctx=getAiContext(); if(!ctx){ alert("No agreement is open to apply this to."); return; }
-  ctx.clauseOverrides = ctx.clauseOverrides || {};
-  ctx.clauseOverrides[clauseId] = newText;
-  document.getElementById("aiUpdatedBar").style.display="flex";
-  // Persist to the archive if we're editing a saved agreement.
-  if (window._editing && window._editing.id && window._editing.base){
-    window._editing.base.clauseOverrides = ctx.clauseOverrides;
-    if (typeof updateArchive==="function") updateArchive(window._editing, {}, false);
+  if (window._openProposals && window._openProposals.length && !window._restoringProposals) {
+    var pending = window._openProposals.map(function(x){ return x.proposal; });
+    window._openProposals = [];
+    window._restoringProposals = true;
+    renderProposals(pending);
+    window._restoringProposals = false;
   }
 }
+function aiQuick(text){ document.getElementById("aiInput").value=text; sendAi(); }
+function redlineHtml(oldText, newText){
+  var segs = (window.LawyerChanges && LawyerChanges.redlineSegments)
+    ? LawyerChanges.redlineSegments(oldText || "", newText || "")
+    : [{type:"del", text:oldText || ""}, {type:"ins", text:newText || ""}];
+  if (!segs.length) return "<span style='color:#888'>(empty)</span>";
+  return segs.map(function(s){
+    var t = esc(s.text);
+    if (s.type === "del") return "<del style='background:#fdece9;color:#c0392b'>"+t+"</del>";
+    if (s.type === "ins") return "<ins style='background:#eaf7ee;color:#1e7e34;text-decoration:none'>"+t+"</ins>";
+    return t;
+  }).join("");
+}
+function normalizeIncomingProposals(raw){
+  var LC = window.LawyerChanges;
+  if (LC) return LC.validateProposals(raw);
+  var proposals = (raw || []).map(function(p){
+    if (!p) return null;
+    if (p.target) return p;
+    if (p.clauseId) return { target:{kind:"clause", id:p.clauseId}, op:"replace", oldText:p.oldText || "", newText:p.newText || "", label:p.clauseId, rationale:p.rationale || "", anchor:"" };
+    return null;
+  }).filter(Boolean);
+  return { proposals:proposals, rejected:[] };
+}
+function proposalLabel(p){
+  if (p.label) return p.label;
+  var id = p.target && p.target.id;
+  if (p.target && p.target.kind === "annex") return "Annex " + id;
+  var reg = CLAUSE_BY_ID[id];
+  return reg ? reg.label : id;
+}
+function showConflicts(issues){
+  var el = document.getElementById("aiConflicts");
+  if (!el) return;
+  if (!issues || !issues.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = "<strong>Consistency check</strong><ul style='margin:6px 0 0 16px;padding:0'>"
+    + issues.map(function(i){ return "<li style='margin:3px 0'>"+esc(i.message || "")+"</li>"; }).join("") + "</ul>";
+}
+function syncLawyerForm(data){
+  var type = data._type || (window._editing && window._editing.type) || ["da","ra","rb"][typeof activeTab === "number" ? activeTab : 1] || "ra";
+  ["curr","pay","inco","incoplace","name","terr","date","sig_name","sig_title","sig_email","notice","excl","credit"].forEach(function(k){
+    if (data[k] == null) return;
+    var el = document.getElementById(type + "_" + k);
+    if (!el) return;
+    var v = String(data[k]);
+    if (el.tagName === "SELECT") {
+      var found = false;
+      for (var i = 0; i < el.options.length; i++) if (el.options[i].value === v) found = true;
+      if (!found && v) {
+        var opt = document.createElement("option");
+        opt.value = v; opt.textContent = v;
+        el.appendChild(opt);
+      }
+    }
+    sv(type + "_" + k, data[k]);
+  });
+  if (data.terr) restoreTerr(type, data.terr);
+}
+function writableAgreement(){
+  var ctx = getAiContext();
+  if (ctx) return ctx;
+  var type = ["da","ra","rb"][typeof activeTab === "number" ? activeTab : 1] || "ra";
+  var data = lawyerCarry(readForm(type));
+  data._type = type;
+  window._lawyerState = data;
+  return data;
+}
+function applyApproved(list){
+  var locked = window._signData || (typeof editingLocked === "function" && editingLocked());
+  if (locked){ alert("This agreement is locked for the CEO's signature. Return it to the seller (or withdraw the request) to change the wording."); return null; }
+  var LC = window.LawyerChanges;
+  if (!LC){ alert("The change helper did not load. Reload the page and try again."); return null; }
+  var ctx = writableAgreement();
+  var result = LC.applyProposals(ctx, list);
+  var next = result.data;
+  ["clauseOverrides","clauseInserts","clauseDeletes","annexOverrides","annexDeletes","redlines","curr","pay","inco","incoplace","name","terr","date","sig_name","sig_title","sig_email","notice","excl","credit"].forEach(function(k){
+    if (next[k] !== undefined) ctx[k] = next[k];
+  });
+  window._lawyerState = ctx;
+  window._clauseOverrides = ctx.clauseOverrides || {};
+  syncLawyerForm(ctx);
+  var bar = document.getElementById("aiUpdatedBar");
+  if (bar) bar.style.display = "flex";
+  showConflicts(result.conflicts);
+  if (window._editing && window._editing.id && !editingLocked()) {
+    window._editing.base = ctx;
+    if (typeof updateArchive === "function") updateArchive(window._editing, {}, false);
+  }
+  return result;
+}
+function renderProposals(proposals){
+  var box = document.getElementById("aiMessages");
+  if (!box) return;
+  var checked = normalizeIncomingProposals(proposals);
+  if (checked.rejected && checked.rejected.length) {
+    var note = document.createElement("div");
+    note.style.cssText = "margin:8px 0;font-size:12px;color:#9a4b00";
+    note.textContent = checked.rejected.length + " suggestion" + (checked.rejected.length > 1 ? "s" : "") + " did not match the change format and " + (checked.rejected.length > 1 ? "were" : "was") + " not shown.";
+    box.appendChild(note);
+  }
+  var fresh = checked.proposals || [];
+  if (!fresh.length) { box.scrollTop = box.scrollHeight; return; }
+  window._openProposals = window._openProposals || [];
+  if (window._openProposals.length + fresh.length > 1 && !document.getElementById("aiApproveAll")) {
+    var all = document.createElement("div");
+    all.id = "aiApproveAll";
+    all.style.cssText = "margin:8px 0;display:flex;justify-content:flex-end";
+    all.innerHTML = "<button type='button' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Approve all</button>";
+    all.querySelector("button").onclick = function(){ approveAllOpen(); };
+    box.appendChild(all);
+  }
+  fresh.forEach(function(p){
+    var card = document.createElement("div");
+    card.style.cssText = "margin:10px 0;border:1px solid #ffe69c;background:#FFFDF5;border-radius:8px;padding:10px;font-size:12px;line-height:1.5";
+    var where = (p.target.kind === "field" ? "Cover sheet" : (p.target.kind === "annex" ? "Annex" : "Clause")) + " · " + p.op;
+    card.innerHTML = "<div style='font-weight:600;color:#856404;margin-bottom:4px'>&#9998; "+esc(proposalLabel(p))+"</div>"
+      + "<div style='font-size:11px;color:#888;margin-bottom:6px'>"+esc(where)+"</div>"
+      + (p.rationale ? "<div style='color:#666;margin-bottom:8px'>"+esc(p.rationale)+"</div>" : "")
+      + "<div style='white-space:pre-wrap'>"+redlineHtml(p.oldText, p.op === "delete" ? "" : p.newText)+"</div>"
+      + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc' type='button' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Approve</button>"
+      + "<button class='pbRej' type='button' style='background:#fff;border:1px solid var(--border);border-radius:5px;padding:6px 12px;cursor:pointer'>Reject</button></div>";
+    box.appendChild(card);
+    var entry = { proposal:p, card:card };
+    window._openProposals.push(entry);
+    card.querySelector(".pbAcc").onclick = function(){ approveOne(entry); };
+    card.querySelector(".pbRej").onclick = function(){ rejectOne(entry); };
+  });
+  box.scrollTop = box.scrollHeight;
+}
+function dropOpen(entry){
+  window._openProposals = (window._openProposals || []).filter(function(x){ return x !== entry; });
+  if (!window._openProposals.length) {
+    var all = document.getElementById("aiApproveAll");
+    if (all) all.remove();
+  }
+}
+function approveOne(entry){
+  var result = applyApproved([entry.proposal]);
+  if (!result) return;
+  dropOpen(entry);
+  var btn = entry.card.querySelector(".pbAcc");
+  btn.textContent = "Approved";
+  btn.disabled = true;
+  entry.card.querySelector(".pbRej").disabled = true;
+  entry.card.style.opacity = "0.75";
+}
+function rejectOne(entry){
+  dropOpen(entry);
+  entry.card.remove();
+}
+function approveAllOpen(){
+  var open = (window._openProposals || []).slice();
+  if (!open.length) return;
+  var result = applyApproved(open.map(function(x){ return x.proposal; }));
+  if (!result) return;
+  open.forEach(function(entry){
+    dropOpen(entry);
+    var btn = entry.card.querySelector(".pbAcc");
+    btn.textContent = "Approved";
+    btn.disabled = true;
+    var rej = entry.card.querySelector(".pbRej");
+    if (rej) rej.disabled = true;
+    entry.card.style.opacity = "0.75";
+  });
+}
 function downloadUpdatedAgreement(){
-  var ctx=getAiContext(); if(!ctx) return;
-  var t=ctx._type; var fn=(t==="rb")?buildRB:(t==="da"?buildDA:buildRA);
-  fn(ctx).then(function(r){ window.saveAs(r.blob, r.filename); }).catch(function(e){ alert("Could not regenerate: "+((e&&e.message)||e)); });
+  var ctx = getAiContext() || window._lawyerState;
+  if (!ctx) return;
+  var data = cloneData(ctx);
+  data._trackChanges = true;
+  data._type = data._type || (window._editing && window._editing.type) || ["da","ra","rb"][activeTab] || "ra";
+  var fn = data._type === "rb" ? buildRB : (data._type === "da" ? buildDA : buildRA);
+  fn(data).then(function(r){ if (r) window.saveAs(r.blob, r.filename); }).catch(function(e){ alert("Could not regenerate: "+((e && e.message) || e)); });
 }
 function sendAi(){
   var input=document.getElementById("aiInput");
@@ -26531,7 +26851,7 @@ async function readContractFile(file){
 async function buildOurAgreementText(type){
   var data=readForm(type); data._type=type;
   if(!data.name) data.name = type==="da" ? "[Supplier]" : "[Reseller]";
-  data.clauseOverrides = window._clauseOverrides || (window._editing && window._editing.base && window._editing.base.clauseOverrides) || {};
+  data = lawyerCarry(data);
   var fn = type==="da" ? buildDA : (type==="rb" ? buildRB : buildRA);
   var r=await fn(data); if(!r) throw new Error("Could not build Vendora's agreement");
   return docxToText(await r.blob.arrayBuffer());
@@ -26846,7 +27166,7 @@ initApp();
 </div>
 <!-- AI contract lawyer: floating button + chat drawer (shown only when AI is configured + signed in) -->
 <button id="aiFab" onclick="toggleAiDrawer()" style="display:none;position:fixed;right:22px;bottom:22px;z-index:9000;align-items:center;gap:8px;background:var(--navy);color:#fff;border:none;border-radius:24px;padding:12px 18px;font-family:sans-serif;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)">&#9878;&#65039; AI Lawyer</button>
-<div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:400px;max-width:92vw;height:560px;max-height:80vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
+<div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:460px;max-width:92vw;height:560px;max-height:80vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
   <div style="background:var(--navy);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
     <div><strong style="font-size:14px">&#9878;&#65039; Vendora Contract Lawyer</strong><div style="font-size:11px;color:#C8D9ED">Drafting assistance — not formal legal advice</div></div>
     <div style="display:flex;gap:4px;align-items:center">
@@ -26860,8 +27180,9 @@ initApp();
     <a onclick="crClearLawyerContext()" style="cursor:pointer;text-decoration:underline;white-space:nowrap">clear</a>
   </div>
   <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
+  <div id="aiConflicts" style="display:none;background:#fff3cd;border-top:1px solid #ffe69c;padding:8px 12px;font-size:12px;color:#856404"></div>
   <div id="aiUpdatedBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#eaf7ee;border-top:1px solid #cfe8d6;padding:8px 12px;font-size:12px;color:#1e7e34">
-    <span>Clause changes applied to this agreement.</span>
+    <span>Approved changes are in this agreement.</span>
     <button onclick="downloadUpdatedAgreement()" style="background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">&#8681; Updated .docx</button>
   </div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
