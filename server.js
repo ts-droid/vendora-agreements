@@ -8,6 +8,7 @@ const auth             = require('./auth');
 const ai               = require('./ai');
 const agreementExport  = require('./agreement-export');
 const webhook          = require('./webhook');
+const lawyerChanges    = require('./lawyer-changes');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -92,6 +93,17 @@ function isSigner(u) { return !!u && !!SIGNER_EMAIL && String(u.email || '').toL
 function stripServerFields(data) {
   if (data && typeof data === 'object') delete data._vendoraSignature;
   return data;
+}
+// Lawyer structures and cover-sheet values are checked before anything is written.
+// The signature lock is enforced by the caller before this runs on an update.
+function rejectBadAgreement(res, data) {
+  const checked = lawyerChanges.validateStoredAgreement(data);
+  if (checked.ok) return false;
+  res.status(400).json({
+    error: 'Invalid agreement data',
+    details: (checked.errors || []).map(function (e) { return String(e); }).slice(0, 20),
+  });
+  return true;
 }
 function userPayload(u) {
   return { id: u.id != null ? u.id : u.uid, email: u.email, name: u.name, isAdmin: isAdmin(u), isSigner: isSigner(u),
@@ -823,6 +835,7 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
     if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
+    if (rejectBadAgreement(res, data)) return;
     const initial = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : 'draft';
     const r = await db.query(
       `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, created_by, created_by_name)
@@ -845,6 +858,7 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
     if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
+    if (rejectBadAgreement(res, data)) return;
     const token = crypto.randomBytes(24).toString('base64url');
     const r = await db.query(
       `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, update_token, created_by, created_by_name)
@@ -865,6 +879,7 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
     stripServerFields(data);
+    if (rejectBadAgreement(res, data)) return;
     const cur = await db.query('SELECT update_token, status FROM agreements WHERE id=$1', [req.params.id]);
     if (!cur.rows[0]) return res.status(404).json({ error: 'Not found' });
     if (!cur.rows[0].update_token || !tokenEq(cur.rows[0].update_token, token)) return res.status(403).json({ error: 'Invalid token' });
@@ -933,6 +948,7 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
       return res.status(409).json({ error: 'This agreement is locked for the CEO\'s signature. Withdraw the signature request before editing.', locked: true });
     }
     stripServerFields(data);
+    if (rejectBadAgreement(res, data)) return;
     // Workflow-only statuses can't be set through a plain save.
     const nextStatus = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : null;
     const r = await db.query(

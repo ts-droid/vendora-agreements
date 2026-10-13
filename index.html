@@ -24112,13 +24112,14 @@ function trackedParagraph(h, oldText, newText, prefixItems, parOpts){
     ? LawyerChanges.redlineSegments(oldText || "", newText || "")
     : [{type:"del", text:oldText || ""}, {type:"ins", text:newText || ""}];
   var author = "Vendora Contract Lawyer";
-  var date = "2026-10-13T00:00:00Z";
+  var date = new Date().toISOString();
   segs.forEach(function(s){
-    if (!s.text) return;
+    var text = (window.LawyerChanges && LawyerChanges.stripXmlControls) ? LawyerChanges.stripXmlControls(s.text) : String(s.text || "");
+    if (!text) return;
     var id = window._revSeq++;
-    if (s.type === "eq") runs.push(h.t(s.text));
-    else if (s.type === "del") runs.push(new d.DeletedTextRun({ id:id, author:author, date:date, text:s.text, font:"Calibri", size:20 }));
-    else runs.push(new d.InsertedTextRun({ id:id, author:author, date:date, text:s.text, font:"Calibri", size:20 }));
+    if (s.type === "eq") runs.push(h.t(text));
+    else if (s.type === "del") runs.push(new d.DeletedTextRun({ id:id, author:author, date:date, text:text, font:"Calibri", size:20 }));
+    else runs.push(new d.InsertedTextRun({ id:id, author:author, date:date, text:text, font:"Calibri", size:20 }));
   });
   return new d.Paragraph(Object.assign({ spacing:{before:60, after:100}, children: runs.length ? runs : [h.t("")] }, parOpts || {}));
 }
@@ -26682,15 +26683,24 @@ function renderProposals(proposals){
     var card = document.createElement("div");
     card.style.cssText = "margin:10px 0;border:1px solid #ffe69c;background:#FFFDF5;border-radius:8px;padding:10px;font-size:12px;line-height:1.5";
     var where = (p.target.kind === "field" ? "Cover sheet" : (p.target.kind === "annex" ? "Annex" : "Clause")) + " · " + p.op;
+    var view = proposalPreview(p);
+    var body = view.ok
+      ? redlineHtml(view.oldText, view.newText)
+      : "<div style='color:#9a4b00'>"+esc((view.errors || []).join("; "))+"</div>";
     card.innerHTML = "<div style='font-weight:600;color:#856404;margin-bottom:4px'>&#9998; "+esc(proposalLabel(p))+"</div>"
       + "<div style='font-size:11px;color:#888;margin-bottom:6px'>"+esc(where)+"</div>"
       + (p.rationale ? "<div style='color:#666;margin-bottom:8px'>"+esc(p.rationale)+"</div>" : "")
-      + "<div style='white-space:pre-wrap'>"+redlineHtml(p.oldText, p.op === "delete" ? "" : p.newText)+"</div>"
+      + "<div class='pbDiff' style='white-space:pre-wrap'>"+body+"</div>"
       + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc' type='button' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Approve</button>"
       + "<button class='pbRej' type='button' style='background:#fff;border:1px solid var(--border);border-radius:5px;padding:6px 12px;cursor:pointer'>Reject</button></div>";
     box.appendChild(card);
     var entry = { proposal:p, card:card };
     window._openProposals.push(entry);
+    if (!view.ok) {
+      var acc = card.querySelector(".pbAcc");
+      acc.disabled = true;
+      acc.style.opacity = "0.5";
+    }
     card.querySelector(".pbAcc").onclick = function(){ approveOne(entry); };
     card.querySelector(".pbRej").onclick = function(){ rejectOne(entry); };
   });
@@ -26703,15 +26713,39 @@ function dropOpen(entry){
     if (all) all.remove();
   }
 }
-function approveOne(entry){
-  var result = applyApproved([entry.proposal]);
-  if (!result) return;
+function markApproved(entry){
   dropOpen(entry);
   var btn = entry.card.querySelector(".pbAcc");
   btn.textContent = "Approved";
   btn.disabled = true;
-  entry.card.querySelector(".pbRej").disabled = true;
+  var rej = entry.card.querySelector(".pbRej");
+  if (rej) rej.disabled = true;
   entry.card.style.opacity = "0.75";
+}
+function markApplyError(entry, errors){
+  var note = entry.card.querySelector(".pbErr");
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "pbErr";
+    note.style.cssText = "color:#9a4b00;margin-top:6px";
+    entry.card.appendChild(note);
+  }
+  note.textContent = (errors || []).join("; ");
+}
+function proposalPreview(p){
+  var LC = window.LawyerChanges;
+  var ctx = (typeof writableAgreement === "function" && writableAgreement()) || window._lawyerState || {};
+  if (!LC || !LC.describeProposal) return { ok:true, oldText:p.oldText || "", newText:p.op === "delete" ? "" : (p.newText || ""), errors:[] };
+  return LC.describeProposal(ctx, p);
+}
+function approveOne(entry){
+  var result = applyApproved([entry.proposal]);
+  if (!result) return;
+  if (result.rejected && result.rejected.length) {
+    markApplyError(entry, result.rejected[0].errors);
+    return;
+  }
+  markApproved(entry);
 }
 function rejectOne(entry){
   dropOpen(entry);
@@ -26722,14 +26756,11 @@ function approveAllOpen(){
   if (!open.length) return;
   var result = applyApproved(open.map(function(x){ return x.proposal; }));
   if (!result) return;
-  open.forEach(function(entry){
-    dropOpen(entry);
-    var btn = entry.card.querySelector(".pbAcc");
-    btn.textContent = "Approved";
-    btn.disabled = true;
-    var rej = entry.card.querySelector(".pbRej");
-    if (rej) rej.disabled = true;
-    entry.card.style.opacity = "0.75";
+  var bad = {};
+  (result.rejected || []).forEach(function(r){ bad[r.index] = r; });
+  open.forEach(function(entry, i){
+    if (bad[i]) { markApplyError(entry, bad[i].errors); return; }
+    markApproved(entry);
   });
 }
 function downloadUpdatedAgreement(){
