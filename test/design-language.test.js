@@ -23,4 +23,7 @@ test('the agreement app uses the Plaud License portal design language', function
   // The wider Saved agreements table stays in place with the redesign.
   assert.match(html, /\.shell\.archive-open\{max-width:1440px\}/);
   assert.match(html, /\.archive-scroll\{overflow-x:auto\}/);
+  assert.equal(html.indexOf('.hdr{'), -1);
+  assert.equal(html.indexOf('.hdr '), -1);
+  assert.match(html, /button:not\(\.tab\):not\(\.archive-name\):not\(:is\(\.val-modal button, \.modal button, \.modal-overlay button\)\)\{border-radius:999px !important\}/);
 });
