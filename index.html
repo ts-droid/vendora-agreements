@@ -29,6 +29,15 @@ button,input,select,textarea{font:inherit;color:inherit}
 .archive-name{background:none;border:0;padding:0;margin:0;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px;border-radius:0 !important}
 .archive-name:hover,.archive-name:focus-visible{color:var(--accent)}
 .archive-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* Row buttons stay pills because the global rule
+   button:not(.tab):not(.archive-name):not(:is(.val-modal button, .modal button, .modal-overlay button))
+   sets border-radius:999px !important. .archive-btn does not set a radius: a value here would lose to that
+   !important, and these are ordinary page buttons, not modal controls. height:24px and the side padding
+   keep the label inside the curve. */
+.archive-btn{display:inline-flex;align-items:center;box-sizing:border-box;height:24px;font-size:11px;line-height:16px;padding:0 8px;border:1px solid var(--line);background:#fff;color:var(--pine);cursor:pointer;white-space:nowrap;vertical-align:middle}
+.archive-btn:disabled{opacity:.5;cursor:default}
+.archive-btn-delete{color:#c0392b;border-color:#c0392b}
+.archive-table td.actions .archive-btn+.archive-btn{margin-left:6px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 32px;border-bottom:1px solid var(--line);background:#fff}
 .topbar-brand{display:flex;align-items:center;gap:16px;flex:1 1 auto;min-width:0}
 .brand-mark{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;max-width:100%}
@@ -26070,19 +26079,19 @@ function loadArchive(){
         + "<td style='white-space:nowrap'>"
           + "<span id='ovDocs_"+id+"'>"+(a.file_count>0?"<a onclick='ovToggleFiles("+id+")' style='color:var(--blue2);cursor:pointer'>&#128206; "+a.file_count+"</a>":"<span style='"+mut+"'>none</span>")+"</span> "
           + "<input type='file' id='ovFile_"+id+"' style='display:none' onchange='ovUpload("+id+",this)'>"
-          + "<button onclick=\"document.getElementById('ovFile_"+id+"').click()\" style='font-size:11px;padding:3px 8px;cursor:pointer'>&#8681; Upload</button>"
+          + "<button type='button' class='archive-btn' onclick=\"document.getElementById('ovFile_"+id+"').click()\">&#8681; Upload</button>"
           + "<div id='ovUp_"+id+"' style='"+mut+";margin-top:3px'></div>"
         + "</td>"
         // Reminder — send + last-sent
         + "<td style='white-space:nowrap'>"
-          + "<button onclick='ovRemind("+id+",this)' "+(noEmail?"disabled title='No counterparty email on file' style='font-size:11px;padding:3px 8px;opacity:.5'":"style='font-size:11px;padding:3px 8px;cursor:pointer'")+">&#9993; Remind</button>"
+          + "<button type='button' class='archive-btn' onclick='ovRemind("+id+",this)' "+(noEmail?"disabled title='No counterparty email on file'":"")+">&#9993; Remind</button>"
           + "<div id='ovRem_"+id+"' style='"+mut+";margin-top:3px'>"+(a.last_reminder_at?"sent "+esc(fmtWhen(a.last_reminder_at)):"")+"</div>"
         + "</td>"
         + "<td>"+esc(a.created_by_name||"")+"</td>"
         + "<td class='actions' style='white-space:nowrap'>"
-          + "<button type='button' onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
-          + "<button onclick='archiveDownload("+id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
-          + "<button onclick='archiveDelete("+id+")' style='color:#c0392b;cursor:pointer'>Delete</button>"
+          + "<button type='button' class='archive-btn' onclick='archiveEdit("+id+")'>&#9998; Edit</button>"
+          + "<button type='button' class='archive-btn' onclick='archiveDownload("+id+")'>&#8681; .docx</button>"
+          + "<button type='button' class='archive-btn archive-btn-delete' onclick='archiveDelete("+id+")'>Delete</button>"
         + "</td></tr>"
         + "<tr id='ovFilesRow_"+id+"' style='display:none'><td colspan='7' style='background:#fafbfc'><div id='ovFilesBox_"+id+"' style='font-size:12px;padding:4px 0'></div></td></tr>";
     });
