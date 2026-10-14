@@ -785,3 +785,14 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', { skip:
     await new Promise(function (resolve) { server.close(resolve); });
   }
 });
+
+test('propose_changes schema avoids JSON-schema keywords the Anthropic API rejects', function () {
+  const banned = ['maxItems', 'minItems', 'uniqueItems', 'maxLength', 'minLength', 'pattern', 'minimum', 'maximum'];
+  (function walk(node) {
+    if (!node || typeof node !== 'object') return;
+    Object.keys(node).forEach(function (k) {
+      if (k !== 'properties') assert.ok(banned.indexOf(k) < 0, 'unsupported keyword ' + k);
+      walk(node[k]);
+    });
+  })(LC.PROPOSE_CHANGES_TOOL.input_schema);
+});

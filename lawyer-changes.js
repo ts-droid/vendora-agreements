@@ -1144,7 +1144,8 @@
     input_schema: {
       type: 'object',
       additionalProperties: false,
-      properties: { changes: { type: 'array', maxItems: MAX_CHANGES, items: TOOL_CHANGE_SCHEMA } },
+      // Anthropic tool schemas reject maxItems/minItems/uniqueItems; the cap is enforced in validateProposals.
+      properties: { changes: { type: 'array', description: 'Every concrete change, at most ' + MAX_CHANGES + ' items.', items: TOOL_CHANGE_SCHEMA } },
       required: ['changes'],
     },
     strict: true,
