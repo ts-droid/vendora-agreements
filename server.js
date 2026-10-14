@@ -9,6 +9,8 @@ const ai               = require('./ai');
 const agreementExport  = require('./agreement-export');
 const webhook          = require('./webhook');
 const lawyerChanges    = require('./lawyer-changes');
+const lawyerVerify     = require('./lawyer-verify');
+const documentExtract  = require('./document-extract');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +56,7 @@ setInterval(function () {
 const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 15 min / IP
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
 const reviewLimiter = rateLimit('review', 20, 60 * 60 * 1000); // 20 contract reviews / hour / IP (each is a large model call)
+const verifyLimiter = rateLimit('verify-document', 20, 60 * 60 * 1000);
 const exportLimiter = rateLimit('export', 30, 10 * 60 * 1000); // 30 exports / 10 min / IP
 
 // Escape untrusted strings before putting them in email HTML.
@@ -574,6 +577,52 @@ app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   } catch (err) {
     console.error('AI chat error:', err.message);
     res.status(500).json({ error: 'The AI lawyer could not respond right now.' });
+  }
+});
+
+// Read-only: compare an uploaded .docx or PDF with the agreement's approved redlines and checklist.
+// The handler does not read or write agreement rows.
+app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, function (req, res, next) {
+  express.raw({ type: () => true, limit: '8mb' })(req, res, function (err) {
+    if (err && err.type === 'entity.too.large') return res.status(413).json({ error: 'That file is larger than 8 MB.' });
+    if (err) return next(err);
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const parts = documentExtract.readFormParts(req.body, req.get('Content-Type') || '');
+    if (!parts.ok) return res.status(parts.status).json({ error: parts.error });
+    const sniffed = documentExtract.sniff(parts.file.filename, parts.file.buffer);
+    if (!sniffed.ok) return res.status(sniffed.status).json({ error: sniffed.error });
+    let text = '';
+    try {
+      text = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
+    } catch (e) {
+      return res.status(400).json({ error: 'Could not read that file.' });
+    }
+    let agreement = {};
+    let checklist = [];
+    try {
+      agreement = parts.agreement ? JSON.parse(parts.agreement) : {};
+      checklist = parts.checklist ? JSON.parse(parts.checklist) : [];
+    } catch (e) {
+      return res.status(400).json({ error: 'The plan could not be read.' });
+    }
+    if (!agreement || typeof agreement !== 'object' || Array.isArray(agreement)) {
+      return res.status(400).json({ error: 'The plan could not be read.' });
+    }
+    if (!Array.isArray(checklist)) return res.status(400).json({ error: 'The checklist could not be read.' });
+    const out = await lawyerVerify.verifyDocument({
+      agreement: agreement,
+      checklist: checklist,
+      documentText: text,
+      filename: parts.file.filename,
+    });
+    res.json(out);
+  } catch (err) {
+    console.error('Verify document error:', err && (err.code || err.name) || 'error');
+    const status = err && err.status ? err.status : 500;
+    res.status(status).json({ error: (err && err.publicMessage) || 'The document could not be checked.' });
   }
 });
 
