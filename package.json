@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.js"
+    "test": "node --test test/*.js",
+    "validateStoredAgreement": "node scripts/validateStoredAgreement.js"
   },
   "engines": {
     "node": ">=18"

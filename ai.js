@@ -284,7 +284,7 @@ async function chat(agreement, messages, opts) {
     convo.push({
       role: 'user',
       content: toolUses.map(function (t) {
-        const checked = lawyerChanges.validateProposals(changesFromTool(t.input));
+        const checked = lawyerChanges.validateProposals(changesFromTool(t.input), agreement && (agreement.data || agreement));
         checked.proposals.forEach(function (p) { proposals.push(p); });
         const note = checked.rejected.length
           ? 'Rejected (not shown to the user — fix these and call propose_changes again with only the fixes): '

@@ -475,20 +475,97 @@ test('consistency reads inserted clauses, and xml escapes controls', function ()
   assert.equal(bare.indexOf('w:delText'), -1);
 });
 
+test('findSpans keeps word boundaries so 30 days does not match 130 days', function () {
+  const both = 'Pay within 130 days, or within 30 days.';
+  const view = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': both } },
+    clause('ra.s4.payment', 'replace', '30 days', '45 days')
+  );
+  assert.equal(view.ok, true, JSON.stringify(view.errors));
+  assert.equal(view.oldText, '30 days');
+
+  const onlyLong = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': 'Pay within 130 days.' } },
+    clause('ra.s4.payment', 'replace', '30 days', '45 days')
+  );
+  assert.equal(onlyLong.ok, false);
+  assert.match(onlyLong.errors[0], /0 times/);
+
+  const applied = LC.applyProposals(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': both } },
+    [clause('ra.s4.payment', 'replace', '30 days', '45 days')]
+  );
+  assert.equal(applied.rejected.length, 0, JSON.stringify(applied.rejected));
+  assert.equal(applied.data.clauseOverrides['ra.s4.payment'], 'Pay within 130 days, or within 45 days.');
+});
+
+test('an inserted clause can be an anchor for a later insert', function () {
+  assert.equal(LC.validateProposal(clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' })).ok, false);
+  const chained = LC.validateProposals([
+    clause('4A', 'insert', '', 'Parent guarantee.', { anchor: 'ra.s4.payment' }),
+    clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' }),
+  ]);
+  assert.equal(chained.rejected.length, 0, JSON.stringify(chained.rejected));
+  assert.equal(chained.proposals[1].anchor, '4A');
+
+  const applied = LC.applyProposals({ _type: 'ra' }, [
+    clause('4A', 'insert', '', 'Parent guarantee.', { anchor: 'ra.s4.payment' }),
+    clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' }),
+  ]);
+  assert.equal(applied.rejected.length, 0, JSON.stringify(applied.rejected));
+  assert.equal(applied.data.clauseInserts[1].id, '4B');
+  assert.equal(applied.data.clauseInserts[1].anchor, '4A');
+
+  const stored = LC.validateStoredAgreement({
+    clauseInserts: [
+      { id: '4A', anchor: 'ra.s4.payment', label: '§4A', text: 'Guarantee.' },
+      { id: '4B', anchor: '4A', label: '§4B', text: 'Audit.' },
+    ],
+  });
+  assert.equal(stored.ok, true, JSON.stringify(stored.errors));
+  assert.equal(LC.validateStoredAgreement({
+    clauseInserts: [{ id: '4B', anchor: '4A', label: '§4B', text: 'Audit.' }],
+  }).ok, false);
+});
+
+test('unchanged legacy fields are kept, and a changed invalid field is rejected', function () {
+  const legacy = { sig_email: 'not-an-email', date: '01-10-2026', curr: 'EUR', pay: '30', name: 'Acme' };
+  assert.equal(LC.validateStoredAgreement(legacy).ok, false);
+  const same = LC.validateStoredAgreement(Object.assign({}, legacy, { name: 'Acme AB' }), legacy);
+  assert.equal(same.ok, true, JSON.stringify(same.errors));
+  const changedEmail = LC.validateStoredAgreement(Object.assign({}, legacy, { sig_email: 'still-wrong' }), legacy);
+  assert.equal(changedEmail.ok, false);
+  assert.ok(changedEmail.errors.some(function (e) { return e.indexOf('sig_email') >= 0; }));
+  assert.equal(changedEmail.errors.some(function (e) { return e.indexOf('date') >= 0; }), false);
+  const fixed = LC.validateStoredAgreement(Object.assign({}, legacy, { sig_email: 'a@b.co', date: '2026-10-01' }), legacy);
+  assert.equal(fixed.ok, true, JSON.stringify(fixed.errors));
+});
+
 test('the update route validates stored data after the signature lock', function () {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const putAt = src.indexOf("app.put('/api/agreements/:id'");
   const put = src.slice(putAt, src.indexOf("app.delete('/api/agreements/:id'", putAt));
   const locked = put.indexOf('isLocked(row)');
-  const checked = put.indexOf('rejectBadAgreement(res, data)');
+  const checked = put.indexOf('rejectBadAgreement(res, data, row.data)');
   const update = put.indexOf('UPDATE agreements SET');
   assert.ok(locked >= 0 && checked > locked && update > checked);
-  ["app.post('/api/agreements'", "app.post('/api/invites'", "app.post('/api/agreements/:id/submit'"].forEach(function (route) {
+  ["app.post('/api/agreements'", "app.post('/api/invites'"].forEach(function (route) {
     const at = src.indexOf(route);
     const body = src.slice(at, at + 1200);
     assert.ok(body.indexOf('rejectBadAgreement(res, data)') > 0, route);
   });
+  const submitAt = src.indexOf("app.post('/api/agreements/:id/submit'");
+  const submit = src.slice(submitAt, src.indexOf("app.get('/api/agreements'", submitAt));
+  const tokenAt = submit.indexOf('tokenEq(');
+  const lockAt = submit.indexOf('isLocked(row)');
+  const validAt = submit.indexOf('rejectBadAgreement(');
+  const writeAt = submit.indexOf('UPDATE agreements SET');
+  assert.ok(tokenAt > 0 && tokenAt < lockAt && lockAt < validAt && validAt < writeAt);
+  assert.match(submit, /vendora_signed_at IS NULL/);
+  assert.match(submit, /status NOT IN \('pending_signature','vendora_signed','signed'\)/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /function agreementErrorText/);
+  assert.match(html, /agreementErrorText\(res\.j/);
   assert.equal(html.indexOf('2026-10-13T00:00:00Z'), -1);
   assert.match(html, /new Date\(\)\.toISOString\(\)/);
   assert.match(html, /describeProposal/);
@@ -515,9 +592,8 @@ function chromePath() {
   return null;
 }
 
-test('buildRA tracked docx document.xml is well-formed tracked changes', async function () {
+test('buildRA tracked docx document.xml is well-formed tracked changes', { skip: chromePath() ? false : 'Chrome is not installed' }, async function () {
   const chrome = chromePath();
-  assert.ok(chrome, 'a Chrome binary is required to build the real docx');
   const puppeteer = require('puppeteer-core');
   const app = require('../server');
   const server = await new Promise(function (resolve) {
@@ -564,33 +640,79 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', async f
     });
     assert.deepEqual(xmls.rejected, []);
     const xml = xmls.document;
-    assert.match(xmls.settings, /w:trackRevisions/);
-    const ids = [];
-    const idRe = /\bw:id="([^"]+)"/g;
-    let found;
-    while ((found = idRe.exec(xml))) ids.push(found[1]);
-    assert.ok(ids.length > 1);
-    assert.equal(new Set(ids).size, ids.length);
-    assert.match(xml, /w:author="Vendora Contract Lawyer"/);
-    assert.match(xml, /w:date="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-    assert.doesNotMatch(xml, /2026-10-13T00:00:00Z/);
-    const dates = [];
-    const dateRe = /w:date="([^"]+)"/g;
-    let dated;
-    while ((dated = dateRe.exec(xml))) dates.push(Date.parse(dated[1]));
-    assert.ok(dates.length > 0);
+    const report = await page.evaluate(function (documentXml, settingsXml) {
+      const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+      function parsed(s) {
+        const doc = new DOMParser().parseFromString(s, 'application/xml');
+        const err = doc.getElementsByTagName('parsererror');
+        return { doc: doc, error: err.length ? (err[0].textContent || 'parsererror') : '' };
+      }
+      const document = parsed(documentXml);
+      const settings = parsed(settingsXml);
+      if (document.error || settings.error) {
+        return { documentError: document.error, settingsError: settings.error };
+      }
+      const ids = [];
+      const authors = [];
+      const dates = [];
+      let delText = 0;
+      let delTextOutside = 0;
+      const nodes = document.doc.getElementsByTagNameNS(W, '*');
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        if (el.hasAttributeNS(W, 'id')) ids.push(el.getAttributeNS(W, 'id'));
+        if (el.localName === 'ins' || el.localName === 'del') {
+          authors.push(el.getAttributeNS(W, 'author') || '');
+          dates.push(el.getAttributeNS(W, 'date') || '');
+        }
+        if (el.localName === 'delText') {
+          delText++;
+          let parent = el.parentNode;
+          let inside = false;
+          while (parent && parent !== document.doc) {
+            if (parent.localName === 'del') { inside = true; break; }
+            parent = parent.parentNode;
+          }
+          if (!inside) delTextOutside++;
+        }
+      }
+      return {
+        documentError: '',
+        settingsError: '',
+        ids: ids,
+        authors: authors,
+        dates: dates,
+        delText: delText,
+        delTextOutside: delTextOutside,
+        text: document.doc.documentElement ? document.doc.documentElement.textContent : '',
+        track: settings.doc.getElementsByTagNameNS(W, 'trackRevisions').length,
+        keptElements: document.doc.getElementsByTagName('kept').length,
+      };
+    }, xml, xmls.settings);
+    assert.equal(report.documentError, '');
+    assert.equal(report.settingsError, '');
+    assert.ok(report.track > 0);
+    assert.ok(report.ids.length > 1);
+    assert.equal(new Set(report.ids).size, report.ids.length);
+    assert.ok(report.authors.indexOf('Vendora Contract Lawyer') >= 0);
+    assert.ok(report.dates.length > 0);
     const now = Date.now();
-    dates.forEach(function (t) { assert.ok(Math.abs(now - t) < 10 * 60 * 1000); });
-    assert.match(xml, /<w:delText[\s>]/);
-    const outsideDel = xml.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, '');
-    assert.equal(outsideDel.indexOf('w:delText'), -1);
-    assert.match(xml, /&lt;kept&gt;/);
-    assert.match(xml, /&amp;/);
-    assert.match(xml, /SCC arbitration/);
-    assert.equal(/&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(xml), false);
+    report.dates.forEach(function (value) {
+      assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      assert.notEqual(value, '2026-10-13T00:00:00Z');
+      const t = Date.parse(value);
+      assert.ok(Math.abs(now - t) < 10 * 60 * 1000);
+    });
+    assert.ok(report.delText > 0);
+    assert.equal(report.delTextOutside, 0);
+    assert.match(report.text, /<kept>/);
+    assert.match(report.text, /&/);
+    assert.match(report.text, /SCC arbitration/);
+    assert.match(report.text, /A & B/);
+    assert.equal(report.text.indexOf('\u0001'), -1);
+    assert.equal(report.keptElements, 0);
     assert.equal(xml.indexOf('\u0001'), -1);
     assert.equal(xml.indexOf('<kept>'), -1);
-    assert.equal(xml.indexOf('A & B'), -1);
   } finally {
     if (browser) await browser.close();
     await new Promise(function (resolve) { server.close(resolve); });
