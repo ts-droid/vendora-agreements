@@ -19,7 +19,6 @@ function clip(value, max) {
   return text.length > max ? text.slice(0, max) : text;
 }
 
-const MIN_QUOTE = 16;
 const MIN_QUOTE_OVERLAP = 8;
 
 // Straight and curly quotes, and non-breaking spaces, compare as the same characters.
@@ -32,14 +31,17 @@ function fold(value) {
     .trim();
 }
 
-// A short token in the document is not enough to call a model quote Done.
+// A model Done quote has to share a run of the expected wording, however long the quote is.
 function quoteCountsAsDone(quote, expected) {
   const quoted = fold(quote);
-  if (quoted.length >= MIN_QUOTE) return true;
-  if (quoted.length < MIN_QUOTE_OVERLAP) return false;
   const wanted = fold(expected);
-  if (!wanted) return false;
-  return wanted.indexOf(quoted) >= 0 || quoted.indexOf(wanted) >= 0;
+  if (quoted.length < MIN_QUOTE_OVERLAP || wanted.length < MIN_QUOTE_OVERLAP) return false;
+  const shorter = quoted.length <= wanted.length ? quoted : wanted;
+  const longer = quoted.length <= wanted.length ? wanted : quoted;
+  for (let i = 0; i + MIN_QUOTE_OVERLAP <= shorter.length; i++) {
+    if (longer.indexOf(shorter.slice(i, i + MIN_QUOTE_OVERLAP)) >= 0) return true;
+  }
+  return false;
 }
 
 function containsFold(haystack, needle) {
@@ -168,8 +170,8 @@ function itemResult(item, status, quote) {
 }
 
 // Done is not the model's word. Expected wording found in the document is Done.
-// A model Done counts only when its quote is in the document and is long enough, or overlaps
-// the expected wording. Otherwise it is Unverified.
+// A model Done counts only when its quote is in the document and overlaps the expected wording.
+// A long quote about something else does not count. Otherwise the item is Unverified.
 // An item the model does not answer is Not checked. A quote that is not in the document is dropped.
 function normalizeVerdict(raw, plan, documentText) {
   const document = String(documentText || '');

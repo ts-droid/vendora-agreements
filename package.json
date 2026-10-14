@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=18"
   },
+  "overrides": {
+    "@napi-rs/canvas": "$no-canvas"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "busboy": "^1.6.0",
@@ -20,6 +23,7 @@
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.9.0",
     "nodemailer": "^8.0.10",
+    "no-canvas": "file:stubs/no-canvas",
     "pdfjs-dist": "^4.10.38",
     "pg": "^8.22.0"
   },

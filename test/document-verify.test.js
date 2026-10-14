@@ -25,7 +25,7 @@ extract.extractText = function (kind, buffer, opts) {
 const SENTINEL = 'SENTINEL_DO_NOT_LOG_9f3a7c';
 
 function crc32(buf) {
-  return zlib.crc32(buf) >>> 0;
+  return extract.crc32(buf);
 }
 
 function zipStore(files) {
@@ -384,8 +384,8 @@ test('a short model quote is not Done unless it overlaps the expected text', fun
   assert.equal(verdict.items[0].quote, '');
   assert.equal(verdict.items[1].status, 'Done');
   assert.equal(verdict.items[1].quote, 'Swedish law');
-  assert.equal(verdict.items[2].status, 'Done');
-  assert.equal(verdict.items[2].quote, 'exclusive for Sweden');
+  assert.equal(verdict.items[2].status, 'Unverified');
+  assert.equal(verdict.items[2].quote, '');
 });
 
 test('curly quotes and non-breaking spaces still match the document', function () {
@@ -400,7 +400,7 @@ test('curly quotes and non-breaking spaces still match the document', function (
   assert.equal(verdict.items[0].status, 'Done');
   const curlyQuote = 'Reseller\u2019s cost is \u201cincluded\u201d';
   const other = verify.planFrom({
-    redlines: [{ target: { kind: 'clause', id: 'other' }, newText: 'This sentence is not in the file at all.', label: 'Other' }],
+    redlines: [{ target: { kind: 'clause', id: 'other' }, newText: 'The Reseller\'s cost is "included" in the price.', label: 'Other' }],
   }, []).items;
   const quoted = verify.normalizeVerdict({
     items: [{ id: other[0].id, status: 'Done', quote: curlyQuote }],
@@ -586,6 +586,10 @@ test('a third document parse is refused while two parsers are busy', async funct
       workerPath: path.join(__dirname, 'fixtures', 'hang-worker.js'),
     };
     const pdf = buildPdf('hello');
+    const planted = 'PLANTED_WHILE_BUSY_9f3a';
+    const lied = zipCoded([
+      { name: 'word/document.xml', data: planted.repeat(80), method: 8, declaredUncompressed: 16 },
+    ]);
     const first = extractTextInWorker('pdf', pdf, hang);
     const second = extractTextInWorker('pdf', pdf, hang);
     await assert.rejects(
@@ -594,9 +598,29 @@ test('a third document parse is refused while two parsers are busy', async funct
         return err.status === 429 && err.code === 'busy' && /try again/i.test(err.publicMessage);
       }
     );
+    await assert.rejects(
+      function () { return extractTextInWorker('docx', lied, hang); },
+      function (err) {
+        const blob = err.publicMessage + '\n' + err.message;
+        return err.status === 429 && err.code === 'busy' && blob.indexOf(planted) < 0;
+      }
+    );
     await assert.rejects(function () { return first; }, function (err) { return err.code === 'timeout'; });
     await assert.rejects(function () { return second; }, function (err) { return err.code === 'timeout'; });
   });
+});
+
+test('a docx check packs the zip without zlib.crc32', async function () {
+  const sample = Buffer.from('Vendora CRC');
+  const original = zlib.crc32;
+  if (typeof original === 'function') assert.equal(extract.crc32(sample), original(sample) >>> 0);
+  zlib.crc32 = function () { throw new Error('zlib.crc32 is not available'); };
+  try {
+    const text = (await extract.extractText('docx', buildDocx(['CRC fallback sentence.']))).text;
+    assert.match(text, /CRC fallback sentence/);
+  } finally {
+    zlib.crc32 = original;
+  }
 });
 
 test('a PDF parse that does not finish is stopped, and the error hides the file', async function () {
@@ -740,6 +764,11 @@ test('the Check a document panel is English and does not write the agreement', f
   assert.match(route, /auth\.requireAuth/);
   assert.match(route, /readRequest/);
   assert.match(route, /loadOwned/);
+  assert.equal(route.indexOf('assertDocxSafe'), -1);
+  const idAt = route.indexOf('agreementId');
+  const ownedAt = route.indexOf('loadOwned');
+  const extractAt = route.indexOf('extractText');
+  assert.ok(idAt > 0 && idAt < ownedAt && ownedAt < extractAt);
   assert.match(route, /checklist:\s*\[\]/);
   assert.equal(route.indexOf('db.query'), -1);
   assert.equal(route.indexOf('UPDATE'), -1);
@@ -757,13 +786,17 @@ test('the Check a document panel is English and does not write the agreement', f
   assert.match(parser, /Busboy/);
   assert.match(parser, /MAX_PARSERS = 2/);
   assert.match(parser, /inflateLimited/);
+  assert.equal(parser.indexOf('zlib.crc32'), -1);
   assert.equal(parser.indexOf('pdf-parse'), -1);
   assert.equal(parser.indexOf('readFormParts'), -1);
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.equal(pkg.engines.node, '>=18');
   assert.equal(pkg.dependencies['@napi-rs/canvas'], undefined);
-  const npmrc = fs.readFileSync(path.join(__dirname, '..', '.npmrc'), 'utf8');
-  assert.match(npmrc, /^omit=optional$/m);
+  assert.equal(pkg.dependencies['no-canvas'], 'file:stubs/no-canvas');
+  assert.equal(pkg.overrides['@napi-rs/canvas'], '$no-canvas');
+  assert.equal(fs.existsSync(path.join(__dirname, '..', '.npmrc')), false);
+  const stub = fs.readFileSync(path.join(__dirname, '..', 'stubs/no-canvas/index.js'), 'utf8');
+  assert.equal(stub.indexOf('createCanvas'), -1);
 });
 
 describe('POST /api/ai/verify-document', function () {

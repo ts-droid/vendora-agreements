@@ -1,0 +1,7 @@
+{
+  "name": "no-canvas",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Stand-in for @napi-rs/canvas. Reading PDF text does not render pages.",
+  "main": "index.js"
+}

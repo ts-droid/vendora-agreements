@@ -17,6 +17,22 @@ const MAX_PARSERS = 2;
 const WORKER_PATH = path.join(__dirname, 'document-extract-worker.js');
 let activeParsers = 0;
 
+// ZIP CRC-32. The Node helper of this name is missing before 20.15 and 22.2, and engines.node allows 18.
+const CRC_TABLE = new Uint32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+  CRC_TABLE[n] = c >>> 0;
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buffer.length; i++) {
+    crc = CRC_TABLE[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function fail(status, code, publicMessage) {
   const err = new Error(code);
   err.status = status;
@@ -192,7 +208,7 @@ function packStored(parts) {
   parts.forEach(function (part) {
     const name = Buffer.from(part.name);
     const data = part.data;
-    const crc = zlib.crc32(data) >>> 0;
+    const crc = crc32(data);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
@@ -249,16 +265,6 @@ async function assertDocxSafe(buffer) {
 function extractInWorker(kind, buffer, opts) {
   const timeoutMs = opts && opts.timeoutMs ? opts.timeoutMs : PARSE_TIMEOUT_MS;
   const workerPath = opts && opts.workerPath ? opts.workerPath : WORKER_PATH;
-  if (activeParsers >= MAX_PARSERS) {
-    return Promise.reject(fail(429, 'busy', 'Too many documents are being checked. Try again in a moment.'));
-  }
-  activeParsers += 1;
-  let released = false;
-  function release() {
-    if (released) return;
-    released = true;
-    activeParsers -= 1;
-  }
   return new Promise(function (resolve, reject) {
     let settled = false;
     let worker;
@@ -272,7 +278,6 @@ function extractInWorker(kind, buffer, opts) {
         },
       });
     } catch (e) {
-      release();
       reject(fail(400, 'parse', 'Could not read that file.'));
       return;
     }
@@ -283,7 +288,6 @@ function extractInWorker(kind, buffer, opts) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      release();
       worker.terminate();
       fn(value);
     }
@@ -301,25 +305,25 @@ function extractInWorker(kind, buffer, opts) {
   });
 }
 
+// Inflation and the parser worker share one slot. A third document is refused
+// before any more of it is inflated.
 async function extractText(kind, buffer, opts) {
-  if (kind === 'docx') {
-    const safe = await assertDocxSafe(buffer);
-    const result = await extractInWorker('docx', safe, opts);
+  if (kind !== 'docx' && kind !== 'pdf') throw fail(400, 'unsupported', 'Upload a .docx or a .pdf file.');
+  if (activeParsers >= MAX_PARSERS) {
+    throw fail(429, 'busy', 'Too many documents are being checked. Try again in a moment.');
+  }
+  activeParsers += 1;
+  try {
+    const bytes = kind === 'docx' ? await assertDocxSafe(buffer) : buffer;
+    const result = await extractInWorker(kind, bytes, opts);
     return {
       text: result.text || '',
       documentTruncated: !!result.documentTruncated,
-      pagesTruncated: false,
+      pagesTruncated: kind === 'pdf' && !!result.pagesTruncated,
     };
+  } finally {
+    activeParsers -= 1;
   }
-  if (kind === 'pdf') {
-    const result = await extractInWorker('pdf', buffer, opts);
-    return {
-      text: result.text || '',
-      documentTruncated: !!result.documentTruncated,
-      pagesTruncated: !!result.pagesTruncated,
-    };
-  }
-  throw fail(400, 'unsupported', 'Upload a .docx or a .pdf file.');
 }
 
 // One file plus an agreement id. The plan is not accepted from the client.
@@ -383,6 +387,7 @@ module.exports = {
   MAX_PARSERS: MAX_PARSERS,
   PAGE_CAP: PAGE_CAP,
   extensionOf: extensionOf,
+  crc32: crc32,
   sniff: sniff,
   inspectZip: inspectZip,
   assertDocxSafe: assertDocxSafe,
