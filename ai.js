@@ -372,4 +372,4 @@ async function completeStructured(params) {
   return createMessage(params);
 }
 
-module.exports = { enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME, completeStructured };
+module.exports = { enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME, completeStructured, MODEL };

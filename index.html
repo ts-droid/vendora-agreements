@@ -26601,23 +26601,18 @@ function initAiLawyer(){
     return fetch("/api/auth/me").then(function(r){ if(r.ok) return r.json().then(function(j){ window._authUser=j.user; showAiButton(); }); });
   }).catch(function(){});
 }
-function parseVerifyChecklist(text){
-  return String(text || "").split(/\n/).map(function(line){
-    var parts = line.split("|").map(function(s){ return s.trim(); }).filter(Boolean);
-    if (!parts.length) return null;
-    var nr = null;
-    if (/^\d+$/.test(parts[0])) { nr = Number(parts[0]); parts.shift(); }
-    if (!parts.length) return null;
-    if (parts.length === 1) return { checklistNr: nr, label: parts[0], expected: parts[0] };
-    return { checklistNr: nr, label: parts[0], expected: parts.slice(1).join(" | ") };
-  }).filter(Boolean);
-}
 function verifyBadge(status){
-  var known = { Done:1, Missing:1, Different:1 };
-  var label = known[status] ? status : "Missing";
-  return "<span class='verify-badge verify-"+label+"'>"+esc(label)+"</span>";
+  var known = { Done:1, Missing:1, Different:1, Unverified:1, "Not checked":1 };
+  var label = known[status] ? status : "Not checked";
+  var cls = label === "Not checked" ? "Notchecked" : label;
+  return "<span class='verify-badge verify-"+cls+"'>"+esc(label)+"</span>";
 }
 function renderVerifyResults(result){
+  var warn = document.getElementById("verifyWarning");
+  if (warn) {
+    var warnings = (result && result.warnings) || [];
+    warn.textContent = warnings.join(" ");
+  }
   var box = document.getElementById("verifyResults");
   if (!box) return;
   var items = (result && result.items) || [];
@@ -26642,19 +26637,20 @@ function verifyUploadedDocument(){
   var btn = document.getElementById("verifyBtn");
   if (!file) { if (status) status.textContent = "Choose a .docx or PDF first."; return; }
   if (!/\.(docx|pdf)$/i.test(file.name || "")) { if (status) status.textContent = "Upload a .docx or a .pdf file."; return; }
+  var savedId = window._editing && window._editing.id;
+  if (!savedId) { if (status) status.textContent = "Open a saved agreement before checking a document."; return; }
   if (status) status.textContent = "Checking…";
   if (btn) btn.disabled = true;
   var fd = new FormData();
   fd.append("file", file, file.name);
-  var ctx = window._lawyerState || (typeof getAiContext === "function" ? getAiContext() : null) || {};
-  fd.append("agreement", JSON.stringify(ctx));
-  fd.append("checklist", JSON.stringify(parseVerifyChecklist(document.getElementById("verifyChecklist").value)));
+  fd.append("agreementId", String(savedId));
   fetch("/api/ai/verify-document", { method:"POST", body: fd })
     .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
     .then(function(res){
       if (!res.ok) {
         if (status) status.textContent = (res.j && res.j.error) || "The document could not be checked.";
         var empty = document.getElementById("verifyResults"); if (empty) empty.innerHTML = "";
+        var warn = document.getElementById("verifyWarning"); if (warn) warn.textContent = "";
         return;
       }
       if (status) status.textContent = "Checked. The agreement was not changed.";
@@ -27356,13 +27352,13 @@ initApp();
   </div>
   <div id="verifyBox" style="border-top:1px solid var(--border);padding:8px 10px;font-size:12px;background:#fafbfc">
     <div style="font-weight:600;margin-bottom:2px">Check a document</div>
-    <p style="color:var(--muted);margin:0 0 6px;line-height:1.45">Upload a .docx or PDF of the agreement, for example the existing or updated contract. The lawyer compares it with the approved changes, redlines, and the checklist. Nothing is written to the agreement.</p>
+    <p style="color:var(--muted);margin:0 0 6px;line-height:1.45">Upload a .docx or PDF of the agreement, for example the existing or updated contract. The lawyer compares it with the approved changes saved on this agreement. Nothing is written to the agreement.</p>
     <input id="verifyFile" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="font-size:12px;max-width:100%">
-    <textarea id="verifyChecklist" rows="2" placeholder="Optional checklist, one item per line: number | label | expected wording" style="width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;border:1px solid var(--border);border-radius:6px;padding:6px;font-size:12px;font-family:inherit"></textarea>
     <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
       <button type="button" id="verifyBtn" onclick="verifyUploadedDocument()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">Check document</button>
       <span id="verifyStatus" style="color:var(--muted)"></span>
     </div>
+    <div id="verifyWarning"></div>
     <div id="verifyResults"></div>
   </div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">

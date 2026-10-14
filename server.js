@@ -580,43 +580,31 @@ app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   }
 });
 
-// Read-only: compare an uploaded .docx or PDF with the agreement's approved redlines and checklist.
-// The handler does not read or write agreement rows.
-app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, function (req, res, next) {
-  express.raw({ type: () => true, limit: '8mb' })(req, res, function (err) {
-    if (err && err.type === 'entity.too.large') return res.status(413).json({ error: 'That file is larger than 8 MB.' });
-    if (err) return next(err);
-    next();
-  });
-}, async (req, res) => {
+// Read-only: compare an uploaded .docx or PDF with the approved changes on a saved agreement.
+// The plan comes from that row. The upload is not a source of agreement data, and nothing is written.
+app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req, res) => {
   try {
-    const parts = documentExtract.readFormParts(req.body, req.get('Content-Type') || '');
+    const parts = await documentExtract.readRequest(req);
     if (!parts.ok) return res.status(parts.status).json({ error: parts.error });
     const sniffed = documentExtract.sniff(parts.file.filename, parts.file.buffer);
     if (!sniffed.ok) return res.status(sniffed.status).json({ error: sniffed.error });
-    let text = '';
-    try {
-      text = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
-    } catch (e) {
-      return res.status(400).json({ error: 'Could not read that file.' });
+    if (sniffed.kind === 'docx') await documentExtract.assertDocxSafe(parts.file.buffer);
+    const agreementId = String(parts.agreementId || '');
+    if (!/^\d+$/.test(agreementId)) {
+      return res.status(400).json({ error: 'Open a saved agreement before checking a document.' });
     }
-    let agreement = {};
-    let checklist = [];
-    try {
-      agreement = parts.agreement ? JSON.parse(parts.agreement) : {};
-      checklist = parts.checklist ? JSON.parse(parts.checklist) : [];
-    } catch (e) {
-      return res.status(400).json({ error: 'The plan could not be read.' });
-    }
-    if (!agreement || typeof agreement !== 'object' || Array.isArray(agreement)) {
-      return res.status(400).json({ error: 'The plan could not be read.' });
-    }
-    if (!Array.isArray(checklist)) return res.status(400).json({ error: 'The checklist could not be read.' });
+    if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
+    req.params.id = agreementId;
+    const row = await loadOwned(req, res);
+    if (!row) return;
+    const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
     const out = await lawyerVerify.verifyDocument({
-      agreement: agreement,
-      checklist: checklist,
-      documentText: text,
+      agreement: row.data,
+      checklist: [],
+      documentText: extracted.text,
       filename: parts.file.filename,
+      documentTruncated: extracted.documentTruncated,
+      pagesTruncated: extracted.pagesTruncated,
     });
     res.json(out);
   } catch (err) {
