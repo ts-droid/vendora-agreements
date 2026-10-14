@@ -15,8 +15,13 @@ test('saved agreements table fits a desktop and the counterparty name opens the 
   const table = html.slice(tableAt, html.indexOf('el.innerHTML = html', tableAt));
   assert.equal(table.indexOf('overflow-x:scroll'), -1);
   assert.match(table, /class='actions'/);
-  assert.match(html, /\.archive-btn\{font-size:11px;line-height:normal;padding:3px 8px;border:2px outset #000;/);
-  assert.match(html, /\.archive-btn-delete\{color:#c0392b\}/);
+  assert.match(html, /\.archive-btn\{[^}]*height:24px/);
+  assert.match(html, /\.archive-btn\{[^}]*border:1px solid var\(--line\)/);
+  assert.match(html, /\.archive-btn\{[^}]*background:#fff/);
+  assert.match(html, /\.archive-btn\{[^}]*color:var\(--pine\)/);
+  assert.equal(html.indexOf('2px outset #000'), -1);
+  assert.match(html, /\.archive-btn-delete\{color:#c0392b;border-color:#c0392b\}/);
+  assert.match(html, /border-radius:999px !important/);
   assert.match(table, /class='archive-btn' onclick=\\"document\.getElementById\('ovFile_/);
   assert.match(table, /class='archive-btn' onclick='ovRemind/);
   assert.match(table, /class='archive-btn' onclick='archiveEdit/);
