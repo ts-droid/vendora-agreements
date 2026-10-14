@@ -26,4 +26,14 @@ test('validateStoredAgreement lists failing agreements and refuses a remote data
     function () { script.assertSafeDatabaseUrl('postgres://u:p@vendora-agreements-production.up.railway.app:5432/railway'); },
     /production database/
   );
+  const production = 'postgres://u:p@vendora-agreements-production.up.railway.app:5432/railway';
+  assert.equal(script.allowProduction(['node', 'scripts/validateStoredAgreement.js']), false);
+  assert.equal(script.allowProduction(['node', 'scripts/validateStoredAgreement.js', '--allow-production']), true);
+  assert.doesNotThrow(function () { script.assertSafeDatabaseUrl(production, true); });
+  assert.throws(function () { script.assertSafeDatabaseUrl(production, false); }, /production database/);
+
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'scripts', 'validateStoredAgreement.js'), 'utf8');
+  const flagAt = src.indexOf('allowProduction(args)');
+  const readAt = src.indexOf('db.withReadOnly');
+  assert.ok(flagAt > 0 && readAt > flagAt);
 });

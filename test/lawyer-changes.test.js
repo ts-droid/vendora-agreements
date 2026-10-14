@@ -499,6 +499,46 @@ test('findSpans keeps word boundaries so 30 days does not match 130 days', funct
   assert.equal(applied.data.clauseOverrides['ra.s4.payment'], 'Pay within 130 days, or within 45 days.');
 });
 
+test('findSpans keeps word boundaries for åäö and for a digit glued to a letter', function () {
+  const year = 'Betalning inom ett år, eller i vår.';
+  const yearView = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': year } },
+    clause('ra.s4.payment', 'replace', 'år', 'årtal')
+  );
+  assert.equal(yearView.ok, true, JSON.stringify(yearView.errors));
+  assert.equal(yearView.oldText, 'år');
+  const onlyVar = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': 'Leverans i vår.' } },
+    clause('ra.s4.payment', 'replace', 'år', 'årtal')
+  );
+  assert.equal(onlyVar.ok, false);
+  assert.match(onlyVar.errors[0], /0 times/);
+  const yearApplied = LC.applyProposals(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': year } },
+    [clause('ra.s4.payment', 'replace', 'år', 'årtal')]
+  );
+  assert.equal(yearApplied.rejected.length, 0, JSON.stringify(yearApplied.rejected));
+  assert.equal(yearApplied.data.clauseOverrides['ra.s4.payment'], 'Betalning inom ett årtal, eller i vår.');
+
+  const code = 'Code 30A and net 30.';
+  const codeView = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': code } },
+    clause('ra.s4.payment', 'replace', '30', '45')
+  );
+  assert.equal(codeView.ok, true, JSON.stringify(codeView.errors));
+  assert.equal(codeView.oldText, '30');
+  const onlyCode = LC.describeProposal(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': 'Code 30A only.' } },
+    clause('ra.s4.payment', 'replace', '30', '45')
+  );
+  assert.equal(onlyCode.ok, false);
+  const codeApplied = LC.applyProposals(
+    { _type: 'ra', clauseOverrides: { 'ra.s4.payment': code } },
+    [clause('ra.s4.payment', 'replace', '30', '45')]
+  );
+  assert.equal(codeApplied.data.clauseOverrides['ra.s4.payment'], 'Code 30A and net 45.');
+});
+
 test('an inserted clause can be an anchor for a later insert', function () {
   assert.equal(LC.validateProposal(clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' })).ok, false);
   const chained = LC.validateProposals([
@@ -526,6 +566,33 @@ test('an inserted clause can be an anchor for a later insert', function () {
   assert.equal(LC.validateStoredAgreement({
     clauseInserts: [{ id: '4B', anchor: '4A', label: '§4B', text: 'Audit.' }],
   }).ok, false);
+});
+
+test('stored inserts reject a self-anchor and a cycle', function () {
+  const self = LC.validateStoredAgreement({
+    clauseInserts: [{ id: '4A', anchor: '4A', label: '§4A', text: 'Loop.' }],
+  });
+  assert.equal(self.ok, false);
+  assert.ok(self.errors.some(function (e) { return e.indexOf('itself') >= 0; }));
+
+  const pair = LC.validateStoredAgreement({
+    clauseInserts: [
+      { id: '4A', anchor: '4B', label: '§4A', text: 'A.' },
+      { id: '4B', anchor: '4A', label: '§4B', text: 'B.' },
+    ],
+  });
+  assert.equal(pair.ok, false);
+  assert.ok(pair.errors.some(function (e) { return e.indexOf('cycle') >= 0; }));
+
+  const triangle = LC.validateStoredAgreement({
+    clauseInserts: [
+      { id: '4A', anchor: '4B', text: 'A.' },
+      { id: '4B', anchor: '4C', text: 'B.' },
+      { id: '4C', anchor: '4A', text: 'C.' },
+    ],
+  });
+  assert.equal(triangle.ok, false);
+  assert.ok(triangle.errors.some(function (e) { return e.indexOf('cycle') >= 0; }));
 });
 
 test('unchanged legacy fields are kept, and a changed invalid field is rejected', function () {

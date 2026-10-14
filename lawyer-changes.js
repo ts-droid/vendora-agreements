@@ -989,6 +989,35 @@
     return String(v).trim();
   }
 
+  // An insert may anchor to a real clause or to another insert. It may not
+  // anchor to itself, and the chain of inserts may not loop.
+  function rejectInsertCycles(inserts, errors) {
+    var anchorOf = Object.create(null);
+    inserts.forEach(function (row) {
+      if (!row || typeof row.id !== 'string' || typeof row.anchor !== 'string') return;
+      if (!hasOwn(anchorOf, row.id)) anchorOf[row.id] = row.anchor;
+    });
+    var ids = Object.keys(anchorOf);
+    for (var i = 0; i < ids.length; i++) {
+      if (anchorOf[ids[i]] === ids[i]) {
+        pushErr(errors, 'clause insert cannot anchor to itself');
+        return;
+      }
+    }
+    for (var s = 0; s < ids.length; s++) {
+      var seen = Object.create(null);
+      var id = ids[s];
+      while (hasOwn(anchorOf, id)) {
+        if (seen[id]) {
+          pushErr(errors, 'clause inserts contain a cycle');
+          return;
+        }
+        seen[id] = 1;
+        id = anchorOf[id];
+      }
+    }
+  }
+
   // previous: when an update keeps a legacy value, that field is not re-checked.
   // Omit previous (create, invite, the audit script) to validate every field.
   function validateStoredAgreement(data, previous) {
@@ -1028,6 +1057,7 @@
           if (typeof row.text !== 'string') pushErr(errors, 'clause insert text must be a string');
           else if (row.text.length > TEXT_LIMIT || (row.label && row.label.length > 200)) pushErr(errors, 'clause insert text is too long');
         });
+        rejectInsertCycles(data.clauseInserts, errors);
       }
     }
     if (hasOwn(data, 'clauseDeletes')) {

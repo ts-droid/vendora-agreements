@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 // List stored agreements that fail the strict agreement check.
-// Read-only. Refuses any database that is not on localhost — do not point it at production.
+// The query always runs inside BEGIN READ ONLY. A non-local or production
+// database is refused unless --allow-production is passed on the command line.
 const lawyerChanges = require('../lawyer-changes');
 
-function assertSafeDatabaseUrl(url) {
+function allowProduction(argv) {
+  return (argv || []).indexOf('--allow-production') >= 0;
+}
+
+function assertSafeDatabaseUrl(url, allowProductionFlag) {
   const raw = String(url || '').trim();
   if (!raw) throw new Error('DATABASE_URL is not set');
   let host = '';
   try { host = new URL(raw).hostname; }
   catch (e) { throw new Error('DATABASE_URL is not a valid URL'); }
+  if (allowProductionFlag) return;
   if (/production|railway\.app|rlwy\.net/i.test(raw)) {
     throw new Error('Refusing to run validateStoredAgreement against a production database.');
   }
@@ -30,8 +36,9 @@ function failingAgreements(rows) {
   }).filter(Boolean);
 }
 
-async function main() {
-  assertSafeDatabaseUrl(process.env.DATABASE_URL || '');
+async function main(argv) {
+  const args = argv || process.argv;
+  assertSafeDatabaseUrl(process.env.DATABASE_URL || '', allowProduction(args));
   const db = require('../db');
   if (!db.enabled) throw new Error('Database not configured');
   const result = await db.withReadOnly(function (client) {
@@ -55,6 +62,7 @@ async function main() {
 }
 
 module.exports = {
+  allowProduction: allowProduction,
   assertSafeDatabaseUrl: assertSafeDatabaseUrl,
   failingAgreements: failingAgreements,
   main: main,
