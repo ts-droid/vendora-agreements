@@ -8,6 +8,20 @@ const verify = require('../lawyer-verify');
 const extract = require('../document-extract');
 const komplett = require('./fixtures/komplett-16019013');
 
+// Reads share the two parser slots, so the tests take turns. The busy-worker test
+// holds this turn and calls the unwrapped reader so it can fill both slots itself.
+let parserTurn = Promise.resolve();
+function takeParserTurn(fn) {
+  const previous = parserTurn;
+  let release;
+  parserTurn = new Promise(function (resolve) { release = resolve; });
+  return previous.then(fn).finally(release);
+}
+const extractTextInWorker = extract.extractText.bind(extract);
+extract.extractText = function (kind, buffer, opts) {
+  return takeParserTurn(function () { return extractTextInWorker(kind, buffer, opts); });
+};
+
 const SENTINEL = 'SENTINEL_DO_NOT_LOG_9f3a7c';
 
 function crc32(buf) {
@@ -350,6 +364,51 @@ test('Done is verbatim expected text, and a model quote has to appear in the doc
   assert.equal(verdict.deviations[0].quote, 'exclusive for Sweden');
 });
 
+test('a short model quote is not Done unless it overlaps the expected text', function () {
+  const document = 'Pay SEK within thirty days. Swedish law applies to the territory, which is exclusive for Sweden.';
+  const plan = verify.planFrom({
+    redlines: [
+      { target: { kind: 'clause', id: 'fee' }, newText: 'The fee is one thousand SEK.', label: 'Fee' },
+      { target: { kind: 'clause', id: 'law' }, newText: 'The governing law is Swedish law.', label: 'Law' },
+      { target: { kind: 'clause', id: 'place' }, newText: 'Venue is Stockholm.', label: 'Venue' },
+    ],
+  }, []).items;
+  const verdict = verify.normalizeVerdict({
+    items: [
+      { id: plan[0].id, status: 'Done', quote: 'SEK' },
+      { id: plan[1].id, status: 'Done', quote: 'Swedish law' },
+      { id: plan[2].id, status: 'Done', quote: 'exclusive for Sweden' },
+    ],
+  }, plan, document);
+  assert.equal(verdict.items[0].status, 'Unverified');
+  assert.equal(verdict.items[0].quote, '');
+  assert.equal(verdict.items[1].status, 'Done');
+  assert.equal(verdict.items[1].quote, 'Swedish law');
+  assert.equal(verdict.items[2].status, 'Done');
+  assert.equal(verdict.items[2].quote, 'exclusive for Sweden');
+});
+
+test('curly quotes and non-breaking spaces still match the document', function () {
+  const expected = 'The Reseller\'s cost is "included".';
+  const document = 'The\u00A0Reseller\u2019s cost is \u201cincluded\u201d.';
+  const plan = verify.planFrom({
+    redlines: [{ target: { kind: 'clause', id: 'cost' }, newText: expected, label: 'Cost' }],
+  }, []).items;
+  const verdict = verify.normalizeVerdict({
+    items: [{ id: plan[0].id, status: 'Missing', quote: '' }],
+  }, plan, document);
+  assert.equal(verdict.items[0].status, 'Done');
+  const curlyQuote = 'Reseller\u2019s cost is \u201cincluded\u201d';
+  const other = verify.planFrom({
+    redlines: [{ target: { kind: 'clause', id: 'other' }, newText: 'This sentence is not in the file at all.', label: 'Other' }],
+  }, []).items;
+  const quoted = verify.normalizeVerdict({
+    items: [{ id: other[0].id, status: 'Done', quote: curlyQuote }],
+  }, other, 'The Reseller\'s cost is "included".');
+  assert.equal(quoted.items[0].status, 'Done');
+  assert.equal(quoted.items[0].quote, curlyQuote);
+});
+
 test('a truncated document or plan is warned about', async function () {
   const redlines = [];
   for (let i = 0; i < 81; i++) {
@@ -442,6 +501,102 @@ test('a zip bomb is rejected from the central directory before the parser runs',
     function () { return extract.assertDocxSafe(ratioZip); },
     function (err) { return err.code === 'zip-bomb' && String(err.publicMessage).indexOf(planted) < 0; }
   );
+});
+
+function zipCoded(files) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  files.forEach(function (file) {
+    const name = Buffer.from(file.name);
+    const raw = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data);
+    const method = file.method || 0;
+    const payload = method === 8 ? zlib.deflateRawSync(raw) : raw;
+    const declared = file.declaredUncompressed == null ? raw.length : file.declaredUncompressed;
+    const crc = crc32(raw);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(file.localMethod == null ? method : file.localMethod, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(payload.length, 18);
+    local.writeUInt32LE(declared, 22);
+    local.writeUInt16LE(name.length, 26);
+    const chunk = Buffer.concat([local, name, payload]);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(payload.length, 20);
+    central.writeUInt32LE(declared, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(chunk);
+    centrals.push(Buffer.concat([central, name]));
+    offset += chunk.length;
+  });
+  const directory = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat(locals.concat([directory, end]));
+}
+
+test('a part whose real size is not the size it declares is rejected before mammoth', async function () {
+  const planted = 'PLANTED_LIE_9f3a';
+  const filler = 'abcdefghij'.repeat(800);
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>'
+    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+    + planted + filler
+    + '</w:t></w:r></w:p></w:body></w:document>';
+  const lied = zipCoded([
+    { name: '[Content_Types].xml', data: '<Types></Types>' },
+    { name: 'word/document.xml', data: xml, method: 8, declaredUncompressed: 16 },
+  ]);
+  const listed = extract.inspectZip(lied);
+  assert.equal(listed.find(function (entry) { return entry.name === 'word/document.xml'; }).uncompressed, 16);
+  await assert.rejects(
+    function () { return extract.assertDocxSafe(lied); },
+    function (err) {
+      const blob = err.publicMessage + '\n' + err.message;
+      return err.code === 'zip-bomb' && err.publicMessage === 'That file is too large to check.' && blob.indexOf(planted) < 0;
+    }
+  );
+  const honestXml = '<?xml version="1.0" encoding="UTF-8"?>'
+    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+    + 'Honest deflate sentence 9f3a.'
+    + '</w:t></w:r></w:p></w:body></w:document>';
+  const honest = zipCoded([
+    { name: '[Content_Types].xml', data: '<Types></Types>' },
+    { name: 'word/document.xml', data: honestXml, method: 8, localMethod: 0 },
+  ]);
+  const text = (await extract.extractText('docx', honest)).text;
+  assert.match(text, /Honest deflate sentence 9f3a/);
+});
+
+test('a third document parse is refused while two parsers are busy', async function () {
+  await takeParserTurn(async function () {
+    const hang = {
+      timeoutMs: 300,
+      workerPath: path.join(__dirname, 'fixtures', 'hang-worker.js'),
+    };
+    const pdf = buildPdf('hello');
+    const first = extractTextInWorker('pdf', pdf, hang);
+    const second = extractTextInWorker('pdf', pdf, hang);
+    await assert.rejects(
+      function () { return extractTextInWorker('pdf', pdf, hang); },
+      function (err) {
+        return err.status === 429 && err.code === 'busy' && /try again/i.test(err.publicMessage);
+      }
+    );
+    await assert.rejects(function () { return first; }, function (err) { return err.code === 'timeout'; });
+    await assert.rejects(function () { return second; }, function (err) { return err.code === 'timeout'; });
+  });
 });
 
 test('a PDF parse that does not finish is stopped, and the error hides the file', async function () {
@@ -565,6 +720,19 @@ test('the Check a document panel is English and does not write the agreement', f
   assert.match(html, /verify-Unverified/);
   assert.match(html, /verify-Notchecked/);
   assert.match(html, /id="verifyWarning"/);
+  assert.match(html, /class="verify-box"/);
+  assert.match(html, /class="verify-title"/);
+  assert.match(html, /class="verify-copy"/);
+  assert.match(html, /class="verify-actions"/);
+  assert.match(html, /class='verify-item'/);
+  assert.match(html, /class='verify-quote'/);
+  assert.match(html, /class='verify-dev-head'/);
+  assert.match(html, /class='verify-note'/);
+  assert.match(html, /class='verify-none'/);
+  const panel = html.slice(html.indexOf('<div id="verifyBox"'), html.indexOf('id="verifyResults"'));
+  assert.equal(panel.indexOf('style='), -1);
+  const rendered = html.slice(html.indexOf('function renderVerifyResults'), html.indexOf('function verifyUploadedDocument'));
+  assert.equal(rendered.indexOf('style='), -1);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const routeStart = server.indexOf("app.post('/api/ai/verify-document'");
   const routeEnd = server.indexOf("app.post('/api/ai/suggest-note'");
@@ -587,8 +755,15 @@ test('the Check a document panel is English and does not write the agreement', f
   const parser = fs.readFileSync(path.join(__dirname, '..', 'document-extract.js'), 'utf8');
   assert.match(parser, /resourceLimits/);
   assert.match(parser, /Busboy/);
+  assert.match(parser, /MAX_PARSERS = 2/);
+  assert.match(parser, /inflateLimited/);
   assert.equal(parser.indexOf('pdf-parse'), -1);
   assert.equal(parser.indexOf('readFormParts'), -1);
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(pkg.engines.node, '>=18');
+  assert.equal(pkg.dependencies['@napi-rs/canvas'], undefined);
+  const npmrc = fs.readFileSync(path.join(__dirname, '..', '.npmrc'), 'utf8');
+  assert.match(npmrc, /^omit=optional$/m);
 });
 
 describe('POST /api/ai/verify-document', function () {

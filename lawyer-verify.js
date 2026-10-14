@@ -19,8 +19,27 @@ function clip(value, max) {
   return text.length > max ? text.slice(0, max) : text;
 }
 
+const MIN_QUOTE = 16;
+const MIN_QUOTE_OVERLAP = 8;
+
+// Straight and curly quotes, and non-breaking spaces, compare as the same characters.
 function fold(value) {
-  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  return String(value == null ? '' : value)
+    .replace(/[\u2018\u2019\u201A\u201B\u2032`]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// A short token in the document is not enough to call a model quote Done.
+function quoteCountsAsDone(quote, expected) {
+  const quoted = fold(quote);
+  if (quoted.length >= MIN_QUOTE) return true;
+  if (quoted.length < MIN_QUOTE_OVERLAP) return false;
+  const wanted = fold(expected);
+  if (!wanted) return false;
+  return wanted.indexOf(quoted) >= 0 || quoted.indexOf(wanted) >= 0;
 }
 
 function containsFold(haystack, needle) {
@@ -149,7 +168,8 @@ function itemResult(item, status, quote) {
 }
 
 // Done is not the model's word. Expected wording found in the document is Done.
-// A model Done counts only when its quote is in the document; otherwise it is Unverified.
+// A model Done counts only when its quote is in the document and is long enough, or overlaps
+// the expected wording. Otherwise it is Unverified.
 // An item the model does not answer is Not checked. A quote that is not in the document is dropped.
 function normalizeVerdict(raw, plan, documentText) {
   const document = String(documentText || '');
@@ -170,7 +190,7 @@ function normalizeVerdict(raw, plan, documentText) {
     const hit = byId[item.id];
     if (!hit) return itemResult(item, 'Not checked', '');
     const quote = containsFold(document, hit.quote) ? hit.quote : '';
-    if (hit.status === 'Done' && !quote) return itemResult(item, 'Unverified', '');
+    if (hit.status === 'Done' && !quoteCountsAsDone(quote, item.expected)) return itemResult(item, 'Unverified', '');
     return itemResult(item, hit.status, quote);
   });
   const deviations = [];

@@ -588,7 +588,9 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
     if (!parts.ok) return res.status(parts.status).json({ error: parts.error });
     const sniffed = documentExtract.sniff(parts.file.filename, parts.file.buffer);
     if (!sniffed.ok) return res.status(sniffed.status).json({ error: sniffed.error });
-    if (sniffed.kind === 'docx') await documentExtract.assertDocxSafe(parts.file.buffer);
+    const fileBuffer = sniffed.kind === 'docx'
+      ? await documentExtract.assertDocxSafe(parts.file.buffer)
+      : parts.file.buffer;
     const agreementId = String(parts.agreementId || '');
     if (!/^\d+$/.test(agreementId)) {
       return res.status(400).json({ error: 'Open a saved agreement before checking a document.' });
@@ -597,7 +599,7 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
     req.params.id = agreementId;
     const row = await loadOwned(req, res);
     if (!row) return;
-    const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
+    const extracted = await documentExtract.extractText(sniffed.kind, fileBuffer);
     const out = await lawyerVerify.verifyDocument({
       agreement: row.data,
       checklist: [],

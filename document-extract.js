@@ -1,6 +1,6 @@
 // Read an uploaded .docx or PDF into plain text.
-// The extension and the file signature both have to agree. A .docx is rejected before mammoth
-// runs when the zip central directory is too large, too nested, or too well compressed.
+// The extension and the file signature both have to agree. A .docx is inflated here, with a
+// running output cap, and only that checked copy is handed to mammoth.
 const zlib = require('zlib');
 const path = require('path');
 const { Worker } = require('worker_threads');
@@ -11,10 +11,11 @@ const MAX_TEXT = 120000;
 const MAX_ENTRIES = 200;
 const MAX_UNCOMPRESSED = 50 * 1024 * 1024;
 const MAX_RATIO = 100;
-const MAX_XML = 2 * 1024 * 1024;
 const PAGE_CAP = 30;
 const PARSE_TIMEOUT_MS = 20000;
+const MAX_PARSERS = 2;
 const WORKER_PATH = path.join(__dirname, 'document-extract-worker.js');
+let activeParsers = 0;
 
 function fail(status, code, publicMessage) {
   const err = new Error(code);
@@ -144,11 +145,12 @@ function inflateLimited(payload, maxOut) {
       reject(err);
     }
     infl.on('data', function (chunk) {
-      total += chunk.length;
-      if (total > maxOut) {
+      if (failed) return;
+      if (chunk.length > maxOut - total) {
         stop(fail(400, 'zip-bomb', 'That file is too large to check.'));
         return;
       }
+      total += chunk.length;
       chunks.push(chunk);
     });
     infl.on('error', function () { stop(fail(400, 'bad-zip', 'That file is not a Word document (.docx).')); });
@@ -161,18 +163,18 @@ async function readZipEntry(buffer, entry, maxOut) {
   if (entry.localOffset + 30 > buffer.length || buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) {
     throw fail(400, 'bad-zip', 'That file is not a Word document (.docx).');
   }
-  const method = buffer.readUInt16LE(entry.localOffset + 8);
   const nameLen = buffer.readUInt16LE(entry.localOffset + 26);
   const extraLen = buffer.readUInt16LE(entry.localOffset + 28);
   const dataStart = entry.localOffset + 30 + nameLen + extraLen;
   const compressedSize = entry.compressed;
   if (dataStart + compressedSize > buffer.length) throw fail(400, 'bad-zip', 'That file is not a Word document (.docx).');
   const payload = buffer.slice(dataStart, dataStart + compressedSize);
-  if (method === 0) {
+  // The central directory decides the method. A stored local header must not skip inflation.
+  if (entry.method === 0) {
     if (payload.length > maxOut) throw fail(400, 'zip-bomb', 'That file is too large to check.');
     return payload;
   }
-  if (method !== 8) throw fail(400, 'bad-zip', 'That file is not a Word document (.docx).');
+  if (entry.method !== 8) throw fail(400, 'bad-zip', 'That file is not a Word document (.docx).');
   return inflateLimited(payload, maxOut);
 }
 
@@ -183,18 +185,80 @@ function assertNoDoctype(xml) {
   }
 }
 
+function packStored(parts) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  parts.forEach(function (part) {
+    const name = Buffer.from(part.name);
+    const data = part.data;
+    const crc = zlib.crc32(data) >>> 0;
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    const chunk = Buffer.concat([local, name, data]);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(chunk);
+    centrals.push(Buffer.concat([central, name]));
+    offset += chunk.length;
+  });
+  const directory = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(parts.length, 8);
+  end.writeUInt16LE(parts.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat(locals.concat([directory, end]));
+}
+
+// Inflate every part. Declared sizes are a hint for the cap, not proof of the real size.
 async function assertDocxSafe(buffer) {
   const entries = inspectZip(buffer);
   const doc = entries.find(function (entry) { return entry.name === 'word/document.xml'; });
   if (!doc) throw fail(400, 'bad-zip', 'That file is not a Word document (.docx).');
-  const xml = await readZipEntry(buffer, doc, Math.min(doc.uncompressed || MAX_XML, MAX_XML));
-  assertNoDoctype(xml);
-  return entries;
+  let used = 0;
+  const parts = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const room = MAX_UNCOMPRESSED - used;
+    if (room < 0 || entry.uncompressed > room) throw fail(400, 'zip-bomb', 'That file is too large to check.');
+    const data = await readZipEntry(buffer, entry, Math.min(entry.uncompressed, room));
+    if (data.length !== entry.uncompressed) throw fail(400, 'zip-bomb', 'That file is too large to check.');
+    used += data.length;
+    if (used > MAX_UNCOMPRESSED) throw fail(400, 'zip-bomb', 'That file is too large to check.');
+    parts.push({ name: entry.name, data: data });
+  }
+  const xml = parts.find(function (part) { return part.name === 'word/document.xml'; });
+  assertNoDoctype(xml.data);
+  return packStored(parts);
 }
 
 function extractInWorker(kind, buffer, opts) {
   const timeoutMs = opts && opts.timeoutMs ? opts.timeoutMs : PARSE_TIMEOUT_MS;
   const workerPath = opts && opts.workerPath ? opts.workerPath : WORKER_PATH;
+  if (activeParsers >= MAX_PARSERS) {
+    return Promise.reject(fail(429, 'busy', 'Too many documents are being checked. Try again in a moment.'));
+  }
+  activeParsers += 1;
+  let released = false;
+  function release() {
+    if (released) return;
+    released = true;
+    activeParsers -= 1;
+  }
   return new Promise(function (resolve, reject) {
     let settled = false;
     let worker;
@@ -208,6 +272,7 @@ function extractInWorker(kind, buffer, opts) {
         },
       });
     } catch (e) {
+      release();
       reject(fail(400, 'parse', 'Could not read that file.'));
       return;
     }
@@ -218,6 +283,7 @@ function extractInWorker(kind, buffer, opts) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      release();
       worker.terminate();
       fn(value);
     }
@@ -227,14 +293,18 @@ function extractInWorker(kind, buffer, opts) {
     });
     worker.on('error', function () { finish(reject, fail(400, 'parse', 'Could not read that file.')); });
     worker.on('exit', function () { finish(reject, fail(400, 'parse', 'Could not read that file.')); });
-    worker.postMessage({ kind: kind, bytes: buffer });
+    try {
+      worker.postMessage({ kind: kind, bytes: buffer });
+    } catch (e) {
+      finish(reject, fail(400, 'parse', 'Could not read that file.'));
+    }
   });
 }
 
 async function extractText(kind, buffer, opts) {
   if (kind === 'docx') {
-    await assertDocxSafe(buffer);
-    const result = await extractInWorker('docx', buffer, opts);
+    const safe = await assertDocxSafe(buffer);
+    const result = await extractInWorker('docx', safe, opts);
     return {
       text: result.text || '',
       documentTruncated: !!result.documentTruncated,
@@ -310,6 +380,7 @@ module.exports = {
   MAX_ENTRIES: MAX_ENTRIES,
   MAX_UNCOMPRESSED: MAX_UNCOMPRESSED,
   MAX_RATIO: MAX_RATIO,
+  MAX_PARSERS: MAX_PARSERS,
   PAGE_CAP: PAGE_CAP,
   extensionOf: extensionOf,
   sniff: sniff,
