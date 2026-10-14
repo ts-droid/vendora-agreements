@@ -151,10 +151,17 @@
     if (/^\d{1,2}[A-Z]$/.test(id)) return true;
     return !!clauseByIdAny(id);
   }
-  function anchorExists(id) {
-    if (!id) return false;
+  // A catalog clause, an annex, or a clause already inserted on this agreement.
+  function anchorExists(id, data) {
+    if (!id || typeof id !== 'string') return false;
     if (normalizeAnnexId(id)) return true;
-    return !!clauseByIdAny(id);
+    if (clauseByIdAny(id)) return true;
+    var inserts = data && data.clauseInserts;
+    if (!Array.isArray(inserts)) return false;
+    for (var i = 0; i < inserts.length; i++) {
+      if (inserts[i] && inserts[i].id === id) return true;
+    }
+    return false;
   }
   function normalizeClauseId(raw) {
     var s = String(raw == null ? '' : raw).trim();
@@ -224,12 +231,24 @@
     if (id === 'date' && !validIsoDate(s)) return 'date must be an ISO date (YYYY-MM-DD)';
     return null;
   }
-  function canonicalAnchor(anchor) {
+  function canonicalAnchor(anchor, data) {
     var asAnnex = normalizeAnnexId(anchor);
-    if (asAnnex && anchorExists(asAnnex)) return asAnnex;
+    if (asAnnex && anchorExists(asAnnex, data)) return asAnnex;
     var asClause = normalizeClauseId(anchor);
-    if (asClause && anchorExists(asClause)) return asClause;
+    if (asClause && anchorExists(asClause, data)) return asClause;
     return '';
+  }
+  function isWordChar(ch) {
+    return !!ch && /[\p{L}\p{N}_]/u.test(ch);
+  }
+  // "30 days" matches a standalone "30 days", not the tail of "130 days".
+  function atWordBoundary(norm, at, len) {
+    var before = at > 0 ? norm.charAt(at - 1) : '';
+    var afterAt = at + len;
+    var after = afterAt < norm.length ? norm.charAt(afterAt) : '';
+    if (isWordChar(before) && isWordChar(norm.charAt(at))) return false;
+    if (len > 0 && isWordChar(after) && isWordChar(norm.charAt(at + len - 1))) return false;
+    return true;
   }
 
   // Collapse whitespace and fold quotes, remembering which original index each
@@ -266,6 +285,10 @@
     while (from < h.norm.length) {
       var at = h.norm.indexOf(nrm.norm, from);
       if (at < 0) break;
+      if (!atWordBoundary(h.norm, at, nrm.norm.length)) {
+        from = at + 1;
+        continue;
+      }
       var start = h.map[at];
       var last = at + nrm.norm.length - 1;
       var end = h.map[last] + 1;
@@ -286,7 +309,7 @@
     return 'oldText matches ' + n + ' times';
   }
 
-  function validateProposal(raw) {
+  function validateProposal(raw, data) {
     var errors = [];
     var src = fromToolChange(raw);
     if (!src || typeof src !== 'object' || Array.isArray(src)) {
@@ -318,7 +341,7 @@
       id = normalizeClauseId(targetIn && targetIn.id);
       if (!id) errors.push('clause id is missing or not allowed');
     }
-    var anchorId = canonicalAnchor(anchor);
+    var anchorId = canonicalAnchor(anchor, data);
     if (op === 'insert' && kind === 'clause' && !anchorId) errors.push('anchor must exist');
     var checklistNr = null;
     if (src.checklistNr == null || src.checklistNr === '') checklistNr = null;
@@ -345,7 +368,7 @@
     return { ok: true, errors: [], proposal: proposal };
   }
 
-  function validateProposals(list) {
+  function validateProposals(list, data) {
     if (!Array.isArray(list)) {
       return { ok: false, proposals: [], rejected: [{ index: 0, errors: ['changes must be an array'] }] };
     }
@@ -356,12 +379,25 @@
         rejected: [{ index: 0, errors: ['At most ' + MAX_CHANGES + ' changes per call'] }],
       };
     }
+    // Earlier inserts in this call, plus clauses already stored, are real anchors.
+    var known = { clauseInserts: [] };
+    var prior = data && data.clauseInserts;
+    if (Array.isArray(prior)) {
+      prior.forEach(function (row) {
+        if (row && typeof row.id === 'string') known.clauseInserts.push({ id: row.id });
+      });
+    }
     var proposals = [];
     var rejected = [];
     list.forEach(function (raw, i) {
-      var v = validateProposal(raw);
+      var v = validateProposal(raw, known);
       if (!v.ok) rejected.push({ index: i, errors: v.errors });
-      else proposals.push(v.proposal);
+      else {
+        proposals.push(v.proposal);
+        if (v.proposal.op === 'insert' && v.proposal.target.kind === 'clause') {
+          known.clauseInserts.push({ id: v.proposal.target.id });
+        }
+      }
     });
     return { ok: rejected.length === 0, proposals: proposals, rejected: rejected };
   }
@@ -459,7 +495,7 @@
     var curText = currentText(data, kind, id);
     if (p.op === 'insert') {
       if (String(curText).trim()) return kind + ' already exists';
-      if (kind === 'clause' && !anchorExists(p.anchor)) return 'anchor must exist';
+      if (kind === 'clause' && !anchorExists(p.anchor, data)) return 'anchor must exist';
       if (kind === 'annex') writeAnnexText(data, id, p.newText);
       else writeClauseText(data, id, p.newText, p);
       return null;
@@ -513,7 +549,7 @@
     var applied = [];
     var touched = Object.create(null);
     proposals.forEach(function (raw, i) {
-      var v = validateProposal(raw);
+      var v = validateProposal(raw, next);
       if (!v.ok) { rejected.push({ index: i, errors: v.errors }); return; }
       var p = v.proposal;
       var key = p.target.kind + '\0' + p.target.id;
@@ -545,7 +581,7 @@
   }
 
   function describeProposal(data, raw) {
-    var v = validateProposal(raw);
+    var v = validateProposal(raw, data);
     if (!v.ok) return { ok: false, errors: v.errors, oldText: '', newText: '' };
     var p = v.proposal;
     var kind = p.target.kind;
@@ -553,7 +589,7 @@
     var cur = currentText(data || {}, kind, id);
     if (kind !== 'field' && p.op === 'insert') {
       if (String(cur).trim()) return { ok: false, errors: [kind + ' already exists'], proposal: p, oldText: '', newText: '' };
-      if (kind === 'clause' && !anchorExists(p.anchor)) return { ok: false, errors: ['anchor must exist'], proposal: p, oldText: '', newText: '' };
+      if (kind === 'clause' && !anchorExists(p.anchor, data)) return { ok: false, errors: ['anchor must exist'], proposal: p, oldText: '', newText: '' };
       return { ok: true, errors: [], proposal: p, oldText: '', newText: p.newText };
     }
     if (p.op === 'replace' && !String(p.oldText).trim()) {
@@ -789,7 +825,7 @@
       + 'Each change has target_kind (clause, annex, or field), target_id, op (replace, insert, or delete), old_text, new_text, label, rationale, and anchor.\n'
       + 'Use the exact clause id from the list below. For a NEW clause (for example 4A), op is insert, target_id is 4A, and anchor is the clause id it should follow. The anchor must already exist.\n'
       + 'Annex target_id is 1A, 1B, 2, 3, 4, or 5. Field target_id is one of: ' + Object.keys(FIELDS).join(', ') + '.\n'
-      + 'old_text must match the current clause, annex, or field exactly once after whitespace and quote characters are normalised. '
+      + 'old_text must match the current clause, annex, or field exactly once after whitespace and quote characters are normalised, on word boundaries, so "30 days" does not match "130 days". '
       + 'An empty old_text on replace replaces the whole clause, annex, or field. Zero matches or several matches are rejected. '
       + 'new_text is the replacement for that match, the inserted text, or empty when op is delete.\n'
       + 'At most ' + MAX_CHANGES + ' changes per call.\n'
@@ -948,29 +984,52 @@
     if (errors.length < 40) errors.push(message);
   }
 
-  function validateStoredAgreement(data) {
+  function fieldText(v) {
+    if (v == null) return '';
+    return String(v).trim();
+  }
+
+  // An insert may anchor to a real clause or to another insert. It may not
+  // anchor to itself, and the chain of inserts may not loop.
+  function rejectInsertCycles(inserts, errors) {
+    var anchorOf = Object.create(null);
+    inserts.forEach(function (row) {
+      if (!row || typeof row.id !== 'string' || typeof row.anchor !== 'string') return;
+      if (!hasOwn(anchorOf, row.id)) anchorOf[row.id] = row.anchor;
+    });
+    var ids = Object.keys(anchorOf);
+    for (var i = 0; i < ids.length; i++) {
+      if (anchorOf[ids[i]] === ids[i]) {
+        pushErr(errors, 'clause insert cannot anchor to itself');
+        return;
+      }
+    }
+    for (var s = 0; s < ids.length; s++) {
+      var seen = Object.create(null);
+      var id = ids[s];
+      while (hasOwn(anchorOf, id)) {
+        if (seen[id]) {
+          pushErr(errors, 'clause inserts contain a cycle');
+          return;
+        }
+        seen[id] = 1;
+        id = anchorOf[id];
+      }
+    }
+  }
+
+  // previous: when an update keeps a legacy value, that field is not re-checked.
+  // Omit previous (create, invite, the audit script) to validate every field.
+  function validateStoredAgreement(data, previous) {
     var errors = [];
     if (!plainObject(data)) return { ok: false, errors: ['agreement data must be an object'] };
-    if (hasOwn(data, 'curr')) {
-      var currErr = validateFieldValue('curr', data.curr);
-      if (currErr) pushErr(errors, currErr);
-    }
-    if (hasOwn(data, 'pay')) {
-      var payErr = validateFieldValue('pay', data.pay);
-      if (payErr) pushErr(errors, payErr);
-    }
-    if (hasOwn(data, 'notice')) {
-      var noticeErr = validateFieldValue('notice', data.notice);
-      if (noticeErr) pushErr(errors, noticeErr);
-    }
-    if (hasOwn(data, 'sig_email')) {
-      var emailErr = validateFieldValue('sig_email', data.sig_email);
-      if (emailErr) pushErr(errors, emailErr);
-    }
-    if (hasOwn(data, 'date')) {
-      var dateErr = validateFieldValue('date', data.date);
-      if (dateErr) pushErr(errors, dateErr);
-    }
+    var prior = plainObject(previous) ? previous : null;
+    ['curr', 'pay', 'notice', 'sig_email', 'date'].forEach(function (id) {
+      if (!hasOwn(data, id)) return;
+      if (prior && fieldText(data[id]) === fieldText(hasOwn(prior, id) ? prior[id] : '')) return;
+      var err = validateFieldValue(id, data[id]);
+      if (err) pushErr(errors, err);
+    });
     if (hasOwn(data, 'clauseOverrides')) {
       if (!plainObject(data.clauseOverrides)) pushErr(errors, 'clauseOverrides must be an object');
       else {
@@ -993,11 +1052,12 @@
             return;
           }
           if (typeof row.id !== 'string' || !clauseIdAllowed(row.id)) pushErr(errors, 'clause insert id is not allowed');
-          if (typeof row.anchor !== 'string' || !anchorExists(row.anchor)) pushErr(errors, 'clause insert anchor must exist');
+          if (typeof row.anchor !== 'string' || !anchorExists(row.anchor, data)) pushErr(errors, 'clause insert anchor must exist');
           if (row.label != null && typeof row.label !== 'string') pushErr(errors, 'clause insert label must be a string');
           if (typeof row.text !== 'string') pushErr(errors, 'clause insert text must be a string');
           else if (row.text.length > TEXT_LIMIT || (row.label && row.label.length > 200)) pushErr(errors, 'clause insert text is too long');
         });
+        rejectInsertCycles(data.clauseInserts, errors);
       }
     }
     if (hasOwn(data, 'clauseDeletes')) {

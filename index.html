@@ -24156,6 +24156,8 @@ function flushAnchored(h, anchorId){
     var rl = data._trackChanges ? LC.redlineFor(data, "clause", c.id) : null;
     if (rl && data._trackChanges) out.push(trackedParagraph(h, rl.oldText || "", rl.newText || c.text || "", prefix));
     else out.push(h.par(prefix.concat([c.text || ""])));
+    // A clause inserted after this one (anchor is the new clause's id).
+    flushAnchored(h, c.id).forEach(function(child){ out.push(child); });
   });
   return out;
 }
@@ -25374,6 +25376,8 @@ function generateFromReview() {
     if (d._aid) {
       fetch("/api/agreements/" + d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ counterpartyName:(d.name||null), counterpartyEmail:reviewCounterpartyEmail(d), data:d, status:"generated" })
+      }).then(readApi).then(function(res){
+        if (!res.ok && res.status === 400) alert(agreementErrorText(res.j, "Could not save the agreement"));
       }).catch(function(){});
     }
   }).catch(function(e) {
@@ -25392,9 +25396,9 @@ function reviewSendToCeo() {
   var body = { counterpartyName:(d.name||null), counterpartyEmail:reviewCounterpartyEmail(d), data:d, status:"generated" };
   var save = d._aid
     ? fetch("/api/agreements/"+d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
-        .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(x.error||"Could not save the agreement"); return d._aid; }); })
+        .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); return d._aid; }); })
     : fetch("/api/agreements", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({type:d._type}, body))})
-        .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(x.error||"Could not save the agreement"); d._aid = x.id; return x.id; }); });
+        .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); d._aid = x.id; return x.id; }); });
   save.then(function(id){ requestCeoSignature(id); })
     .catch(function(e){ alert(e.message); })
     .finally(function(){ btn.disabled = false; });
@@ -25574,16 +25578,7 @@ function doSubmitFill() {
       // Hash-encoded URL is permanent — no server dependency, no override
 
       // If this invite was linked to an archive record, update that same row in place
-      // (status 'submitted') using the capability token carried in the link. Best-effort.
-      if (d._aid && d._atok) {
-        var cpEmail = merged.sig_email || (merged.contacts && merged.contacts.mgmt && merged.contacts.mgmt.p && merged.contacts.mgmt.p.e) || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
-        fetch("/api/agreements/" + d._aid + "/submit", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ token: d._atok, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
-        }).catch(function(){});
-      }
-
-      // Show success + notify button (no docx for supplier — Vendora generates final)
+      // (status 'submitted') using the capability token carried in the link.
       var doNotify = function() {
         // Automatic server-side notification to Vendora
         fetch("/api/notify", {
@@ -25602,7 +25597,18 @@ function doSubmitFill() {
         document.getElementById("thankModal").classList.add("open");
         window._reviewUrl = reviewUrl;
       };
-      doNotify();
+      if (d._aid && d._atok) {
+        var cpEmail = merged.sig_email || (merged.contacts && merged.contacts.mgmt && merged.contacts.mgmt.p && merged.contacts.mgmt.p.e) || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
+        fetch("/api/agreements/" + d._aid + "/submit", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ token: d._atok, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
+        }).then(readApi).then(function(res){
+          if (!res.ok) { spin.style.display = "none"; alert(agreementErrorText(res.j, "Could not submit")); return; }
+          doNotify();
+        }).catch(function(){ doNotify(); });
+      } else {
+        doNotify();
+      }
 
     } catch(e) {
       alert("Error: " + e.message);
@@ -25617,6 +25623,15 @@ window._archiveEnabled = false;
 window._authUser = null;
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+function agreementErrorText(j, fallback){
+  var msg = (j && j.error) ? String(j.error) : (fallback || "Could not save the agreement");
+  var details = j && Array.isArray(j.details) ? j.details.filter(function(d){ return d != null && String(d) !== ""; }) : [];
+  if (!details.length) return msg;
+  return msg + " — " + details.map(function(d){ return String(d); }).join("; ");
+}
+function readApi(r){
+  return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; }, function(){ return { ok: r.ok, status: r.status, j: {} }; });
+}
 
 function initApp(){
   var path = window.location.pathname, hash = window.location.hash;
@@ -25895,6 +25910,8 @@ function saveToArchive(type, data){
   var cpEmail = data.sig_email || data.invEmail || (data.rcontacts && data.rcontacts.notices && data.rcontacts.notices.e) || null;
   return fetch("/api/agreements",{method:"POST",headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ type:type, counterpartyName:data.name||null, counterpartyEmail:cpEmail, data:data, status:"generated" })
+  }).then(readApi).then(function(res){
+    if (!res.ok && res.status === 400) alert(agreementErrorText(res.j, "Could not save the agreement"));
   }).catch(function(){});
 }
 
@@ -26361,11 +26378,12 @@ function importFromLink(){
   var cpEmail = d.sig_email || d.invEmail || (d.rcontacts && d.rcontacts.notices && d.rcontacts.notices.e) || null;
   fetch("/api/agreements",{method:"POST",headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ type:d._type, counterpartyName:(d.name||d.invName||null), counterpartyEmail:cpEmail, data:d, status:"imported" })
-  }).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
+  }).then(readApi).then(function(res){
+    if (!res.ok) throw new Error(agreementErrorText(res.j, "Import failed — are you signed in?"));
     document.getElementById("importLink").value="";
     msg.style.color="#1e7e34"; msg.textContent="Imported ✓";
     loadArchive();
-  }).catch(function(){ msg.style.color="#c0392b"; msg.textContent="Import failed — are you signed in?"; });
+  }).catch(function(e){ msg.style.color="#c0392b"; msg.textContent=(e && e.message) || "Import failed — are you signed in?"; });
 }
 
 window._editing = null;
@@ -26492,10 +26510,11 @@ function updateArchive(editing, formData, showStatus){
   var keepStatus = editing.status || "generated";
   return fetch("/api/agreements/"+editing.id, {method:"PUT",headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:keepStatus })
-  }).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
+  }).then(readApi).then(function(res){
+    if (!res.ok) throw new Error(agreementErrorText(res.j, "Save failed"));
     editing.base = merged;
     if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
-  }).catch(function(){ if(st){ st.style.color="#c0392b"; st.textContent="Save failed"; } });
+  }).catch(function(e){ if(st){ st.style.color="#c0392b"; st.textContent=(e && e.message) || "Save failed"; } });
 }
 function saveEditOnly(){
   var e=window._editing; if(!e) return;

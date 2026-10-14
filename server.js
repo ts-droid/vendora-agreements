@@ -96,8 +96,9 @@ function stripServerFields(data) {
 }
 // Lawyer structures and cover-sheet values are checked before anything is written.
 // The signature lock is enforced by the caller before this runs on an update.
-function rejectBadAgreement(res, data) {
-  const checked = lawyerChanges.validateStoredAgreement(data);
+// previous is the row already stored: unchanged legacy values are left alone.
+function rejectBadAgreement(res, data, previous) {
+  const checked = lawyerChanges.validateStoredAgreement(data, previous || null);
   if (checked.ok) return false;
   res.status(400).json({
     error: 'Invalid agreement data',
@@ -874,28 +875,33 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
 });
 
 // Public: the counterparty's fill submission updates its linked record, authorised by the token.
+// The token is checked before validation so a wrong token never sees field errors, and a locked
+// or signed row is never written — the UPDATE repeats that guard.
 app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res) => {
   try {
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
-    stripServerFields(data);
-    if (rejectBadAgreement(res, data)) return;
-    const cur = await db.query('SELECT update_token, status FROM agreements WHERE id=$1', [req.params.id]);
-    if (!cur.rows[0]) return res.status(404).json({ error: 'Not found' });
-    if (!cur.rows[0].update_token || !tokenEq(cur.rows[0].update_token, token)) return res.status(403).json({ error: 'Invalid token' });
-    // Only accept a submission while the row is still awaiting one. Once Vendora has generated the
-    // final agreement (status='generated'), a stray/replayed submit must not overwrite it.
-    if (!['invited', 'submitted'].includes(cur.rows[0].status)) {
+    const cur = await db.query('SELECT update_token, status, vendora_signed_at, data FROM agreements WHERE id=$1', [req.params.id]);
+    const row = cur.rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!row.update_token || !tokenEq(row.update_token, token)) return res.status(403).json({ error: 'Invalid token' });
+    // Only accept a submission while the row is still awaiting one. Locked (CEO signature) and
+    // fully signed rows are closed, as is anything Vendora has already generated.
+    if (isLocked(row) || row.status === 'signed' || !['invited', 'submitted'].includes(row.status)) {
       return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
     }
-    const prevStatus = cur.rows[0].status;
+    stripServerFields(data);
+    if (rejectBadAgreement(res, data, row.data)) return;
+    const prevStatus = row.status;
     const upd = await db.query(
       `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
          counterparty_email=COALESCE($3,counterparty_email), status_updated_at=now(), updated_at=now()
-         WHERE id=$4 AND status IN ('invited','submitted')`,
+         WHERE id=$4 AND status IN ('invited','submitted') AND vendora_signed_at IS NULL
+           AND status NOT IN ('pending_signature','vendora_signed','signed')`,
       [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
     );
-    if (upd.rowCount) publishStatusChange(req.params.id, prevStatus, 'submitted');
+    if (!upd.rowCount) return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
+    publishStatusChange(req.params.id, prevStatus, 'submitted');
     res.json({ ok: true });
   } catch (err) {
     console.error('Submit error:', err.message);
@@ -948,7 +954,7 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
       return res.status(409).json({ error: 'This agreement is locked for the CEO\'s signature. Withdraw the signature request before editing.', locked: true });
     }
     stripServerFields(data);
-    if (rejectBadAgreement(res, data)) return;
+    if (rejectBadAgreement(res, data, row.data)) return;
     // Workflow-only statuses can't be set through a plain save.
     const nextStatus = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : null;
     const r = await db.query(
