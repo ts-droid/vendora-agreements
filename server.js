@@ -1345,6 +1345,12 @@ app.get('/lawyer-changes.js', (req, res) => {
   res.type('application/javascript');
   res.sendFile(path.join(__dirname, 'lawyer-changes.js'));
 });
+// Vendora wordmark from the Plaud License portal. Registered before the HTML catch-all.
+app.get('/vendora-nordic.png', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('image/png');
+  res.sendFile(path.join(__dirname, 'vendora-nordic.png'));
+});
 app.get('/i/:code', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('*',        (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 

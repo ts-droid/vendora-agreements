@@ -4,22 +4,47 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vendora &mdash; Agreement Generator</title>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--navy:#0F2240;--blue:#1A3C6E;--blue2:#2E6DA4;--teal:#14526E;--gold:#C9A84C;
-  --bg:#F4F6F9;--white:#fff;--lite:#EEF2F7;--border:#D8E0EC;--text:#1A1A2E;--muted:#6B7280}
-body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+/* Tokens and component language from the Plaud License portal (plaud-licens). */
+:root{--pine:#16362d;--pine-deep:#0e241e;--moss:#3d6b56;--cream:#f3eee6;--paper:#fffdf8;--ink:#282626;
+  --line:#e2e2e2;--accent:#df3314;--copper:#df3314;--danger:#8d2f2f;--ok:#1f6b45;--info:#245c73;
+  --shadow:0 18px 50px rgba(22,54,45,.08);--sans:"Outfit","Avenir Next","Open Sans","Segoe UI",sans-serif;
+  --navy:var(--pine);--blue:var(--moss);--blue2:var(--info);--teal:var(--info);--gold:var(--accent);
+  --bg:var(--cream);--white:var(--paper);--lite:#f7f3ed;--border:var(--line);--text:var(--ink);--muted:#5f6360;
+  color-scheme:light}
+body{font-family:var(--sans);background:var(--cream);color:var(--ink);font-size:14px;min-height:100vh}
+a{color:inherit}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .shell{max-width:900px;margin:0 auto;padding:28px 20px 80px}
-.hdr{display:flex;align-items:center;gap:16px;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid var(--border)}
-.logo{background:var(--navy);color:#fff;font-family:"Playfair Display",serif;font-size:12px;padding:10px 16px;letter-spacing:.06em;line-height:1.4}
-.hdr h1{font-family:"Playfair Display",serif;font-size:20px;color:var(--navy)}
-.hdr p{font-size:12px;color:var(--muted);margin-top:3px}
-/* TABS */
-.tabs{display:flex;border-bottom:2px solid var(--navy);margin-bottom:24px}
-.tab{padding:10px 24px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;white-space:nowrap}
-.tab.active{color:var(--navy);border-bottom-color:var(--navy);font-weight:600}
-.tab:hover:not(.active){color:var(--blue)}
+/* Archive → Saved agreements is wider than the form so the whole table, including Actions, fits a desktop. */
+.shell.archive-open{max-width:1440px}
+.archive-scroll{overflow-x:auto}
+.archive-table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:14px}
+.archive-table th{text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 8px;border-bottom:1px solid var(--line);background:transparent;white-space:nowrap}
+.archive-table td{border:0;border-bottom:1px solid var(--line);padding:10px 8px;font-size:14px;vertical-align:top}
+.archive-table th.actions,.archive-table td.actions{text-align:right}
+.archive-name{background:none;border:0;padding:0;margin:0;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px;border-radius:0 !important}
+.archive-name:hover,.archive-name:focus-visible{color:var(--accent)}
+.archive-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 32px;border-bottom:1px solid var(--line);background:#fff}
+.topbar-brand{display:flex;align-items:center;gap:16px;flex:1 1 auto;min-width:0}
+.brand-mark{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;max-width:100%}
+.brand-logo{height:auto;width:auto;max-height:28px;max-width:min(220px,42vw);object-fit:contain;object-position:left center;display:block}
+.brand-mark-large .brand-logo{max-height:36px;max-width:min(300px,100%)}
+.brand-mark.on-dark .brand-logo{filter:brightness(0) invert(1)}
+.brand-rule{display:block;width:42px;height:2px;background:var(--accent)}
+.product-name{font-size:12px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:var(--ink)}
+.topbar p,.topbar-copy p{margin:4px 0 0;color:var(--muted);font-size:14px;line-height:1.4}
+#userChip{margin-left:auto;align-self:center;font-size:14px;color:var(--muted);white-space:nowrap;text-align:right}
+#userChip small{display:block;color:#b7c7be}
+/* TABS — same treatment as the portal nav */
+.tabs{display:flex;gap:4px;margin-bottom:22px;overflow-x:auto}
+.tab{padding:10px 14px;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;border:none;background:none;border-radius:10px;white-space:nowrap;text-decoration:none}
+.tab.active{background:rgba(22,54,45,.08);color:var(--pine);font-weight:600;box-shadow:inset 0 -3px 0 var(--accent)}
+.tab:hover:not(.active){color:var(--pine)}
 .tab-panel{display:none}
 .tab-panel.active{display:block}
 /* Guide tab + first-login walkthrough */
@@ -30,7 +55,7 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--text);fon
 .gd-dot.on b{background:var(--navy);border-color:var(--navy);color:#fff}
 .gd-dot.on{color:var(--navy);font-weight:600}
 .gd-steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
-.gd-step{border:1px solid var(--border);border-radius:8px;padding:14px 16px;background:#fff}
+.gd-step{border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
 .gd-step h3{margin:0 0 6px;font-size:14px;color:var(--navy);display:flex;align-items:center}
 .gd-num{display:inline-flex;flex:none;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:11px;margin-right:8px}
 .gd-body{font-size:13px;line-height:1.6;color:#333}
@@ -39,39 +64,42 @@ body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--text);fon
 .gd-table{width:100%;border-collapse:collapse;font-size:13px}
 .gd-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--border)}
 .gd-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
-.auth-overlay{position:fixed;inset:0;background:var(--navy);display:flex;align-items:center;justify-content:center;z-index:9999}
-.auth-box{background:#fff;border-radius:8px;padding:32px;width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)}
-.auth-box h2{margin:0 0 4px;color:var(--navy);font-size:20px}
-.auth-box .desc{margin-bottom:8px}
-.auth-box label{font-size:12px;font-weight:600;color:var(--navy);display:block;margin-top:12px}
-.auth-box input{width:100%;padding:10px;margin-top:4px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box;font-size:14px}
-.auth-btn{width:100%;margin-top:18px;padding:11px;background:var(--navy);color:#fff;border:none;border-radius:4px;font-size:14px;font-weight:600;cursor:pointer}
+.auth-overlay{position:fixed;inset:0;background:var(--cream);display:flex;align-items:center;justify-content:center;z-index:9999}
+.auth-box{background:#fff;border:1px solid var(--line);border-radius:18px;padding:32px;width:min(440px,92vw);box-shadow:var(--shadow)}
+.auth-box h2{margin:8px 0 0;color:var(--ink);font-size:32px;font-weight:600;letter-spacing:-.03em;font-family:var(--sans)}
+.auth-box .desc{margin:0 0 8px;color:var(--muted)}
+.auth-box label{font-size:13px;font-weight:500;color:var(--muted);display:block;margin-top:12px}
+.auth-box input{width:100%;padding:10px 12px;margin-top:4px;border:1px solid var(--line);border-radius:12px;box-sizing:border-box;font-size:14px;background:#fff}
+.auth-btn{width:100%;margin-top:18px;padding:10px 16px;background:var(--pine);color:#f6f3ec;border:none;border-radius:999px;font-size:14px;font-weight:600;cursor:pointer}
 .auth-err{color:#c0392b;font-size:12px;margin-top:12px;min-height:16px}
 .auth-toggle{margin-top:14px;font-size:12px;text-align:center;color:var(--muted)}
 .auth-toggle a{color:var(--blue2);cursor:pointer;text-decoration:underline}
 /* CARDS */
-.card{background:var(--white);border:1px solid var(--border);padding:24px 28px;margin-bottom:14px}
-.card h2{font-family:"Playfair Display",serif;font-size:17px;color:var(--navy);margin-bottom:4px}
-.card .desc{font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.5}
-.sec{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--blue2);margin:18px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+.card,.panel{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}
+.card{padding:18px 18px 16px;margin-bottom:14px}
+.card h2,.panel h2{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0 0 8px}
+.card .desc{font-size:14px;color:var(--muted);margin-bottom:18px;line-height:1.5}
+.sec{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line)}
 .sec:first-of-type{margin-top:0}
 .g1{display:grid;grid-template-columns:1fr;gap:12px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .f{display:flex;flex-direction:column;gap:4px}
-label{font-size:12px;font-weight:500;color:var(--text)}
+label{font-size:13px;font-weight:500;color:var(--muted)}
 label em{color:var(--muted);font-weight:400;font-style:normal}
-input,select,textarea{border:1px solid var(--border);background:var(--white);padding:8px 10px;font-family:"DM Sans",sans-serif;font-size:13px;color:var(--text);width:100%;transition:border-color .15s}
-input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue2)}
+input,select,textarea{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-family:inherit;font-size:14px;color:var(--ink);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:2px;border-color:var(--accent)}
 textarea{resize:vertical;min-height:60px}
-input::placeholder,textarea::placeholder{color:#BCC5D6}
-/* TIER TABLE */
-.tt{width:100%;border-collapse:collapse;margin-top:6px}
-.tt th{background:var(--navy);color:#fff;font-size:10px;font-weight:500;padding:8px 10px;text-align:left;letter-spacing:.04em}
-.tt td{border:1px solid var(--border)}
-.tt td.tn{font-size:12px;font-weight:600;color:var(--blue);padding:7px 10px;background:var(--lite);width:70px}
-.tt td input{border:none;padding:6px 8px;font-size:12px;width:100%;background:transparent;font-family:"DM Sans",sans-serif}
-.tt td input:focus{outline:1px solid var(--blue2);background:#f0f5ff}
+input::placeholder,textarea::placeholder{color:#8b908c}
+input[type=checkbox],input[type=radio]{width:16px;height:16px;padding:0;border-radius:4px;accent-color:var(--pine)}
+/* TABLES */
+table{border-collapse:collapse}
+.tt{width:100%;border-collapse:collapse;margin-top:6px;font-size:14px}
+.tt th,.review-table th,.gd-table th{text-align:left;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;background:transparent;padding:10px 8px;border-bottom:1px solid var(--line)}
+.tt td{border:1px solid var(--line)}
+.tt td.tn{font-size:13px;font-weight:600;color:var(--pine);padding:7px 10px;background:var(--lite);width:70px}
+.tt td input{border:none;border-radius:0;padding:6px 8px;font-size:13px;width:100%;background:transparent;box-shadow:none}
+.tt td input:focus{outline:2px solid var(--accent);outline-offset:-2px;background:#fff}
 /* ROLES */
 .rb{border:1px solid var(--border);margin-bottom:8px}
 .rh{background:var(--lite);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
@@ -83,33 +111,36 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 .cl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:5px}
 .crow input{font-size:12px;padding:6px 8px}
 /* GENERATE BAR */
-.genbar{position:sticky;bottom:0;background:var(--white);border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:flex-end;gap:16px;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)}
-.btn-gen{background:var(--gold);color:var(--navy);border:none;padding:11px 28px;font-family:"DM Sans",sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:8px}
-.btn-gen:hover{background:#b8932a}
+.genbar{position:sticky;bottom:0;background:#fff;border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;padding:14px 18px;display:flex;align-items:center;justify-content:flex-end;gap:16px;z-index:100;box-shadow:var(--shadow)}
+.primary,.btn-gen,.btn-invite,.btn-copy,.btn-anyway,.auth-btn{background:var(--pine);color:#f6f3ec;border:0;border-radius:999px;padding:10px 16px;font-family:var(--sans);font-size:14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none}
+.btn-gen:hover,.btn-invite:hover,.primary:hover{background:var(--pine-deep)}
 .btn-gen:disabled{opacity:.55;cursor:not-allowed}
+.secondary,.btn-close,.btn-goback{background:transparent;color:var(--pine);border:1px solid var(--line);border-radius:999px;padding:10px 16px;font-family:var(--sans);font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.danger{background:transparent;color:var(--danger);border:1px solid #efd0d0;border-radius:999px;padding:10px 16px;cursor:pointer}
+button:not(.tab):not(.archive-name){font-family:inherit}
+button:not(.tab):not(.archive-name):not(:is(.val-modal button, .modal button, .modal-overlay button)){border-radius:999px !important}
+select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){border-radius:12px !important}
+.tt td input{border-radius:0 !important}
 @keyframes sp{to{transform:rotate(360deg)}}
 .spin{width:15px;height:15px;border:2px solid rgba(15,34,64,.2);border-top-color:var(--navy);border-radius:50%;animation:sp .6s linear infinite;display:none}
 .suc{background:var(--lite);border-left:3px solid var(--gold);padding:12px 18px;margin-top:12px;font-size:12px;color:var(--muted);display:none}
 .suc strong{color:var(--navy)}
-@media(max-width:680px){.g2,.g3,.crow{grid-template-columns:1fr 1fr}.tabs{overflow-x:auto}.hdr{flex-wrap:wrap}}
-.invite-card{background:#F0F7FF;border:1px solid #2E6DA4;padding:18px 22px;margin-bottom:14px}
-.invite-card h3{font-family:"Playfair Display",serif;font-size:15px;color:var(--navy);margin-bottom:4px}
-.invite-card p{font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5}
-.btn-invite{background:var(--blue);color:#fff;border:none;padding:10px 22px;font-family:"DM Sans",sans-serif;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
-.btn-invite:hover{background:var(--navy)}
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;display:none}
+@media(max-width:960px){.topbar,.shell{padding-left:20px;padding-right:20px}.topbar{flex-wrap:wrap}.page-header{flex-direction:column;align-items:flex-start}}
+@media(max-width:680px){.g2,.g3,.crow{grid-template-columns:1fr 1fr}.tabs{overflow-x:auto}.topbar{flex-wrap:wrap;padding:16px 20px}}
+.invite-card{background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:18px;box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
+.invite-card h3{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:4px}
+.invite-card p{font-size:14px;color:var(--muted);margin-bottom:14px;line-height:1.5}
+.modal-overlay{position:fixed;inset:0;background:rgba(22,54,45,.45);z-index:1000;display:none;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
-.modal{background:#fff;padding:28px 32px;max-width:560px;width:90%;position:relative}
-.modal h2{font-family:"Playfair Display",serif;font-size:18px;color:var(--navy);margin-bottom:8px}
-.modal p{font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:14px}
-.modal textarea{width:100%;font-size:12px;border:1px solid var(--border);padding:8px;font-family:monospace;height:72px;resize:none;color:var(--text)}
-.modal-btns{display:flex;gap:10px;margin-top:12px}
-.btn-copy{background:var(--gold);color:var(--navy);border:none;padding:9px 20px;font-family:"DM Sans",sans-serif;font-size:13px;font-weight:600;cursor:pointer}
-.btn-close{background:var(--white);border:1px solid var(--border);color:var(--text);padding:9px 20px;font-family:"DM Sans",sans-serif;font-size:13px;cursor:pointer}
+.modal{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:28px 32px;max-width:560px;width:90%;position:relative}
+.modal h2{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:8px}
+.modal p{font-size:14px;color:var(--muted);line-height:1.5;margin-bottom:14px}
+.modal textarea{width:100%;font-size:13px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;height:72px;resize:none;color:var(--ink)}
+.modal-btns{display:flex;gap:8px;margin-top:12px}
 /* Supplier fill mode */
-.supplier-banner{background:var(--navy);color:#fff;padding:16px 28px;margin-bottom:20px;border-radius:0}
-.supplier-banner h2{font-family:"Playfair Display",serif;font-size:17px;margin-bottom:4px}
-.supplier-banner p{font-size:12px;color:#C8D9ED;line-height:1.5}
+.supplier-banner{background:var(--pine-deep);color:#e7f0ea;padding:18px 22px;margin-bottom:20px;border-radius:18px}
+.supplier-banner h2{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;margin-bottom:4px}
+.supplier-banner p{font-size:14px;color:#d5e0d8;line-height:1.5}
 .locked-summary{background:var(--lite);border:1px solid var(--border);border-left:3px solid var(--blue);padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--muted)}
 .locked-summary strong{color:var(--navy);display:block;margin-bottom:6px}
 .locked-row{display:grid;grid-template-columns:140px 1fr;gap:3px 10px;margin-top:2px}
@@ -137,45 +168,62 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
 .cmp-prop.changed{color:#b8860b}
 .cmp-comment{grid-column:2/4;font-size:11px;font-style:italic;color:var(--muted);padding:0 14px 10px}
 .cmp-actions{display:flex;gap:6px}
-.cmp-btn{font-size:11px;padding:4px 10px;border:1px solid var(--border);background:#fff;cursor:pointer;border-radius:2px}
-.cmp-btn.active-accept{background:#1a7d3c;color:#fff;border-color:#1a7d3c}
-.cmp-btn.active-keep{background:var(--navy);color:#fff;border-color:var(--navy)}
-.neg-badge{display:inline-block;background:#FFF3CD;color:#856404;font-size:10px;padding:2px 8px;border-radius:10px;margin-left:6px}
+.cmp-btn{font-size:12px;padding:6px 12px;border:1px solid var(--line);background:#fff;color:var(--pine);cursor:pointer;border-radius:999px}
+.cmp-btn.active-accept{background:var(--ok);color:#fff;border-color:var(--ok)}
+.cmp-btn.active-keep{background:var(--pine);color:#f6f3ec;border-color:var(--pine)}
+.neg-badge,.badge{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:12px;background:#ece7df}
+.neg-badge{background:#f8f0df;color:#8a5a12;margin-left:6px}
 
-.review-banner{background:#1A3C6E;color:#fff;padding:16px 28px;margin-bottom:16px}
-.review-banner h2{font-family:"Playfair Display",serif;font-size:17px;margin-bottom:4px}
-.review-banner p{font-size:12px;color:#C8D9ED}
-.review-table{width:100%;border-collapse:collapse;margin:8px 0 16px}
-.review-table td{border:1px solid var(--border);padding:6px 10px;font-size:12px}
-.review-table td:first-child{background:var(--lite);font-weight:500;color:var(--navy);width:35%}
-.val-modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;align-items:center;justify-content:center}
+.review-banner{background:var(--pine-deep);color:#e7f0ea;padding:18px 22px;margin-bottom:16px;border-radius:18px}
+.review-banner h2{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;margin-bottom:4px}
+.review-banner p{font-size:14px;color:#d5e0d8}
+.review-table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:14px}
+.review-table td{border:0;border-bottom:1px solid var(--line);padding:10px 8px;font-size:14px;vertical-align:top}
+.review-table td:first-child{background:transparent;font-weight:600;color:var(--ink);width:35%}
+.val-modal{position:fixed;inset:0;background:rgba(22,54,45,.45);z-index:2000;display:none;align-items:center;justify-content:center}
 .val-modal.open{display:flex}
-.val-box{background:#fff;padding:24px 28px;max-width:480px;width:90%}
-.val-box h3{font-family:"Playfair Display",serif;font-size:17px;color:var(--navy);margin-bottom:6px}
-.val-box p{font-size:13px;color:var(--muted);margin-bottom:12px}
-.val-list{list-style:none;padding:0;margin:0 0 16px;border:1px solid var(--border)}
-.val-list li{padding:7px 12px;font-size:12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.val-box{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:24px 28px;max-width:480px;width:90%}
+.val-box h3{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:6px}
+.val-box p{font-size:14px;color:var(--muted);margin-bottom:12px}
+.val-list{list-style:none;padding:0;margin:0 0 16px;border:1px solid var(--line);border-radius:12px}
+.val-list li{padding:7px 12px;font-size:13px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 .val-list li:last-child{border-bottom:none}
 .val-list li::before{content:"⚠";font-size:11px}
-.val-btns{display:flex;gap:10px}
-.btn-goback{background:var(--white);border:1px solid var(--border);color:var(--text);padding:9px 18px;font-family:"DM Sans",sans-serif;font-size:13px;cursor:pointer}
-.btn-anyway{background:var(--gold);color:var(--navy);border:none;padding:9px 18px;font-family:"DM Sans",sans-serif;font-size:13px;font-weight:600;cursor:pointer}
+.val-btns{display:flex;gap:8px}
+#aiFab{background:var(--pine) !important;color:#f6f3ec !important;font-family:var(--sans) !important;box-shadow:var(--shadow) !important}
+#aiDrawer{background:var(--paper) !important;border:1px solid var(--line) !important;border-radius:18px !important;box-shadow:var(--shadow) !important;font-family:var(--sans)}
+#aiDrawer > div:first-child{background:var(--pine-deep) !important;color:#e7f0ea !important}
+.ai-bubble{max-width:85%;padding:10px 12px;border-radius:18px;font-size:14px;line-height:1.55;white-space:pre-wrap}
+.ai-mine{background:var(--pine);color:#f6f3ec}
+.ai-theirs{background:#f7f3ed;color:var(--ink)}
+.lawyer-card{margin:10px 0;border:1px solid var(--line);background:var(--paper);border-radius:18px;box-shadow:var(--shadow);padding:12px;font-size:13px;line-height:1.5}
+.lawyer-card .lawyer-label{font-weight:600;color:var(--ink);margin-bottom:4px}
+.lawyer-card .lawyer-where{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.lawyer-card del{background:#f8e8e8;color:var(--danger)}
+.lawyer-card ins{background:#e5f3ea;color:var(--ok);text-decoration:none}
+.notice-ok{background:#e7f5ec;color:#145233}
+.notice-err{background:#fbeeee;color:#6d2424}
 
 
 
 </style>
 </head>
 <body>
-<div class="shell">
-<div class="hdr">
-  <div class="logo">VENDORA<br>NORDIC</div>
-  <div>
-    <h1>Agreement Generator</h1>
-    <p>Create, negotiate and sign Vendora's reseller and distributor agreements &mdash; downloaded as Word documents (.docx)</p>
+<header class="topbar">
+  <div class="topbar-brand">
+    <span class="brand-mark on-light">
+      <img src="/vendora-nordic.png" alt="Vendora Nordic" class="brand-logo">
+      <span class="brand-rule" aria-hidden="true"></span>
+    </span>
+    <div class="topbar-copy">
+      <div class="product-name">Agreement Generator</div>
+      <p>Create, negotiate and sign Vendora's reseller and distributor agreements &mdash; downloaded as Word documents (.docx)</p>
+    </div>
   </div>
   <!-- Signed-in user: lives in the header so the tab row never has to wrap it -->
-  <span id="userChip" style="display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right"></span>
-</div>
+  <span id="userChip" style="display:none"></span>
+</header>
+<div class="shell">
 
 <div class="tabs">
   <button class="tab active" id="daTabBtn" onclick="switchTab(0)">Distributor Agreement</button>
@@ -373,7 +421,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
   <div class="g2" style="margin-top:12px">
     <div class="f">
       <label>Territory <em>(active sales area)</em></label>
-      <div style="font-size:11px;color:var(--muted);background:#FFF8E1;border-left:3px solid #C9A84C;padding:5px 9px;margin-bottom:8px;line-height:1.5">
+      <div style="font-size:11px;color:var(--muted);background:#FFF8E1;border-left:3px solid #df3314;padding:5px 9px;margin-bottom:8px;line-height:1.5">
         <strong>EU law note:</strong> Within the EU/EEA, passive sales (unsolicited orders) cannot be restricted regardless of territory. This field defines where the Reseller is authorised to <em>actively</em> market and sell. Default: the Reseller&rsquo;s country of registration.
       </div>
       <div id="ra_terr_boxes" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 12px;margin-top:4px">
@@ -504,7 +552,7 @@ input::placeholder,textarea::placeholder{color:#BCC5D6}
     <div class="f"><label>Products / brands *</label><input id="rb_products" placeholder="e.g. Brand A, Brand B"></div>
     <div class="f">
       <label>Territory <em>(active sales area)</em></label>
-      <div style="font-size:11px;color:var(--muted);background:#FFF8E1;border-left:3px solid #C9A84C;padding:5px 9px;margin-bottom:8px;line-height:1.5">
+      <div style="font-size:11px;color:var(--muted);background:#FFF8E1;border-left:3px solid #df3314;padding:5px 9px;margin-bottom:8px;line-height:1.5">
         <strong>EU law note:</strong> Within the EU/EEA passive sales cannot be restricted. This field defines the active sales area. Default: Reseller&rsquo;s country of registration.
       </div>
       <div id="rb_terr_boxes" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:4px">
@@ -23761,6 +23809,8 @@ function switchTab(n) {
   activeTab = n;
   document.querySelectorAll(".tab").forEach(function(t,i){ t.classList.toggle("active", i===n); });
   document.querySelectorAll(".tab-panel").forEach(function(p,i){ p.classList.toggle("active", i===n); });
+  var shell = document.querySelector(".shell");
+  if (shell) shell.classList.toggle("archive-open", n===3);
   var gb = document.querySelector(".genbar"); if (gb) gb.style.display = (n>=3) ? "none" : "";
   if (n===3) loadArchive();
   if (n===4) renderGuideView();
@@ -24988,7 +25038,7 @@ function renderFillMode(d) {
   var vendoraName = d.vname || "Vendora Nordic AB";
 
   // Hide normal UI, show supplier banner
-  document.querySelector(".hdr").style.display = "none";
+  document.querySelector(".topbar").style.display = "none";
   document.querySelector(".tabs").style.display = "none";
   document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
   document.querySelector(".genbar").style.display = "none";
@@ -24999,7 +25049,7 @@ function renderFillMode(d) {
   var invName = d.invName ? (", " + d.invName) : "";
   banner.innerHTML = "<h2>You've been invited to complete a " + (isDA?"Distributor":"Reseller") + " Agreement with Vendora Nordic AB</h2>"
     + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit Details</strong> to send them back to Vendora.</p>"
-    + "<button onclick=\'downloadPreview()\' id=\'previewBtn\' style=\'margin-top:6px;background:#fff;color:#0F2240;border:none;padding:9px 18px;font-family:sans-serif;font-size:13px;font-weight:600;cursor:pointer;border-radius:2px\'>\u2193 Download preview of the agreement</button>"
+    + "<button onclick=\'downloadPreview()\' id=\'previewBtn\' style=\'margin-top:6px;background:#fff;color:#16362d;border:none;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer\'>\u2193 Download preview of the agreement</button>"
     + "<span style=\'font-size:11px;color:#C8D9ED;margin-left:10px\'>See the full draft as it stands now, before you fill in your details.</span>";
 
   // Negotiable commercial terms — supplier can accept or propose a change
@@ -25141,7 +25191,7 @@ function renderFillMode(d) {
   var submitBar = document.createElement("div");
   submitBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
   submitBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>Fill in your details above, then submit</span>"
-    + "<button onclick=\'submitFill()\' style=\'background:#0F2240;color:#fff;border:none;padding:11px 28px;font-family:sans-serif;font-size:14px;font-weight:600;cursor:pointer\'><span>Submit Details &#x2192;</span><div class=\'spin\' id=\'fill_spin\'></div></button>";
+    + "<button onclick=\'submitFill()\' style=\'background:#16362d;color:#f6f3ec;border:none;padding:11px 28px;font-size:14px;font-weight:600;cursor:pointer\'><span>Submit Details &#x2192;</span><div class=\'spin\' id=\'fill_spin\'></div></button>";
 
   var sucDiv = document.createElement("div");
   sucDiv.className = "suc";
@@ -25177,7 +25227,7 @@ function showReviewMode(d) {
   var isDA = d._type === "da";
   window._aiMessages = [];
   initAiLawyer();
-  document.querySelector(".hdr").style.display = "none";
+  document.querySelector(".topbar").style.display = "none";
   document.querySelector(".tabs").style.display = "none";
   document.querySelectorAll(".tab-panel").forEach(function(p){ p.style.display="none"; });
   document.querySelector(".genbar").style.display = "none";
@@ -25917,15 +25967,15 @@ function saveToArchive(type, data){
 
 // Lifecycle order: negotiate → CEO signs for Vendora → counterparty countersigns.
 var STATUS_META = {
-  draft:             {label:"Draft",                  bg:"#eef1f5", fg:"#555"},
-  invited:           {label:"Invited",                bg:"#e7f0fb", fg:"#1A3C6E"},
-  submitted:         {label:"Submitted",              bg:"#fff3cd", fg:"#856404"},
-  generated:         {label:"Generated",              bg:"#e6f2ea", fg:"#1e7e34"},
-  pending_signature: {label:"Awaiting CEO signature", bg:"#fde8d0", fg:"#9a4b00"},
-  vendora_signed:    {label:"Signed by Vendora",      bg:"#d4edda", fg:"#155724"},
-  sent:              {label:"Sent to counterparty",   bg:"#e7f0fb", fg:"#1A3C6E"},
-  signed:            {label:"Fully signed",           bg:"#1e7e34", fg:"#fff"},
-  imported:          {label:"Imported",               bg:"#eef1f5", fg:"#555"}
+  draft:             {label:"Draft",                  bg:"#ece7df", fg:"#5f6360"},
+  invited:           {label:"Invited",                bg:"#e7f1f6", fg:"#245c73"},
+  submitted:         {label:"Submitted",              bg:"#f8f0df", fg:"#8a5a12"},
+  generated:         {label:"Generated",              bg:"#e5f3ea", fg:"#1f6b45"},
+  pending_signature: {label:"Awaiting CEO signature", bg:"#f8f0df", fg:"#8a5a12"},
+  vendora_signed:    {label:"Signed by Vendora",      bg:"#e7f0ea", fg:"#16362d"},
+  sent:              {label:"Sent to counterparty",   bg:"#e7f1f6", fg:"#245c73"},
+  signed:            {label:"Fully signed",           bg:"#1f6b45", fg:"#fff"},
+  imported:          {label:"Imported",               bg:"#ece7df", fg:"#5f6360"}
 };
 // Mirrors the server's rules (server.js enforces them; the UI just doesn't offer invalid moves).
 var WORKFLOW_ONLY = {pending_signature:1, vendora_signed:1};
@@ -25982,14 +26032,14 @@ function loadArchive(){
       : "Your agreements. Colleagues' agreements are private to them; admins see everything.";
     if (!rows.length){ el.innerHTML = "<div style='color:var(--muted);padding:20px 0'>No agreements saved yet. Generate one and it will appear here.</div>"; return; }
     var TYPE = {da:"Distributor", ra:"Reseller", rb:"Reseller &mdash; Simplified"};
-    var html = "<div style='overflow-x:auto'><table class='review-table' style='width:100%;min-width:840px'><tr>"
-      + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th></th></tr>";
+    var html = "<div class='archive-scroll'><table class='archive-table'><tr>"
+      + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th class='actions'>Actions</th></tr>";
     rows.forEach(function(a){
       var id=a.id, mut="color:var(--muted);font-size:10px";
       var noEmail = !a.counterparty_email;
       html += "<tr>"
         + "<td>"+(TYPE[a.type]||esc(a.type))+"<div style='"+mut+"'>"+esc((a.created_at||"").slice(0,10))+"</div></td>"
-        + "<td>"+esc(a.counterparty_name||"—")+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
+        + "<td><button type='button' class='archive-name' onclick='archiveEdit("+id+")'>"+esc(a.counterparty_name||"—")+"</button>"+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
         // Status — inline editable
         + "<td style='white-space:nowrap'>"
           + "<select onchange='ovSetStatus("+id+",this)' data-prev='"+esc(a.status||"")+"'"+(a.status==="pending_signature"?" disabled title='Awaiting the CEO — withdraw the request to change it'":"")+" style='font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:4px'>"+statusOptions(a.status)+"</select>"
@@ -26009,8 +26059,8 @@ function loadArchive(){
           + "<div id='ovRem_"+id+"' style='"+mut+";margin-top:3px'>"+(a.last_reminder_at?"sent "+esc(fmtWhen(a.last_reminder_at)):"")+"</div>"
         + "</td>"
         + "<td>"+esc(a.created_by_name||"")+"</td>"
-        + "<td style='white-space:nowrap;text-align:right'>"
-          + "<button onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
+        + "<td class='actions' style='white-space:nowrap'>"
+          + "<button type='button' onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
           + "<button onclick='archiveDownload("+id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
           + "<button onclick='archiveDelete("+id+")' style='color:#c0392b;cursor:pointer'>Delete</button>"
         + "</td></tr>"
@@ -26574,8 +26624,7 @@ function renderAiMessages(){
   box.innerHTML = window._aiMessages.map(function(m){
     var mine = m.role==="user";
     return "<div style='margin:10px 0;display:flex;justify-content:"+(mine?"flex-end":"flex-start")+"'>"
-      + "<div style='max-width:85%;padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;"
-      + (mine?"background:var(--navy);color:#fff":"background:#f1f3f7;color:#1a1a1a")+"'>"+esc(m.content)+"</div></div>";
+      + "<div class='ai-bubble "+(mine?"ai-mine":"ai-theirs")+"'>"+esc(m.content)+"</div></div>";
   }).join("");
   box.scrollTop = box.scrollHeight;
   if (window._openProposals && window._openProposals.length && !window._restoringProposals) {
@@ -26594,8 +26643,8 @@ function redlineHtml(oldText, newText){
   if (!segs.length) return "<span style='color:#888'>(empty)</span>";
   return segs.map(function(s){
     var t = esc(s.text);
-    if (s.type === "del") return "<del style='background:#fdece9;color:#c0392b'>"+t+"</del>";
-    if (s.type === "ins") return "<ins style='background:#eaf7ee;color:#1e7e34;text-decoration:none'>"+t+"</ins>";
+    if (s.type === "del") return "<del style='background:#f8e8e8;color:#8d2f2f'>"+t+"</del>";
+    if (s.type === "ins") return "<ins style='background:#e5f3ea;color:#1f6b45;text-decoration:none'>"+t+"</ins>";
     return t;
   }).join("");
 }
@@ -26700,18 +26749,18 @@ function renderProposals(proposals){
   }
   fresh.forEach(function(p){
     var card = document.createElement("div");
-    card.style.cssText = "margin:10px 0;border:1px solid #ffe69c;background:#FFFDF5;border-radius:8px;padding:10px;font-size:12px;line-height:1.5";
+    card.className = "lawyer-card";
     var where = (p.target.kind === "field" ? "Cover sheet" : (p.target.kind === "annex" ? "Annex" : "Clause")) + " · " + p.op;
     var view = proposalPreview(p);
     var body = view.ok
       ? redlineHtml(view.oldText, view.newText)
       : "<div style='color:#9a4b00'>"+esc((view.errors || []).join("; "))+"</div>";
-    card.innerHTML = "<div style='font-weight:600;color:#856404;margin-bottom:4px'>&#9998; "+esc(proposalLabel(p))+"</div>"
-      + "<div style='font-size:11px;color:#888;margin-bottom:6px'>"+esc(where)+"</div>"
-      + (p.rationale ? "<div style='color:#666;margin-bottom:8px'>"+esc(p.rationale)+"</div>" : "")
+    card.innerHTML = "<div class='lawyer-label'>&#9998; "+esc(proposalLabel(p))+"</div>"
+      + "<div class='lawyer-where'>"+esc(where)+"</div>"
+      + (p.rationale ? "<div style='color:var(--muted);margin-bottom:8px'>"+esc(p.rationale)+"</div>" : "")
       + "<div class='pbDiff' style='white-space:pre-wrap'>"+body+"</div>"
-      + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc' type='button' style='background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-weight:600;cursor:pointer'>Approve</button>"
-      + "<button class='pbRej' type='button' style='background:#fff;border:1px solid var(--border);border-radius:5px;padding:6px 12px;cursor:pointer'>Reject</button></div>";
+      + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc primary' type='button' style='background:var(--ok);color:#fff;border:none;padding:6px 12px;font-weight:600;cursor:pointer'>Approve</button>"
+      + "<button class='pbRej secondary' type='button' style='background:#fff;border:1px solid var(--line);padding:6px 12px;cursor:pointer'>Reject</button></div>";
     box.appendChild(card);
     var entry = { proposal:p, card:card };
     window._openProposals.push(entry);
@@ -27269,6 +27318,10 @@ initApp();
 <!-- Login / registration overlay (shown only when the archive is enabled and no valid session) -->
 <div class="auth-overlay" id="authOverlay" style="display:none">
   <div class="auth-box">
+    <span class="brand-mark on-light brand-mark-large">
+      <img src="/vendora-nordic.png" alt="Vendora Nordic" class="brand-logo">
+      <span class="brand-rule" aria-hidden="true"></span>
+    </span>
     <h2>Vendora Agreements</h2>
     <div class="desc" id="authSubtitle">Sign in to continue</div>
     <div id="googleBox">
