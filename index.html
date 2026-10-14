@@ -11,6 +11,16 @@
   --bg:#F4F6F9;--white:#fff;--lite:#EEF2F7;--border:#D8E0EC;--text:#1A1A2E;--muted:#6B7280}
 body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
 .shell{max-width:900px;margin:0 auto;padding:28px 20px 80px}
+/* Archive → Saved agreements is wider than the form so the whole table, including Actions, fits a desktop. */
+.shell.archive-open{max-width:1440px}
+.archive-scroll{overflow-x:auto}
+.archive-table{width:100%;border-collapse:collapse;margin:8px 0 16px}
+.archive-table th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--border);background:var(--lite);white-space:nowrap}
+.archive-table td{border:1px solid var(--border);padding:6px 10px;font-size:12px;vertical-align:top}
+.archive-table th.actions,.archive-table td.actions{text-align:right}
+.archive-name{background:none;border:0;padding:0;margin:0;font:inherit;font-weight:600;color:var(--navy);cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
+.archive-name:hover,.archive-name:focus-visible{color:var(--blue2)}
+.archive-name:focus-visible{outline:2px solid var(--blue2);outline-offset:2px}
 .hdr{display:flex;align-items:center;gap:16px;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid var(--border)}
 .logo{background:var(--navy);color:#fff;font-family:"Playfair Display",serif;font-size:12px;padding:10px 16px;letter-spacing:.06em;line-height:1.4}
 .hdr h1{font-family:"Playfair Display",serif;font-size:20px;color:var(--navy)}
@@ -23761,6 +23771,8 @@ function switchTab(n) {
   activeTab = n;
   document.querySelectorAll(".tab").forEach(function(t,i){ t.classList.toggle("active", i===n); });
   document.querySelectorAll(".tab-panel").forEach(function(p,i){ p.classList.toggle("active", i===n); });
+  var shell = document.querySelector(".shell");
+  if (shell) shell.classList.toggle("archive-open", n===3);
   var gb = document.querySelector(".genbar"); if (gb) gb.style.display = (n>=3) ? "none" : "";
   if (n===3) loadArchive();
   if (n===4) renderGuideView();
@@ -25965,14 +25977,14 @@ function loadArchive(){
       : "Your agreements. Colleagues' agreements are private to them; admins see everything.";
     if (!rows.length){ el.innerHTML = "<div style='color:var(--muted);padding:20px 0'>No agreements saved yet. Generate one and it will appear here.</div>"; return; }
     var TYPE = {da:"Distributor", ra:"Reseller", rb:"Reseller &mdash; Simplified"};
-    var html = "<div style='overflow-x:auto'><table class='review-table' style='width:100%;min-width:840px'><tr>"
-      + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th></th></tr>";
+    var html = "<div class='archive-scroll'><table class='archive-table'><tr>"
+      + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th class='actions'>Actions</th></tr>";
     rows.forEach(function(a){
       var id=a.id, mut="color:var(--muted);font-size:10px";
       var noEmail = !a.counterparty_email;
       html += "<tr>"
         + "<td>"+(TYPE[a.type]||esc(a.type))+"<div style='"+mut+"'>"+esc((a.created_at||"").slice(0,10))+"</div></td>"
-        + "<td>"+esc(a.counterparty_name||"—")+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
+        + "<td><button type='button' class='archive-name' onclick='archiveEdit("+id+")'>"+esc(a.counterparty_name||"—")+"</button>"+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
         // Status — inline editable
         + "<td style='white-space:nowrap'>"
           + "<select onchange='ovSetStatus("+id+",this)' data-prev='"+esc(a.status||"")+"'"+(a.status==="pending_signature"?" disabled title='Awaiting the CEO — withdraw the request to change it'":"")+" style='font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:4px'>"+statusOptions(a.status)+"</select>"
@@ -25992,8 +26004,8 @@ function loadArchive(){
           + "<div id='ovRem_"+id+"' style='"+mut+";margin-top:3px'>"+(a.last_reminder_at?"sent "+esc(fmtWhen(a.last_reminder_at)):"")+"</div>"
         + "</td>"
         + "<td>"+esc(a.created_by_name||"")+"</td>"
-        + "<td style='white-space:nowrap;text-align:right'>"
-          + "<button onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
+        + "<td class='actions' style='white-space:nowrap'>"
+          + "<button type='button' onclick='archiveEdit("+id+")' style='margin-right:6px;cursor:pointer'>&#9998; Edit</button>"
           + "<button onclick='archiveDownload("+id+")' style='margin-right:6px;cursor:pointer'>&#8681; .docx</button>"
           + "<button onclick='archiveDelete("+id+")' style='color:#c0392b;cursor:pointer'>Delete</button>"
         + "</td></tr>"
