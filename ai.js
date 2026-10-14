@@ -360,4 +360,16 @@ async function suggestNote(messages) {
   catch (e) { return { topic: '', content: text }; }
 }
 
-module.exports = { enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME };
+// Structured JSON call used by the read-only document check. The prompt is never logged.
+async function completeStructured(params) {
+  if (!client) {
+    const err = new Error('AI is not configured on this server');
+    err.code = 'unconfigured';
+    err.status = 503;
+    err.publicMessage = 'AI is not configured on this server';
+    throw err;
+  }
+  return createMessage(params);
+}
+
+module.exports = { enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME, completeStructured, MODEL };

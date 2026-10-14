@@ -9,6 +9,8 @@ const ai               = require('./ai');
 const agreementExport  = require('./agreement-export');
 const webhook          = require('./webhook');
 const lawyerChanges    = require('./lawyer-changes');
+const lawyerVerify     = require('./lawyer-verify');
+const documentExtract  = require('./document-extract');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +56,7 @@ setInterval(function () {
 const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 15 min / IP
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
 const reviewLimiter = rateLimit('review', 20, 60 * 60 * 1000); // 20 contract reviews / hour / IP (each is a large model call)
+const verifyLimiter = rateLimit('verify-document', 20, 60 * 60 * 1000);
 const exportLimiter = rateLimit('export', 30, 10 * 60 * 1000); // 30 exports / 10 min / IP
 
 // Escape untrusted strings before putting them in email HTML.
@@ -574,6 +577,39 @@ app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   } catch (err) {
     console.error('AI chat error:', err.message);
     res.status(500).json({ error: 'The AI lawyer could not respond right now.' });
+  }
+});
+
+// Read-only: compare an uploaded .docx or PDF with the approved changes on a saved agreement.
+// The plan comes from that row. The upload is not a source of agreement data, and nothing is written.
+app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req, res) => {
+  try {
+    const parts = await documentExtract.readRequest(req);
+    if (!parts.ok) return res.status(parts.status).json({ error: parts.error });
+    const sniffed = documentExtract.sniff(parts.file.filename, parts.file.buffer);
+    if (!sniffed.ok) return res.status(sniffed.status).json({ error: sniffed.error });
+    const agreementId = String(parts.agreementId || '');
+    if (!/^\d+$/.test(agreementId)) {
+      return res.status(400).json({ error: 'Open a saved agreement before checking a document.' });
+    }
+    if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
+    req.params.id = agreementId;
+    const row = await loadOwned(req, res);
+    if (!row) return;
+    const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
+    const out = await lawyerVerify.verifyDocument({
+      agreement: row.data,
+      checklist: [],
+      documentText: extracted.text,
+      filename: parts.file.filename,
+      documentTruncated: extracted.documentTruncated,
+      pagesTruncated: extracted.pagesTruncated,
+    });
+    res.json(out);
+  } catch (err) {
+    console.error('Verify document error:', err && (err.code || err.name) || 'error');
+    const status = err && err.status ? err.status : 500;
+    res.status(status).json({ error: (err && err.publicMessage) || 'The document could not be checked.' });
   }
 });
 

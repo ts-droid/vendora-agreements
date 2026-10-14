@@ -190,6 +190,26 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .val-list li:last-child{border-bottom:none}
 .val-list li::before{content:"⚠";font-size:11px}
 .val-btns{display:flex;gap:8px}
+.verify-badge{display:inline-flex;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600}
+.verify-Done{background:#e5f3ea;color:var(--ok)}
+.verify-Missing{background:#f8e8e8;color:var(--danger)}
+.verify-Different{background:#f8f0df;color:#8a5a12}
+.verify-Unverified{background:#e7f1f5;color:var(--info)}
+.verify-Notchecked{background:#ece7df;color:var(--muted)}
+.verify-box{border-top:1px solid var(--border);padding:8px 10px;font-size:12px;background:#fafbfc}
+.verify-title{font-weight:600;margin-bottom:2px}
+.verify-copy{color:var(--muted);margin:0 0 6px;line-height:1.45}
+.verify-file{font-size:12px;max-width:100%}
+.verify-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
+#verifyBtn{background:var(--navy);color:#fff;border:none;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer}
+#verifyStatus{color:var(--muted)}
+#verifyResults{max-height:180px;overflow:auto;margin-top:6px}
+#verifyWarning{color:#8a5a12;margin-top:6px}
+.verify-item{padding:8px 0;border-bottom:1px solid var(--border)}
+.verify-quote{color:#444;margin-top:4px}
+.verify-dev-head{margin-top:8px;font-weight:600}
+.verify-note{color:var(--muted);margin-top:2px}
+.verify-none{margin-top:8px;color:var(--muted)}
 #aiFab{background:var(--pine) !important;color:#f6f3ec !important;font-family:var(--sans) !important;box-shadow:var(--shadow) !important}
 #aiDrawer{background:var(--paper) !important;border:1px solid var(--line) !important;border-radius:18px !important;box-shadow:var(--shadow) !important;font-family:var(--sans)}
 #aiDrawer > div:first-child{background:var(--pine-deep) !important;color:#e7f0ea !important}
@@ -26593,6 +26613,64 @@ function initAiLawyer(){
     return fetch("/api/auth/me").then(function(r){ if(r.ok) return r.json().then(function(j){ window._authUser=j.user; showAiButton(); }); });
   }).catch(function(){});
 }
+function verifyBadge(status){
+  var known = { Done:1, Missing:1, Different:1, Unverified:1, "Not checked":1 };
+  var label = known[status] ? status : "Not checked";
+  var cls = label === "Not checked" ? "Notchecked" : label;
+  return "<span class='verify-badge verify-"+cls+"'>"+esc(label)+"</span>";
+}
+function renderVerifyResults(result){
+  var warn = document.getElementById("verifyWarning");
+  if (warn) {
+    var warnings = (result && result.warnings) || [];
+    warn.textContent = warnings.join(" ");
+  }
+  var box = document.getElementById("verifyResults");
+  if (!box) return;
+  var items = (result && result.items) || [];
+  var html = items.map(function(item){
+    var quote = item.quote ? "<div class='verify-quote'>&ldquo;"+esc(item.quote)+"&rdquo;</div>" : "";
+    return "<div class='verify-item'>"+verifyBadge(item.status)+" <strong>"+esc(item.label||"")+"</strong>"+quote+"</div>";
+  }).join("");
+  var deviations = (result && result.deviations) || [];
+  html += deviations.length
+    ? "<div class='verify-dev-head'>New deviations</div>"+deviations.map(function(d){
+        var quote = d.quote ? "<div class='verify-quote'>&ldquo;"+esc(d.quote)+"&rdquo;</div>" : "";
+        var note = d.note ? "<div class='verify-note'>"+esc(d.note)+"</div>" : "";
+        return "<div class='verify-item'><strong>"+esc(d.label||"Deviation")+"</strong>"+quote+note+"</div>";
+      }).join("")
+    : "<div class='verify-none'>No new deviations.</div>";
+  box.innerHTML = html;
+}
+function verifyUploadedDocument(){
+  var input = document.getElementById("verifyFile");
+  var file = input && input.files && input.files[0];
+  var status = document.getElementById("verifyStatus");
+  var btn = document.getElementById("verifyBtn");
+  if (!file) { if (status) status.textContent = "Choose a .docx or PDF first."; return; }
+  if (!/\.(docx|pdf)$/i.test(file.name || "")) { if (status) status.textContent = "Upload a .docx or a .pdf file."; return; }
+  var savedId = window._editing && window._editing.id;
+  if (!savedId) { if (status) status.textContent = "Open a saved agreement before checking a document."; return; }
+  if (status) status.textContent = "Checking…";
+  if (btn) btn.disabled = true;
+  var fd = new FormData();
+  fd.append("file", file, file.name);
+  fd.append("agreementId", String(savedId));
+  fetch("/api/ai/verify-document", { method:"POST", body: fd })
+    .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
+    .then(function(res){
+      if (!res.ok) {
+        if (status) status.textContent = (res.j && res.j.error) || "The document could not be checked.";
+        var empty = document.getElementById("verifyResults"); if (empty) empty.innerHTML = "";
+        var warn = document.getElementById("verifyWarning"); if (warn) warn.textContent = "";
+        return;
+      }
+      if (status) status.textContent = "Checked. The agreement was not changed.";
+      renderVerifyResults(res.j);
+    })
+    .catch(function(){ if (status) status.textContent = "The document could not be checked."; })
+    .finally(function(){ if (btn) btn.disabled = false; });
+}
 function getAiContext(){
   if (window._signData) return window._signData;   // the CEO asking about an agreement awaiting signature
   if (window._reviewData) return window._reviewData;
@@ -27265,7 +27343,7 @@ initApp();
 </div>
 <!-- AI contract lawyer: floating button + chat drawer (shown only when AI is configured + signed in) -->
 <button id="aiFab" onclick="toggleAiDrawer()" style="display:none;position:fixed;right:22px;bottom:22px;z-index:9000;align-items:center;gap:8px;background:var(--navy);color:#fff;border:none;border-radius:24px;padding:12px 18px;font-family:sans-serif;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)">&#9878;&#65039; AI Lawyer</button>
-<div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:460px;max-width:92vw;height:560px;max-height:80vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
+<div id="aiDrawer" style="display:none;flex-direction:column;position:fixed;right:22px;bottom:80px;z-index:9001;width:460px;max-width:92vw;height:640px;max-height:86vh;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden">
   <div style="background:var(--navy);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between">
     <div><strong style="font-size:14px">&#9878;&#65039; Vendora Contract Lawyer</strong><div style="font-size:11px;color:#C8D9ED">Drafting assistance — not formal legal advice</div></div>
     <div style="display:flex;gap:4px;align-items:center">
@@ -27283,6 +27361,17 @@ initApp();
   <div id="aiUpdatedBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#eaf7ee;border-top:1px solid #cfe8d6;padding:8px 12px;font-size:12px;color:#1e7e34">
     <span>Approved changes are in this agreement.</span>
     <button onclick="downloadUpdatedAgreement()" style="background:#1e7e34;color:#fff;border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">&#8681; Updated .docx</button>
+  </div>
+  <div id="verifyBox" class="verify-box">
+    <div class="verify-title">Check a document</div>
+    <p class="verify-copy">Upload a .docx or PDF of the agreement, for example the existing or updated contract. The lawyer compares it with the approved changes saved on this agreement. Nothing is written to the agreement.</p>
+    <input id="verifyFile" class="verify-file" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+    <div class="verify-actions">
+      <button type="button" id="verifyBtn" onclick="verifyUploadedDocument()">Check document</button>
+      <span id="verifyStatus"></span>
+    </div>
+    <div id="verifyWarning"></div>
+    <div id="verifyResults"></div>
   </div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
     <textarea id="aiInput" rows="2" placeholder="Ask about this agreement…" style="flex:1;resize:none;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;font-family:inherit" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAi();}"></textarea>
