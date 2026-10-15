@@ -100,6 +100,17 @@ function stripServerFields(data) {
 // Lawyer structures and cover-sheet values are checked before anything is written.
 // The signature lock is enforced by the caller before this runs on an update.
 // previous is the row already stored: unchanged legacy values are left alone.
+// The column and data._type must name the same family. A missing data._type is filled
+// from the type already stored on the row. Nothing is inferred when both are missing.
+function alignAgreementType(data, type) {
+  const requested = ai.normalizeAgreementType(type);
+  const embedded = data && ai.normalizeAgreementType(data._type);
+  if (!requested && !embedded) return { error: 'Choose the agreement type before saving.' };
+  if (requested && embedded && !ai.sameFamily(requested, embedded)) return { error: 'The agreement type does not match the form.' };
+  const chosen = embedded || requested;
+  if (data && typeof data === 'object' && !ai.normalizeAgreementType(data._type)) data._type = chosen;
+  return { type: chosen };
+}
 function rejectBadAgreement(res, data, previous) {
   const checked = lawyerChanges.validateStoredAgreement(data, previous || null);
   if (checked.ok) return false;
@@ -458,8 +469,12 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   let body;
   try { body = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'Malformed request' }); }
-  const { type, doc, ourText, agreement } = body || {};
-  if (!['ra', 'rb', 'da'].includes(type)) return res.status(400).json({ error: 'Unknown agreement type' });
+  const { doc, ourText } = body || {};
+  const type = ai.normalizeAgreementType(body && body.type);
+  if (!type) return res.status(400).json({ error: 'Choose the agreement type before reviewing.' });
+  let agreement = body && body.agreement;
+  if (agreement && !ai.sameFamily(ai.normalizeAgreementType((agreement.data || agreement)._type), type)) agreement = null;
+  if (!ai.benchmarkFits(type, ourText)) return res.status(400).json({ error: 'The benchmark agreement is a different agreement type.' });
   if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
   if (!doc || !['pdf', 'text'].includes(doc.kind) || typeof doc.data !== 'string' || !doc.data.trim()) return res.status(400).json({ error: 'No document content' });
   if (doc.kind === 'pdf' && doc.data.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'PDF too large (max 15 MB)' });
@@ -532,10 +547,19 @@ app.get('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
   try {
     if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Not found' });
     const r = await db.query(
-      `SELECT id, name, type, filename, doc_kind, review, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
+      `SELECT id, name, type, filename, doc_kind, our_text, review, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
        FROM contract_reviews WHERE id=$1`, [req.params.id]);
     if (!reviewVisible(req, r.rows[0])) return res.status(404).json({ error: 'Not found' });
-    res.json({ review: r.rows[0] });
+    const row = r.rows[0];
+    // our_text stays on the server. The flag tells the UI to ask for a fresh review
+    // when this row was saved against the other template, or with no readable benchmark.
+    res.json({ review: {
+      id: row.id, name: row.name, type: row.type, filename: row.filename, doc_kind: row.doc_kind,
+      review: row.review, verdict: row.verdict, findings_count: row.findings_count, deal_breakers: row.deal_breakers,
+      counterparty_name: row.counterparty_name, agreement_id: row.agreement_id,
+      created_by: row.created_by, created_by_name: row.created_by_name, created_at: row.created_at,
+      benchmark_mismatch: !ai.benchmarkFits(row.type, row.our_text),
+    } });
   } catch (err) { console.error('Get review error:', err.message); res.status(500).json({ error: 'Could not load the review' }); }
 });
 app.put('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
@@ -564,18 +588,28 @@ app.delete('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => 
 app.post('/api/ai/chat', auth.requireAuth, async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   try {
-    const { agreement, messages, clauses, reviewId } = req.body || {};
+    const { agreement, messages, clauses, reviewId, agreementType } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages are required' });
     let review = null;
     if (reviewId) {
       review = db.enabled ? await ownedReview(req, reviewId) : null;
       if (!review) return res.status(404).json({ error: 'That contract review is no longer available — open it from the archive or run it again.' });
     }
+    const requested = ai.normalizeAgreementType(agreementType);
+    const reviewType = ai.normalizeAgreementType(review && review.type);
+    const storedType = ai.normalizeAgreementType(agreement && ((agreement.data || agreement)._type));
+    if (requested && reviewType && !ai.sameFamily(requested, reviewType)) {
+      return res.status(400).json({ error: 'That review is a different agreement type.' });
+    }
+    const type = requested || reviewType || storedType;
+    if (!type) return res.status(400).json({ error: 'Choose the agreement type before asking the lawyer.' });
+    const scopedAgreement = storedType && ai.sameFamily(storedType, type) ? agreement : null;
     const playbook = await loadPlaybook();
-    const out = await ai.chat(agreement || null, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null, review });
+    const out = await ai.chat(scopedAgreement, messages, { playbook: playbook, clauses: Array.isArray(clauses) ? clauses : null, review: review, agreementType: type });
     res.json(out);
   } catch (err) {
     console.error('AI chat error:', err.message);
+    if (err && err.status === 400) return res.status(400).json({ error: err.message });
     res.status(500).json({ error: 'The AI lawyer could not respond right now.' });
   }
 });
@@ -593,12 +627,28 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
       return res.status(400).json({ error: 'Open a saved agreement before checking a document.' });
     }
     if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
+    const chosen = ai.normalizeAgreementType(parts.agreementType);
+    if (!chosen) return res.status(400).json({ error: 'Choose the agreement type before checking a document.' });
     req.params.id = agreementId;
     const row = await loadOwned(req, res);
     if (!row) return;
+    const stored = ai.normalizeAgreementType(row.type) || ai.normalizeAgreementType(row.data && row.data._type);
+    if (stored && !ai.sameFamily(stored, chosen)) {
+      const which = ai.familyOf(stored) === 'distribution' ? 'distribution' : 'reseller';
+      return res.status(400).json({ error: 'This agreement is stored as a ' + which + ' agreement. Choose that type.' });
+    }
+    // A stored reseller-simplified row stays rb when the user confirms "reseller".
+    // This check does not write. A missing data._type is filled in memory from the
+    // stored column, or from the choice just made, and kept on the next save.
+    const type = stored && ai.sameFamily(stored, chosen) ? stored : chosen;
+    let agreementData = row.data && typeof row.data === 'object' ? row.data : {};
+    if (!ai.normalizeAgreementType(agreementData._type)) {
+      agreementData = Object.assign({}, agreementData, { _type: type });
+    }
     const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
     const out = await lawyerVerify.verifyDocument({
-      agreement: row.data,
+      agreement: agreementData,
+      agreementType: type,
       checklist: [],
       documentText: extracted.text,
       filename: parts.file.filename,
@@ -870,14 +920,16 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const { type, counterpartyName, counterpartyEmail, data, status } = req.body || {};
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
-    if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
+    const aligned = alignAgreementType(data, type);
+    if (aligned.error) return res.status(400).json({ error: aligned.error });
+    if (aligned.type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
     if (rejectBadAgreement(res, data)) return;
     const initial = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : 'draft';
     const r = await db.query(
       `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, created_by, created_by_name)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at`,
-      [type, counterpartyName || null, counterpartyEmail || null, data, initial, req.user.uid, req.user.name || req.user.email]
+      [aligned.type, counterpartyName || null, counterpartyEmail || null, data, initial, req.user.uid, req.user.name || req.user.email]
     );
     publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
     res.json({ id: r.rows[0].id, created_at: r.rows[0].created_at });
@@ -893,14 +945,16 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const { type, counterpartyName, counterpartyEmail, data } = req.body || {};
     if (!type || !data) return res.status(400).json({ error: 'type and data are required' });
-    if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
+    const aligned = alignAgreementType(data, type);
+    if (aligned.error) return res.status(400).json({ error: aligned.error });
+    if (aligned.type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
     stripServerFields(data);
     if (rejectBadAgreement(res, data)) return;
     const token = crypto.randomBytes(24).toString('base64url');
     const r = await db.query(
       `INSERT INTO agreements (type, counterparty_name, counterparty_email, data, status, update_token, created_by, created_by_name)
        VALUES ($1,$2,$3,$4,'invited',$5,$6,$7) RETURNING id`,
-      [type, counterpartyName || null, counterpartyEmail || null, data, token, req.user.uid, req.user.name || req.user.email]
+      [aligned.type, counterpartyName || null, counterpartyEmail || null, data, token, req.user.uid, req.user.name || req.user.email]
     );
     publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
     res.json({ id: r.rows[0].id, token });
@@ -990,6 +1044,10 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
       return res.status(409).json({ error: 'This agreement is locked for the CEO\'s signature. Withdraw the signature request before editing.', locked: true });
     }
     stripServerFields(data);
+    // The column is already a type. Fill a missing data._type from it. A conflicting
+    // choice is rejected. The column is not rewritten and nothing is guessed.
+    const aligned = alignAgreementType(data, row.type);
+    if (aligned.error) return res.status(400).json({ error: aligned.error });
     if (rejectBadAgreement(res, data, row.data)) return;
     // Workflow-only statuses can't be set through a plain save.
     const nextStatus = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : null;

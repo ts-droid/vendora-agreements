@@ -209,8 +209,15 @@ function normalizeVerdict(raw, plan, documentText) {
   return { items: items, deviations: deviations };
 }
 
-function promptFor(filename, documentText, plan) {
-  return TASK + '\n\n' + planBlock(plan) + '\n\n' + documentBlock(filename, documentText);
+function promptFor(filename, documentText, plan, type) {
+  const lawyerChanges = require('./lawyer-changes');
+  const ai = require('./ai');
+  const chosen = ai.normalizeAgreementType(type);
+  const positions = chosen ? lawyerChanges.positionsBlock(chosen) : '';
+  const header = chosen
+    ? 'Agreement type: ' + (chosen === 'da' ? 'distribution' : 'reseller') + '. Compare only with this type. Ignore standard positions from the other type.\n\n' + positions
+    : '';
+  return TASK + '\n\n' + header + '\n\n' + planBlock(plan) + '\n\n' + documentBlock(filename, documentText);
 }
 
 async function verifyDocument(input, createMessage) {
@@ -235,7 +242,7 @@ async function verifyDocument(input, createMessage) {
     throw err;
   }
   const call = createMessage || require('./ai').completeStructured;
-  const prompt = promptFor(filename, documentText, plan);
+  const prompt = promptFor(filename, documentText, plan, input && (input.agreementType || (agreement && agreement._type)));
   const resp = await call({
     model: require('./ai').MODEL,
     max_tokens: 16000,

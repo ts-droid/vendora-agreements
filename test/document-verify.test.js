@@ -907,6 +907,7 @@ describe('POST /api/ai/verify-document', function () {
     const before = queries.length;
     const res = await postFile('agreement.docx', buildDocx([SENTINEL + ' loss of goodwill']), {
       agreementId: '42',
+      agreementType: 'reseller',
       agreement: JSON.stringify({ redlines: [{ target: { kind: 'clause', id: 'decoy' }, newText: 'CLIENT_DECOY_PLAN', label: 'Decoy' }] }),
       checklist: JSON.stringify([{ checklistNr: 2, label: 'Decoy checklist', expected: 'CLIENT_DECOY_PLAN' }]),
     }, cookieHeader());
@@ -929,6 +930,7 @@ describe('POST /api/ai/verify-document', function () {
     const paragraphs = komplett.proposals.map(function (row) { return gapParagraph(row.newText); }).filter(Boolean);
     const res = await postFile('komplett-gap.docx', buildDocx(paragraphs), {
       agreementId: '42',
+      agreementType: 'reseller',
       agreement: JSON.stringify({ redlines: [{ target: { kind: 'clause', id: 'decoy' }, newText: 'CLIENT_DECOY_PLAN', label: 'Decoy' }] }),
       checklist: JSON.stringify([{ checklistNr: 99, label: 'Decoy checklist', expected: 'CLIENT_DECOY_PLAN' }]),
     }, cookieHeader());

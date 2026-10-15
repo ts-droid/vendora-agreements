@@ -38,7 +38,7 @@ const createMessage = function (params) { return runMessage(params, false); };
    distributor side (DA, Vendora buys). The right playbook is chosen from the agreement type.
    The core + playbook are stable text, so they prompt-cache across turns and users. */
 
-const CORE = `You are the in-house contract lawyer for Vendora Nordic AB (org.nr 556843-5456, Ladugårdsvägen 1, 234 35 Lomma, Sweden), a Nordic distributor and B2B seller of consumer-electronics brands. CEO and sole signatory on all agreements: Andreas Höynälä.
+const CORE = `You are the in-house contract lawyer for Vendora Nordic AB (org.nr 556843-5456, Lomma, Sweden), a Nordic distributor and B2B seller of consumer-electronics brands. CEO and sole signatory on all agreements: Andreas Höynälä.
 
 WHO YOU WORK FOR — this never changes:
 - You act exclusively for Vendora. You are not neutral, you never advise the counterparty, and you never "balance" a deal for its own sake. Your objective in every task is to get the final agreement as close as possible to Vendora's own standard agreement and positions, conceding only where the playbook allows and where the concession buys Vendora something.
@@ -59,7 +59,7 @@ VENDORA'S STANDARD POSITIONS (defaults — a deviation needs a reason):
 - Appointment: non-exclusive by default. Exclusivity only against real commitment (targets, minimum activity), and always with Vendora free to sell directly and to appoint others outside the exclusive scope. Passive sales into an exclusive territory cannot be restricted under EU law — never promise that.
 - Prices: the Reseller must always use Vendora's current prices (website + downloadable XML/CSV price file); no reliance on cached or historical prices; Vendora may amend prices at any time, prospectively, never retroactively for confirmed orders. Vendora may recommend resale prices but never fixes or floors them (RPM is a hardcore restriction). Do NOT add currency or price-revision mechanics unless asked — the general amend-right is enough.
 - Payment: 30 days net preferred; resist 60+ days without justification such as a volume commitment or security. Credit limits and a stop-supply right on late payment stay with Vendora; late-payment interest per the Interest Act / Directive 2011/7.
-- Delivery: EXW Vendora Nordic AB, Lomma (Incoterms 2020) by default; risk passes on delivery; the inspection and transport-damage deadlines (14 / 7 days) are firm.
+- Delivery: ${lawyerChanges.RA_DELIVERY_POSITION} by default; risk passes on delivery; the inspection and transport-damage deadlines (14 / 7 days) are firm. The Reseller collects the Products or names its own warehouse. Do not use Vendora's warehouse street address as the place of delivery — that address is a Distributor Agreement position only.
 - Reporting and MDF: monthly sell-through reports, 10 days after month-end. MDF is case-by-case, never guaranteed, always tied to timely reporting; ad-hoc/credit-note funding is fine; avoid fixed quarterly MDF unless intended.
 - Points of sale: the Reseller sells only through approved physical locations and websites/domains; new ones need Vendora's written approval.
 - Marketplaces (Amazon etc.): NOT allowed without Vendora's prior written authorisation, which Vendora may grant, condition or revoke at its sole discretion — deliberately in Vendora's favour. (A total online-sales ban would be a hardcore restriction; the marketplace-authorisation model is the compliant way to control channels.)
@@ -81,7 +81,7 @@ VENDORA'S STANDARD POSITIONS (defaults — a deviation needs a reason):
 - Term: 3 years standard, renewing; a long notice period for the Supplier to terminate without cause; protection for Vendora on a change of the Supplier's ownership.
 - Prices and price protection: a fixed price list in the agreed currency; price increases only with 90 days' notice and never for confirmed orders; price-drop protection on stock on hand (credit for the difference); treatment no worse than other distributors in comparable markets.
 - Payment: 60 days net as standard (longer is better for Vendora); currency risk with the Supplier where possible; no personal or bank guarantees, no advance payment or letters of credit as the norm.
-- Delivery: DDP or DAP to Vendora Nordic AB, Lomma (Incoterms 2020) is the standard on ALL deliveries — the Supplier arranges and pays transport with its own carrier and bears the risk until delivery; agreed lead times with remedies for late delivery; customs on the Supplier. Any other term (EXW, FCA, FOB, CIF) is the exception: the Supplier must check with Vendora's logistics department (logistics@vendora.se) before any freight is booked — sending the PO number, number of packages/pallets, dimensions and weight, pick-up address and ready date, plus its own proposed carrier and freight cost if it has one; Vendora compares with its own freight agreements and confirms the cheaper option (the Supplier's proposal or Vendora's booking) within 3 business days; nothing ships before Vendora confirms, and the Supplier bears the difference if it ships without confirmation. Never accept a clause that makes Vendora pay or arrange freight on DDP/DAP deliveries, or that lets the Supplier choose the routing when Vendora pays.
+- Delivery: ${lawyerChanges.DA_DELIVERY_POSITION} is the standard on ALL deliveries — the Supplier arranges and pays transport with its own carrier and bears the risk until delivery; agreed lead times with remedies for late delivery; customs on the Supplier. Any other term (EXW, FCA, FOB, CIF) is the exception: the Supplier must check with Vendora's logistics department (logistics@vendora.se) before any freight is booked — sending the PO number, number of packages/pallets, dimensions and weight, pick-up address and ready date, plus its own proposed carrier and freight cost if it has one; Vendora compares with its own freight agreements and confirms the cheaper option (the Supplier's proposal or Vendora's booking) within 3 business days; nothing ships before Vendora confirms, and the Supplier bears the difference if it ships without confirmation. Never accept a clause that makes Vendora pay or arrange freight on DDP/DAP deliveries, or that lets the Supplier choose the routing when Vendora pays.
 - Stock rotation, returns and EOL: right to rotate slow-moving stock (2× per year standard) and to return stock at purchase price on End-of-Life or termination; EOL notice of at least 180 days, with "Active Products" defined so the Supplier cannot escape repurchase by quietly de-listing.
 - Warranty and RMA: a full product warranty from the Supplier, back-to-back with what Vendora gives its resellers; DOA replacement, advance-replacement stock, a defined RMA process with costs on the Supplier.
 - Product compliance and liability: the Supplier warrants compliance with EU/Nordic product law (CE, RoHS, WEEE, REACH, GPSR, packaging and battery rules), supplies the documentation, is producer/importer of record where the law allows, carries product-liability insurance and indemnifies Vendora for product claims and recalls.
@@ -153,7 +153,101 @@ function foundation(type) { return CORE + '\n\n' + playbookFor(type) + '\n\n' + 
 function agreementType(agreement, fallback) {
   const d = agreement && (agreement.data || agreement);
   const t = d && d._type;
-  return ['ra', 'rb', 'da'].includes(t) ? t : (fallback || 'ra');
+  return ['ra', 'rb', 'da'].includes(t) ? t : (fallback || null);
+}
+function normalizeAgreementType(value) {
+  const s = String(value || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (s === 'da' || s === 'distribution' || s === 'distributor' || s === 'distributor-agreement') return 'da';
+  if (s === 'ra' || s === 'reseller' || s === 'reseller-agreement') return 'ra';
+  if (s === 'rb' || s === 'reseller-simplified' || s === 'simplified') return 'rb';
+  return null;
+}
+function familyOf(type) {
+  const t = normalizeAgreementType(type);
+  if (t === 'da') return 'distribution';
+  if (t === 'ra' || t === 'rb') return 'reseller';
+  return '';
+}
+function sameFamily(a, b) {
+  const fa = familyOf(a);
+  const fb = familyOf(b);
+  return !!fa && fa === fb;
+}
+function typeError(message, code) {
+  const err = new Error(message);
+  err.code = code || 'type_required';
+  err.status = 400;
+  return err;
+}
+// Paragraphs and notes that state the other type's standard positions are dropped.
+function foreignPosition(type, text) {
+  const s = String(text || '');
+  if (familyOf(type) === 'reseller') return s.indexOf(lawyerChanges.DA_DELIVERY_POSITION) >= 0;
+  if (familyOf(type) === 'distribution') return s.indexOf(lawyerChanges.RA_DELIVERY_POSITION) >= 0;
+  return false;
+}
+function filterHouseText(type, text) {
+  return String(text || '').split(/\n{2,}/).filter(function (part) {
+    return part.trim() && !foreignPosition(type, part);
+  }).join('\n\n');
+}
+function scopedPlaybook(playbook, type) {
+  const p = playbook || {};
+  const notes = Array.isArray(p.notes) ? p.notes.filter(function (n) {
+    if (!n) return false;
+    const noteType = normalizeAgreementType(n.agreement_type || n.type);
+    if (noteType && !sameFamily(noteType, type)) return false;
+    return !foreignPosition(type, (n.topic ? n.topic + ' ' : '') + (n.content || ''));
+  }) : [];
+  return { guidance: filterHouseText(type, p.guidance || ''), notes: notes };
+}
+function scopedAgreement(type, agreement) {
+  const data = agreement && (agreement.data || agreement);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { _type: type };
+  const stored = normalizeAgreementType(data._type);
+  if (!stored || !sameFamily(stored, type)) return { _type: type };
+  return Object.assign({}, data, { _type: stored });
+}
+function scopedClauses(type, clauses) {
+  return (Array.isArray(clauses) ? clauses : []).filter(function (c) {
+    return c && c.id && !lawyerChanges.clauseOwnedByOtherType(c.id, type);
+  });
+}
+function benchmarkFits(type, ourText) {
+  const text = String(ourText || '');
+  const resellerDoc = /RESELLER AGREEMENT/i.test(text);
+  const distributorDoc = /DISTRIBUTOR AGREEMENT/i.test(text);
+  if (familyOf(type) === 'distribution') return distributorDoc && !resellerDoc;
+  if (familyOf(type) === 'reseller') {
+    return resellerDoc && !distributorDoc && text.indexOf(lawyerChanges.DA_DELIVERY_POSITION) < 0;
+  }
+  return false;
+}
+// Playbook + this type's positions and clauses. No benchmark and no other type.
+function reviewMaterial(type) {
+  const t = normalizeAgreementType(type);
+  if (!t) throw typeError('Choose the agreement type before reviewing.', 'type_required');
+  return foundation(t) + '\n\n' + lawyerChanges.catalogBlock(t, { _type: t }, []);
+}
+function reviewContextText(args) {
+  args = args || {};
+  const type = normalizeAgreementType(args.type);
+  if (!type) throw typeError('Choose the agreement type before reviewing.', 'type_required');
+  const parts = [foundation(type)];
+  const house = houseBlock(scopedPlaybook(args.playbook, type));
+  if (house) parts.push(house);
+  parts.push(lawyerChanges.catalogBlock(type, scopedAgreement(type, args.agreement), scopedClauses(type, args.clauses)));
+  if (args.includeTask) parts.push(REVIEW_TASK);
+  if (args.ourText) {
+    if (!benchmarkFits(type, args.ourText)) {
+      throw typeError('The benchmark agreement is a different agreement type.', 'type_mismatch');
+    }
+    parts.push(benchmarkBlock(args.ourText).text);
+  }
+  const data = args.agreement && (args.agreement.data || args.agreement);
+  const stored = data && normalizeAgreementType(data._type);
+  if (stored && sameFamily(stored, type)) parts.push(agreementBlock(scopedAgreement(type, args.agreement)).text);
+  return parts.join('\n\n');
 }
 
 // Build a compact, readable summary of the agreement so the model has context without being
@@ -244,18 +338,24 @@ async function chat(agreement, messages, opts) {
   if (!client) throw new Error('AI is not configured on this server');
   opts = opts || {};
   const review = opts.review || null;
-  const type = review ? review.type : agreementType(agreement);
+  const type = normalizeAgreementType(opts.agreementType) || normalizeAgreementType(review && review.type) || agreementType(agreement);
+  if (!type) throw typeError('Choose the agreement type before asking the lawyer.', 'type_required');
+  const scoped = scopedAgreement(type, agreement);
   const system = [
     { type: 'text', text: foundation(type), cache_control: { type: 'ephemeral' } }, // stable foundation → cached
   ];
-  const house = houseBlock(opts.playbook);
+  const house = houseBlock(scopedPlaybook(opts.playbook, type));
   if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } });
   if (review) {
-    system.push(benchmarkBlock(review.ourText));
+    if (review.ourText && !benchmarkFits(type, review.ourText)) {
+      throw typeError('The benchmark agreement is a different agreement type.', 'type_mismatch');
+    }
+    if (review.ourText) system.push(benchmarkBlock(review.ourText));
     system.push({ type: 'text', text: 'YOUR EARLIER REVIEW OF THE ATTACHED COUNTERPARTY DOCUMENT "' + String(review.filename || '').slice(0, 120) + '" (your own findings — build on them; the user may ask you to explain a finding, draft or tighten the counter-wording, or write the cover note to the counterparty):\n' + JSON.stringify(review.review) });
   }
-  system.push(agreementBlock(agreement));
-  system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, agreement, opts.clauses) });
+  const stored = agreement && normalizeAgreementType((agreement.data || agreement)._type);
+  if (stored && sameFamily(stored, type)) system.push(agreementBlock(scoped));
+  system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, scoped, scopedClauses(type, opts.clauses)) });
 
   const convo = (messages || []).slice(-20).map(function (m) {
     return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') };
@@ -284,7 +384,7 @@ async function chat(agreement, messages, opts) {
     convo.push({
       role: 'user',
       content: toolUses.map(function (t) {
-        const checked = lawyerChanges.validateProposals(changesFromTool(t.input), agreement && (agreement.data || agreement));
+        const checked = lawyerChanges.validateProposals(changesFromTool(t.input), scoped);
         checked.proposals.forEach(function (p) { proposals.push(p); });
         const note = checked.rejected.length
           ? 'Rejected (not shown to the user — fix these and call propose_changes again with only the fixes): '
@@ -301,15 +401,20 @@ async function chat(agreement, messages, opts) {
 // args: {type:'ra'|'rb'|'da', doc:{kind:'pdf'|'text', data, filename}, ourText, agreement, playbook}
 async function reviewContract(args) {
   if (!client) throw new Error('AI is not configured on this server');
-  const type = ['ra', 'rb', 'da'].includes(args.type) ? args.type : 'ra';
+  args = args || {};
+  const type = normalizeAgreementType(args.type);
+  if (!type) throw typeError('Choose the agreement type before reviewing.', 'type_required');
+  if (!benchmarkFits(type, args.ourText)) throw typeError('The benchmark agreement is a different agreement type.', 'type_mismatch');
   const system = [
     { type: 'text', text: foundation(type), cache_control: { type: 'ephemeral' } },
   ];
-  const house = houseBlock(args.playbook);
+  const house = houseBlock(scopedPlaybook(args.playbook, type));
   if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } });
   system.push({ type: 'text', text: REVIEW_TASK });
+  system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, scopedAgreement(type, args.agreement), []) });
   system.push(benchmarkBlock(args.ourText));
-  if (args.agreement) system.push(agreementBlock(args.agreement));
+  const stored = args.agreement && normalizeAgreementType((args.agreement.data || args.agreement)._type);
+  if (stored && sameFamily(stored, type)) system.push(agreementBlock(scopedAgreement(type, args.agreement)));
 
   // Streamed, with a large output budget: the model's thinking counts against max_tokens, and a
   // full review of a real contract (many findings, each with paste-ready wording) is long.
@@ -372,4 +477,7 @@ async function completeStructured(params) {
   return createMessage(params);
 }
 
-module.exports = { enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME, completeStructured, MODEL };
+module.exports = {
+  enabled, chat, reviewContract, suggestNote, summariseAgreement, playbookFor, TYPE_NAME, completeStructured, MODEL,
+  normalizeAgreementType, familyOf, sameFamily, benchmarkFits, reviewMaterial, reviewContextText, scopedAgreement, scopedClauses,
+};

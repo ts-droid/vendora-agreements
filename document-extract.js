@@ -347,6 +347,7 @@ function readRequest(req) {
     }
     let file = null;
     let agreementId = '';
+    let agreementType = '';
     let tooBig = false;
     let fieldLimited = false;
     let extraFile = false;
@@ -366,13 +367,14 @@ function readRequest(req) {
     busboy.on('field', function (name, value, info) {
       if (info && info.valueTruncated) fieldLimited = true;
       if (name === 'agreementId') agreementId = String(value || '').slice(0, 20);
+      if (name === 'agreementType') agreementType = String(value || '').slice(0, 40);
     });
     busboy.on('error', function () { done({ ok: false, status: 400, error: 'Upload the document as a file.' }); });
     busboy.on('finish', function () {
       if (tooBig) return done({ ok: false, status: 413, error: 'That file is larger than 8 MB.' });
       if (fieldLimited || extraFile) return done({ ok: false, status: 400, error: 'Upload the document as a file.' });
       if (!file || !file.buffer || !file.buffer.length) return done({ ok: false, status: 400, error: 'Choose a .docx or PDF file.' });
-      done({ ok: true, file: file, agreementId: agreementId });
+      done({ ok: true, file: file, agreementId: agreementId, agreementType: agreementType });
     });
     req.pipe(busboy);
   });
