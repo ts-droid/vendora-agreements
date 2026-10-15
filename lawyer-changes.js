@@ -1314,35 +1314,46 @@
       else {
         var ovKeys = Object.keys(data.clauseOverrides);
         if (ovKeys.length > STORED_CAP) pushErr(errors, 'too many clause overrides');
-        var keptLegacy = 0;
         ovKeys.forEach(function (id) {
           if (!clauseIdAllowed(id, agreementTypeOf(data) || undefined)) {
             // Older rb/da rows still carry ra.* keys from the global override map.
             // An unchanged value is the stored row, not a new cross-type edit.
-            if (prior && plainObject(prior.clauseOverrides) && hasOwn(prior.clauseOverrides, id) && prior.clauseOverrides[id] === data.clauseOverrides[id]) {
-              keptLegacy += 1;
-              return;
-            }
+            if (prior && plainObject(prior.clauseOverrides) && hasOwn(prior.clauseOverrides, id) && prior.clauseOverrides[id] === data.clauseOverrides[id]) return;
             pushErr(errors, 'clauseOverrides contains an id that is not allowed');
             return;
           }
           if (typeof data.clauseOverrides[id] !== 'string') pushErr(errors, 'clause override text must be a string');
           else if (data.clauseOverrides[id].length > TEXT_LIMIT) pushErr(errors, 'clause override text is too long');
         });
-        if (keptLegacy) console.log('Kept ' + keptLegacy + ' unchanged clause override(s) from another agreement type on a ' + (agreementTypeOf(data) || 'untyped') + ' agreement');
       }
     }
     if (hasOwn(data, 'clauseInserts')) {
       if (!Array.isArray(data.clauseInserts)) pushErr(errors, 'clauseInserts must be an array');
       else {
         if (data.clauseInserts.length > STORED_CAP) pushErr(errors, 'too many clause inserts');
+        // Each stored row can excuse one current row. A second copy is a new insert.
+        var priorInserts = prior && Array.isArray(prior.clauseInserts) ? prior.clauseInserts.slice() : [];
         data.clauseInserts.forEach(function (row) {
           if (!plainObject(row) || unexpectedKey(row, INSERT_KEYS)) {
             pushErr(errors, 'clause insert has an unexpected field');
             return;
           }
           if (typeof row.id !== 'string' || !clauseIdAllowed(row.id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clause insert id is not allowed');
-          else if (templateClauseFor(agreementTypeOf(data), row.id)) pushErr(errors, 'clause insert duplicates a template clause');
+          else {
+            var templateClause = templateClauseFor(agreementTypeOf(data), row.id);
+            var unchangedInsert = false;
+            if (templateClause) {
+              for (var pi = 0; pi < priorInserts.length; pi++) {
+                var old = priorInserts[pi];
+                if (old && old.id === row.id && old.anchor === row.anchor && (old.label || '') === (row.label || '') && old.text === row.text) {
+                  priorInserts.splice(pi, 1);
+                  unchangedInsert = true;
+                  break;
+                }
+              }
+            }
+            if (templateClause && !unchangedInsert) pushErr(errors, 'clause ' + row.id + ' is already in this template as ' + templateClause.id + '; use replace');
+          }
           if (typeof row.anchor !== 'string' || (row.anchor && !anchorExists(row.anchor, data))) pushErr(errors, 'clause insert anchor must exist');
           if (row.label != null && typeof row.label !== 'string') pushErr(errors, 'clause insert label must be a string');
           if (typeof row.text !== 'string') pushErr(errors, 'clause insert text must be a string');

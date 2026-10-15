@@ -929,10 +929,47 @@ test('an insert of §13B or §13C is rejected because those clauses are already 
   );
   assert.equal(replaced.ok, true);
   assert.equal(replaced.proposal.op, 'replace');
-  assert.equal(LC.validateStoredAgreement({
+  const stored13b = { id: '13B', anchor: 'ra.s13.term', label: '§13B', text: 'Already stored.' };
+  const stored13c = { id: '13C', anchor: 'ra.s13b.no_compensation', label: '§13C', text: 'Already stored too.' };
+  const previous = { _type: 'ra', name: 'Old reseller', clauseInserts: [stored13b, stored13c] };
+  const kept = LC.validateStoredAgreement({ _type: 'ra', name: 'Old reseller AB', clauseInserts: [stored13b, stored13c] }, previous);
+  assert.equal(kept.ok, true, JSON.stringify(kept.errors));
+  const fresh = LC.validateStoredAgreement({
     _type: 'ra',
     clauseInserts: [{ id: '13B', anchor: 'ra.s13.term', label: '§13B', text: 'Duplicate.' }],
-  }).ok, false);
+  });
+  assert.equal(fresh.ok, false);
+  assert.match(fresh.errors.join(' '), /use replace/);
+  const edited = LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: '13B', anchor: 'ra.s13.term', label: '§13B', text: 'Changed wording.' }],
+  }, previous);
+  assert.equal(edited.ok, false);
+  assert.match(edited.errors.join(' '), /use replace/);
+  const moved = LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: '13B', anchor: 'ra.s13b.no_compensation', label: '§13B', text: 'Already stored.' }],
+  }, previous);
+  assert.equal(moved.ok, false);
+  assert.match(moved.errors.join(' '), /use replace/);
+  const copied = LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [stored13b, stored13b],
+  }, previous);
+  assert.equal(copied.ok, false);
+  assert.match(copied.errors.join(' '), /use replace/);
+  const storedCatalog = { id: 'ra.s13b.no_compensation', anchor: 'ra.s13.term', label: '§13B', text: 'Stored under the catalog id.' };
+  const keptCatalog = LC.validateStoredAgreement(
+    { _type: 'ra', clauseInserts: [storedCatalog] },
+    { _type: 'ra', clauseInserts: [storedCatalog] }
+  );
+  assert.equal(keptCatalog.ok, true, JSON.stringify(keptCatalog.errors));
+  const newCatalog = LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: 'ra.s13b.no_compensation', anchor: 'ra.s13.term', label: '§13B', text: 'New wording.' }],
+  }, { _type: 'ra', clauseInserts: [storedCatalog] });
+  assert.equal(newCatalog.ok, false);
+  assert.match(newCatalog.errors.join(' '), /use replace/);
   const prompt = LC.catalogBlock('ra', { _type: 'ra' }, []);
   assert.match(prompt, /for example 4A/);
   assert.equal(/target_id is 13B/.test(prompt), false);
