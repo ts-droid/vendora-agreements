@@ -604,6 +604,48 @@ test('stored inserts reject a self-anchor and a cycle', function () {
   assert.ok(triangle.errors.some(function (e) { return e.indexOf('cycle') >= 0; }));
 });
 
+test('an old simplified reseller agreement may still carry unchanged ra.* overrides', function () {
+  const previous = {
+    _type: 'rb',
+    name: 'Shop',
+    clauseOverrides: {
+      'ra.s4.payment': 'Pay within 30 days.',
+      'ra.marketplaces': 'No marketplaces.',
+      'rb.s2.payment': 'Orders through Vendora.',
+    },
+    clauseDeletes: ['ra.no_subreselling'],
+    redlines: [{
+      target: { kind: 'clause', id: 'ra.s4.payment' },
+      op: 'replace',
+      oldText: 'within 30 days',
+      newText: 'within 45 days',
+      label: 'Payment',
+      anchor: '',
+    }],
+  };
+  const saved = LC.validateStoredAgreement(Object.assign({}, previous, { name: 'Shop AB' }), previous);
+  assert.equal(saved.ok, true, JSON.stringify(saved.errors));
+  const changed = LC.validateStoredAgreement({
+    _type: 'rb',
+    clauseOverrides: { 'ra.s4.payment': 'Pay within 60 days.' },
+  }, previous);
+  assert.equal(changed.ok, false);
+  assert.ok(changed.errors.some(function (e) { return e.indexOf('not allowed') >= 0; }));
+  const created = LC.validateStoredAgreement({
+    _type: 'rb',
+    clauseOverrides: { 'ra.s4.payment': 'Pay within 30 days.' },
+  });
+  assert.equal(created.ok, false);
+  const distributor = LC.validateStoredAgreement({
+    _type: 'da',
+    clauseOverrides: { 'ra.s4.payment': 'Pay within 30 days.' },
+  }, {
+    _type: 'da',
+    clauseOverrides: { 'ra.s4.payment': 'Pay within 30 days.' },
+  });
+  assert.equal(distributor.ok, true, JSON.stringify(distributor.errors));
+});
+
 test('unchanged legacy fields are kept, and a changed invalid field is rejected', function () {
   const legacy = { sig_email: 'not-an-email', date: '01-10-2026', curr: 'EUR', pay: '30', name: 'Acme' };
   assert.equal(LC.validateStoredAgreement(legacy).ok, false);
@@ -795,12 +837,114 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', { skip:
   }
 });
 
+test('buildRA places an inserted clause directly after its anchor', { skip: chromePath() ? false : 'Chrome is not installed' }, async function () {
+  const chrome = chromePath();
+  const puppeteer = require('puppeteer-core');
+  const app = require('../server');
+  const server = await new Promise(function (resolve) {
+    const s = app.listen(0, '127.0.0.1', function () { resolve(s); });
+  });
+  const base = 'http://127.0.0.1:' + server.address().port;
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      executablePath: chrome,
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(60000);
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(function () { return window.LawyerChanges && window.buildRA && window.zipEntryText; });
+    const text = await page.evaluate(async function () {
+      const LC = window.LawyerChanges;
+      const seed = {
+        _type: 'ra', name: 'Reseller', curr: 'EUR', pay: '30', inco: 'EXW',
+        incoplace: 'Lomma', terr: 'Sweden', notice: '90', date: '2026-10-01',
+        products: 'Vendora', excl: 'non-exclusive',
+      };
+      const applied = LC.applyProposals(seed, [
+        {
+          target: { kind: 'clause', id: '4A' },
+          op: 'insert',
+          oldText: '',
+          newText: 'PARENT-GUARANTEE-4A sits after payment.',
+          label: '§4A',
+          rationale: 'test',
+          anchor: 'ra.s4.payment',
+        },
+        {
+          target: { kind: 'clause', id: '4B' },
+          op: 'insert',
+          oldText: '',
+          newText: 'AUDIT-RIGHT-4B sits after 4A.',
+          label: '§4B',
+          rationale: 'test',
+          anchor: '4A',
+        },
+      ]);
+      if (applied.rejected.length) return { rejected: applied.rejected };
+      const built = await buildRA(applied.data);
+      const buf = await built.blob.arrayBuffer();
+      const xml = await zipEntryText(buf, 'word/document.xml');
+      return { rejected: [], xml: xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') };
+    });
+    assert.deepEqual(text.rejected, []);
+    const payment = text.xml.indexOf('withhold further deliveries until full payment');
+    const inserted = text.xml.indexOf('PARENT-GUARANTEE-4A sits after payment');
+    const chained = text.xml.indexOf('AUDIT-RIGHT-4B sits after 4A');
+    const credit = text.xml.indexOf('Credit Limit shall be communicated');
+    assert.ok(payment >= 0 && inserted > payment, 'insert follows the payment clause');
+    assert.ok(chained > inserted, 'a clause anchored to the insert follows it');
+    assert.ok(credit > chained, 'the next template clause follows the inserts');
+    assert.equal(text.xml.indexOf('Additional clauses'), -1);
+  } finally {
+    if (browser) await browser.close();
+    await new Promise(function (resolve) { server.close(resolve); });
+  }
+});
+
+test('an insert of §13B or §13C is rejected because those clauses are already in the template', function () {
+  const duplicate = LC.validateProposal(
+    clause('13B', 'insert', '', 'The Reseller is a reseller and not a commercial agent.', { anchor: '§13', label: 'No compensation on termination (§13B)' }),
+    { _type: 'ra' }
+  );
+  assert.equal(duplicate.ok, false);
+  assert.match(duplicate.errors.join(' '), /ra\.s13b\.no_compensation/);
+  assert.match(duplicate.errors.join(' '), /use replace/);
+  const duplicateC = LC.describeProposal(
+    { _type: 'ra' },
+    clause('13C', 'insert', '', 'There is no non-compete after the term of this Agreement.', { anchor: 'ra.s13.term' })
+  );
+  assert.equal(duplicateC.ok, false);
+  assert.match(duplicateC.errors.join(' '), /ra\.s13c\.after_end/);
+  const catalogId = LC.validateProposal(
+    clause('ra.s13b.no_compensation', 'insert', '', 'Duplicate body.', { anchor: 'ra.s13.term' }),
+    { _type: 'ra' }
+  );
+  assert.equal(catalogId.ok, false);
+  const replaced = LC.validateProposal(
+    clause('ra.s13b.no_compensation', 'replace', '', 'The Reseller is a reseller and not a commercial agent.'),
+    { _type: 'ra' }
+  );
+  assert.equal(replaced.ok, true);
+  assert.equal(replaced.proposal.op, 'replace');
+  assert.equal(LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: '13B', anchor: 'ra.s13.term', label: '§13B', text: 'Duplicate.' }],
+  }).ok, false);
+  const prompt = LC.catalogBlock('ra', { _type: 'ra' }, []);
+  assert.match(prompt, /for example 4A/);
+  assert.equal(/target_id is 13B/.test(prompt), false);
+  assert.equal(/for example 4A or 13B/.test(prompt), false);
+});
+
 test('a new reseller clause with a missing section anchor can be approved, and the placement is stated', function () {
-  const text13b = 'The Reseller is a reseller and not a commercial agent. The Reseller has no right to severance pay or goodwill compensation when this Agreement ends.';
-  const text13c = 'The Supplier has no obligation to buy back stock. There is no non-compete after the term of this Agreement.';
+  const text14a = 'A new clause that is not already numbered in the reseller template.';
+  const text14b = 'Another new clause that follows the first.';
   const section = LC.describeProposal(
     { _type: 'ra' },
-    clause('13B', 'insert', '', text13b, { anchor: '§13', label: 'No compensation on termination (§13B)' })
+    clause('14A', 'insert', '', text14a, { anchor: '§13', label: '§14A' })
   );
   assert.equal(section.ok, true, JSON.stringify(section.errors));
   assert.equal(section.proposal.anchor, 'ra.s13c.after_end');
@@ -809,7 +953,7 @@ test('a new reseller clause with a missing section anchor can be approved, and t
 
   const named = LC.describeProposal(
     { _type: 'ra' },
-    clause('13C', 'insert', '', text13c, { anchor: 'ra.s13.term', label: 'After the agreement ends (§13C)' })
+    clause('14B', 'insert', '', text14b, { anchor: 'ra.s13.term', label: '§14B' })
   );
   assert.equal(named.ok, true, JSON.stringify(named.errors));
   assert.equal(named.proposal.anchor, 'ra.s13.term');
@@ -817,19 +961,17 @@ test('a new reseller clause with a missing section anchor can be approved, and t
   assert.equal(named.placement.indexOf('not in this agreement'), -1);
 
   const applied = LC.applyProposals({ _type: 'ra' }, [
-    clause('13B', 'insert', '', text13b, { anchor: '§13', label: 'No compensation on termination (§13B)' }),
-    clause('13C', 'insert', '', text13c, { anchor: '13B', label: 'After the agreement ends (§13C)' }),
+    clause('14A', 'insert', '', text14a, { anchor: '§13', label: '§14A' }),
+    clause('14B', 'insert', '', text14b, { anchor: '14A', label: '§14B' }),
   ]);
   assert.equal(applied.rejected.length, 0, JSON.stringify(applied.rejected));
   assert.equal(applied.data.clauseInserts[0].anchor, 'ra.s13c.after_end');
-  assert.equal(applied.data.clauseInserts[1].anchor, '13B');
-  assert.match(applied.data.clauseInserts[0].text, /not a commercial agent/);
-  assert.match(applied.data.clauseInserts[1].text, /no non-compete/);
+  assert.equal(applied.data.clauseInserts[1].anchor, '14A');
 
-  assert.equal(LC.validateProposal(clause('13B', 'insert', '', text13b, { anchor: '13B' }), { _type: 'ra' }).ok, false);
+  assert.equal(LC.validateProposal(clause('14A', 'insert', '', text14a, { anchor: '14A' }), { _type: 'ra' }).ok, false);
   const cycle = LC.validateProposals([
-    clause('13B', 'insert', '', text13b, { anchor: '13C' }),
-    clause('13C', 'insert', '', text13c, { anchor: '13B' }),
+    clause('14A', 'insert', '', text14a, { anchor: '14B' }),
+    clause('14B', 'insert', '', text14b, { anchor: '14A' }),
   ], { _type: 'ra' });
   assert.equal(cycle.ok, false);
   assert.ok(cycle.rejected.some(function (r) { return r.errors.join(' ').indexOf('cycle') >= 0; }));
@@ -841,11 +983,11 @@ test('a new reseller clause with a missing section anchor can be approved, and t
 
   assert.equal(LC.validateStoredAgreement({
     _type: 'ra',
-    clauseInserts: [{ id: '13B', anchor: '', label: '§13B', text: text13b }],
+    clauseInserts: [{ id: '14A', anchor: '', label: '§14A', text: text14a }],
   }).ok, true);
   assert.equal(LC.validateStoredAgreement({
     _type: 'ra',
-    clauseInserts: [{ id: '13B', anchor: '13B', label: '§13B', text: text13b }],
+    clauseInserts: [{ id: '14A', anchor: '14A', label: '§14A', text: text14a }],
   }).ok, false);
 
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -855,6 +997,7 @@ test('a new reseller clause with a missing section anchor can be approved, and t
   assert.match(html, /no non-compete/);
   assert.match(html, /ra\.s13b\.no_compensation/);
   assert.match(html, /ra\.s13c\.after_end/);
+  assert.match(html, /Run this review again/);
   const catalog = LC.catalog('ra').map(function (c) { return c.id; });
   assert.ok(catalog.indexOf('ra.s13b.no_compensation') > catalog.indexOf('ra.s13.term'));
   assert.ok(catalog.indexOf('ra.s13c.after_end') > catalog.indexOf('ra.s13b.no_compensation'));

@@ -196,6 +196,22 @@
     if (known) return !!clauseById(type, id);
     return !!clauseByIdAny(id);
   }
+  // 13B is the template clause ra.s13b.*, not a free insert id. 4A is free because
+  // no catalog clause uses .s4a.
+  function templateClauseFor(type, id) {
+    if (!type || typeof id !== 'string' || !id) return null;
+    var exact = clauseById(type, id);
+    if (exact) return exact;
+    var letter = /^(\d{1,2})([A-Z])$/.exec(id);
+    if (!letter) return null;
+    var token = '.s' + letter[1] + letter[2].toLowerCase();
+    var list = catalog(type);
+    for (var i = 0; i < list.length; i++) {
+      var cid = list[i].id;
+      if (cid.indexOf(token + '.') >= 0 || cid.slice(-token.length) === token) return list[i];
+    }
+    return null;
+  }
   // A catalog clause of this agreement's type, an annex, or a clause already inserted.
   // Another type's catalog id is not an anchor: a reseller review must not hang a clause
   // on a distribution section.
@@ -558,11 +574,16 @@
     var anchorId = '';
     var placement = '';
     if (op === 'insert' && kind === 'clause' && id) {
-      var resolved = resolvePlacement(id, anchor, data);
-      if (!resolved.ok) errors.push(resolved.error);
-      else {
-        anchorId = resolved.anchor;
-        placement = resolved.placement;
+      var existing = templateClauseFor(agreementTypeOf(data), id);
+      if (existing) {
+        errors.push('clause ' + id + ' is already in this template as ' + existing.id + '; use replace');
+      } else {
+        var resolved = resolvePlacement(id, anchor, data);
+        if (!resolved.ok) errors.push(resolved.error);
+        else {
+          anchorId = resolved.anchor;
+          placement = resolved.placement;
+        }
       }
     } else {
       anchorId = canonicalAnchor(anchor, data);
@@ -1079,8 +1100,9 @@
       + 'Every change is one item the user can approve. Do not tell the user to paste anything manually.\n'
       + 'Use only the clauses and standard positions below. Positions from the other agreement type are not in this list and must not be proposed.\n'
       + 'Each change has target_kind (clause, annex, or field), target_id, op (replace, insert, or delete), old_text, new_text, label, rationale, and anchor.\n'
-      + 'Use the exact clause id from the list below. For a NEW clause (for example 4A or 13B), op is insert, target_id is 4A, and anchor is the clause id it should follow. '
-      + 'If that section is missing or worded differently, set anchor to the section number (for example 13). The clause can still be approved; the user is shown where it will be inserted. Do not anchor a clause to itself.\n'
+      + 'Use the exact clause id from the list below. For a NEW clause (for example 4A), op is insert, target_id is 4A, and anchor is the clause id it should follow. '
+      + 'If that section is missing or worded differently, set anchor to the section number (for example 4). The clause can still be approved; the user is shown where it will be inserted. Do not anchor a clause to itself. '
+      + 'Do not insert a number that is already in the template, such as a clause labeled §13B; replace that clause id instead.\n'
       + 'Annex target_id is 1A, 1B, 2, 3, 4, or 5. Field target_id is one of: ' + Object.keys(FIELDS).join(', ') + '.\n'
       + 'old_text must match the current clause, annex, or field exactly once after whitespace and quote characters are normalised, on word boundaries, so "30 days" does not match "130 days". '
       + 'An empty old_text on replace replaces the whole clause, annex, or field. Zero matches or several matches are rejected. '
@@ -1292,11 +1314,22 @@
       else {
         var ovKeys = Object.keys(data.clauseOverrides);
         if (ovKeys.length > STORED_CAP) pushErr(errors, 'too many clause overrides');
+        var keptLegacy = 0;
         ovKeys.forEach(function (id) {
-          if (!clauseIdAllowed(id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clauseOverrides contains an id that is not allowed');
-          else if (typeof data.clauseOverrides[id] !== 'string') pushErr(errors, 'clause override text must be a string');
+          if (!clauseIdAllowed(id, agreementTypeOf(data) || undefined)) {
+            // Older rb/da rows still carry ra.* keys from the global override map.
+            // An unchanged value is the stored row, not a new cross-type edit.
+            if (prior && plainObject(prior.clauseOverrides) && hasOwn(prior.clauseOverrides, id) && prior.clauseOverrides[id] === data.clauseOverrides[id]) {
+              keptLegacy += 1;
+              return;
+            }
+            pushErr(errors, 'clauseOverrides contains an id that is not allowed');
+            return;
+          }
+          if (typeof data.clauseOverrides[id] !== 'string') pushErr(errors, 'clause override text must be a string');
           else if (data.clauseOverrides[id].length > TEXT_LIMIT) pushErr(errors, 'clause override text is too long');
         });
+        if (keptLegacy) console.log('Kept ' + keptLegacy + ' unchanged clause override(s) from another agreement type on a ' + (agreementTypeOf(data) || 'untyped') + ' agreement');
       }
     }
     if (hasOwn(data, 'clauseInserts')) {
@@ -1309,6 +1342,7 @@
             return;
           }
           if (typeof row.id !== 'string' || !clauseIdAllowed(row.id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clause insert id is not allowed');
+          else if (templateClauseFor(agreementTypeOf(data), row.id)) pushErr(errors, 'clause insert duplicates a template clause');
           if (typeof row.anchor !== 'string' || (row.anchor && !anchorExists(row.anchor, data))) pushErr(errors, 'clause insert anchor must exist');
           if (row.label != null && typeof row.label !== 'string') pushErr(errors, 'clause insert label must be a string');
           if (typeof row.text !== 'string') pushErr(errors, 'clause insert text must be a string');
@@ -1322,7 +1356,10 @@
       else {
         if (data.clauseDeletes.length > STORED_CAP) pushErr(errors, 'too many clause deletes');
         data.clauseDeletes.forEach(function (id) {
-          if (typeof id !== 'string' || !clauseIdAllowed(id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clauseDeletes contains an id that is not allowed');
+          if (typeof id !== 'string' || !clauseIdAllowed(id, agreementTypeOf(data) || undefined)) {
+            if (prior && Array.isArray(prior.clauseDeletes) && prior.clauseDeletes.indexOf(id) >= 0) return;
+            pushErr(errors, 'clauseDeletes contains an id that is not allowed');
+          }
         });
       }
     }
@@ -1367,7 +1404,13 @@
             : row.target.kind === 'annex' ? ANNEX_IDS.indexOf(tid) >= 0
             : row.target.kind === 'field' ? hasOwn(FIELDS, tid)
             : false;
-          if (!idOk) pushErr(errors, 'redline target id is not allowed');
+          if (!idOk) {
+            var sameRedline = prior && Array.isArray(prior.redlines) && prior.redlines.some(function (old) {
+              return old && old.target && old.target.kind === row.target.kind && old.target.id === tid
+                && old.op === row.op && (old.oldText || '') === (row.oldText || '') && (old.newText || '') === (row.newText || '');
+            });
+            if (!sameRedline) pushErr(errors, 'redline target id is not allowed');
+          }
           ['oldText', 'newText', 'label', 'anchor'].forEach(function (k) {
             if (row[k] != null && typeof row[k] !== 'string') pushErr(errors, 'redline ' + k + ' must be a string');
           });

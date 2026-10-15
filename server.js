@@ -547,10 +547,19 @@ app.get('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {
   try {
     if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Not found' });
     const r = await db.query(
-      `SELECT id, name, type, filename, doc_kind, review, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
+      `SELECT id, name, type, filename, doc_kind, our_text, review, verdict, findings_count, deal_breakers, counterparty_name, agreement_id, created_by, created_by_name, created_at
        FROM contract_reviews WHERE id=$1`, [req.params.id]);
     if (!reviewVisible(req, r.rows[0])) return res.status(404).json({ error: 'Not found' });
-    res.json({ review: r.rows[0] });
+    const row = r.rows[0];
+    // our_text stays on the server. The flag tells the UI to ask for a fresh review
+    // when this row was saved against the other template, or with no readable benchmark.
+    res.json({ review: {
+      id: row.id, name: row.name, type: row.type, filename: row.filename, doc_kind: row.doc_kind,
+      review: row.review, verdict: row.verdict, findings_count: row.findings_count, deal_breakers: row.deal_breakers,
+      counterparty_name: row.counterparty_name, agreement_id: row.agreement_id,
+      created_by: row.created_by, created_by_name: row.created_by_name, created_at: row.created_at,
+      benchmark_mismatch: !ai.benchmarkFits(row.type, row.our_text),
+    } });
   } catch (err) { console.error('Get review error:', err.message); res.status(500).json({ error: 'Could not load the review' }); }
 });
 app.put('/api/reviews/:id', requireDb, auth.requireAuth, async (req, res) => {

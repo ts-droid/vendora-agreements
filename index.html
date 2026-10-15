@@ -27179,10 +27179,15 @@ function crBadge(cls){ var m=CR_CLASS[cls]||{label:cls,bg:"#eef1f5",fg:"#555"}; 
 // opened from the archive. Both render through the same HTML and offer the same actions.
 window._crResults = window._crResults || {}; window._crSaved = window._crSaved || {};
 function crGet(key){ var p=String(key).split(":"); return p[0]==="s" ? (window._crSaved[p[1]]||null) : (window._crResults[p[1]]||null); }
+function benchmarkWarningHtml(res){
+  if (!res || !res.benchmarkMismatch) return "";
+  return "<div class='cr-rerun' style='margin:0 0 12px;background:#fff3cd;color:#856404;border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.5'><strong>Run this review again.</strong> It was saved with the wrong agreement type, or the benchmark type could not be read. Choose distribution or reseller and review the contract again.</div>";
+}
 function contractReviewHtml(res, key){
   var rv=res.review, v=CR_VERDICT[rv.overall_verdict]||CR_VERDICT.negotiate, kid=String(key).replace(/\W/g,"_");
   var counts={}; rv.findings.forEach(function(f){ counts[f.classification]=(counts[f.classification]||0)+1; });
-  var h = "<div style='border:1px solid var(--border);border-radius:8px;overflow:hidden'>"
+  var h = benchmarkWarningHtml(res)
+    + "<div style='border:1px solid var(--border);border-radius:8px;overflow:hidden'>"
     + "<div style='background:"+v.bg+";color:"+v.fg+";padding:12px 16px'><div style='font-size:15px;font-weight:600'>"+esc(v.label)+"</div>"
     + "<div style='font-size:13px;margin-top:4px'>"+esc(rv.overall_rationale||"")+"</div></div>"
     + "<div style='padding:12px 16px;font-size:13px;line-height:1.55'>"
@@ -27295,7 +27300,7 @@ function closeCr(){ var o=document.getElementById("crOverlay"); if(o) o.style.di
 function openSavedReview(id){
   fetch("/api/reviews/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
     var a=j.review;
-    var res={ id:a.id, name:a.name, filename:a.filename, type:a.type, review:a.review, when:new Date(a.created_at), by:a.created_by_name, counterparty:a.counterparty_name, agreementId:a.agreement_id };
+    var res={ id:a.id, name:a.name, filename:a.filename, type:a.type, review:a.review, when:new Date(a.created_at), by:a.created_by_name, counterparty:a.counterparty_name, agreementId:a.agreement_id, benchmarkMismatch:!!a.benchmark_mismatch };
     window._crSaved[a.id]=res;
     var o=crOverlay(), box=document.getElementById("crBox");
     box.innerHTML = "<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:12px'><div>"
