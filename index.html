@@ -363,7 +363,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
   <div class="g2">
     <div class="f"><label>Preferred Incoterms</label><select id="da_inco"><option value="DDP" selected>DDP &mdash; Delivered Duty Paid</option><option value="DAP">DAP &mdash; Delivered at Place</option><option value="CIF">CIF</option><option value="FOB">FOB</option><option value="EXW">EXW</option></select></div>
     <div class="f"><label>Incoterms year</label><select id="da_incoy"><option value="2020" selected>Incoterms 2020</option><option value="2010">Incoterms 2010</option></select></div>
-    <div class="f"><label>Place of delivery</label><input id="da_delplace" value="Vendora Nordic AB, Lomma, Sweden"></div>
+    <div class="f"><label>Place of delivery</label><input id="da_delplace" value="Vendora Nordic AB, Ladugårdsvägen 1, 234 35 Lomma"></div>
     <div class="f"><label>Standard lead time (working days)</label><select id="da_lead"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="15">15 days</option><option value="20">20 days</option><option value="30">30 days</option><option value="45">45 days</option><option value="60">60 days</option></select></div>
   </div>
   <div class="sec">Order terms</div>
@@ -24157,6 +24157,7 @@ function beginLawyerDoc(data){
 function lawyerCarry(data){
   data = data || {};
   var src = window._lawyerState || (window._editing && window._editing.base) || {};
+  if (src._type && data._type && src._type !== data._type) return data;
   ["clauseOverrides","clauseInserts","clauseDeletes","annexOverrides","annexDeletes","redlines"].forEach(function(k){
     if (data[k] == null && src[k] != null) data[k] = src[k];
   });
@@ -24209,18 +24210,23 @@ function clauseNode(h, id, fallback, prefixItems, parOpts){
   var LC = window.LawyerChanges;
   var deleted = LC && LC.isDeleted(data, "clause", id);
   var rl = (data._trackChanges && LC) ? LC.redlineFor(data, "clause", id) : null;
+  var node = null;
   if (deleted) {
-    if (!(rl && data._trackChanges)) return null;
-    return trackedParagraph(h, (rl && rl.oldText) || fallback || "", "", prefixItems, parOpts);
+    if (rl && data._trackChanges) node = trackedParagraph(h, (rl && rl.oldText) || fallback || "", "", prefixItems, parOpts);
+  } else {
+    var text = lawyerPlain("clause", id, fallback);
+    if (rl && data._trackChanges && (rl.op === "replace" || rl.op === "insert")) {
+      var oldT = (rl.oldText && String(rl.oldText).trim()) ? rl.oldText : (rl.op === "insert" ? "" : (fallback || ""));
+      node = trackedParagraph(h, oldT, rl.newText || text, prefixItems, parOpts);
+    } else {
+      var items = (prefixItems || []).slice();
+      items.push(text);
+      node = h.par(items, parOpts);
+    }
   }
-  var text = lawyerPlain("clause", id, fallback);
-  if (rl && data._trackChanges && (rl.op === "replace" || rl.op === "insert")) {
-    var oldT = (rl.oldText && String(rl.oldText).trim()) ? rl.oldText : (rl.op === "insert" ? "" : (fallback || ""));
-    return trackedParagraph(h, oldT, rl.newText || text, prefixItems, parOpts);
-  }
-  var items = (prefixItems || []).slice();
-  items.push(text);
-  return h.par(items, parOpts);
+  var extras = flushAnchored(h, id);
+  if (!extras.length) return node;
+  return [node].concat(extras);
 }
 function flushAnchored(h, anchorId){
   var LC = window.LawyerChanges;
@@ -24285,9 +24291,17 @@ function lawyerAnnexPages(h){
   });
   return out;
 }
+function flattenDocChildren(list){
+  var out = [];
+  (list || []).forEach(function(n){
+    if (Array.isArray(n)) flattenDocChildren(n).forEach(function(x){ out.push(x); });
+    else if (n) out.push(n);
+  });
+  return out;
+}
 function finishLawyerDoc(h, children, data){
   lawyerAnnexPages(h).forEach(function(n){ children.push(n); });
-  return h.makeDoc(children.filter(Boolean), { track: !!(data && data._trackChanges) });
+  return h.makeDoc(flattenDocChildren(children), { track: !!(data && data._trackChanges) });
 }
 function gtcWarrantyText(fallback){
   var data = window._lawyerDocData || {};
@@ -24514,7 +24528,7 @@ async function buildDA(overrideData) {
   children.push(h.par("The Supplier shall maintain a single source of truth for all Product, customs, and logistics data in Vendora\u2019s designated PIM. The HS code, EU CN code, TARIC classification, and non-preferential country of origin submitted in the PIM shall be used consistently across commercial invoices, packing lists, customs declarations, and all shipping and trade documents. Any change to specifications, pricing, EAN/UPC, warranty terms, customs classification, origin, logistics data, battery data, or EOL status must be reflected in the PIM within ten (10) business days of the change, and the Supplier shall notify the Distributor in writing of any customs classification or origin change before the next affected shipment is dispatched."));
   children.push(h.par("Where customs, origin, or product data submitted by the Supplier is incorrect, incomplete, or outdated, the Distributor may suspend onboarding, listing, launch, or order processing of the affected Products until corrected, and the Supplier shall bear all resulting documented direct costs, additional duties, reclassification costs, customs broker fees, storage costs, delay costs, and penalties."));
   children.push(h.h2("Deliveries and Transport"));
-  children.push(h.par([{t:"Agreed delivery term: ",b:true}, data.inco+" "+data.delplace+" ("+data.incoy+"). Vendora\u2019s standard for all deliveries is DDP or DAP to Vendora Nordic AB, Lomma: the Supplier arranges and pays for transport to the place of delivery with a carrier of its own choice, and bears the risk until the Products have been delivered there."]));
+  children.push(h.par([{t:"Agreed delivery term: ",b:true}, data.inco+" "+data.delplace+" ("+data.incoy+"). Vendora\u2019s standard for all deliveries is DDP or DAP to Vendora Nordic AB, Ladug\u00e5rdsv\u00e4gen 1, 234 35 Lomma: the Supplier arranges and pays for transport to the place of delivery with a carrier of its own choice, and bears the risk until the Products have been delivered there."]));
   children.push(h.par([{t:"Shipments on any other term (e.g. EXW, FCA, FOB, CIF). ",b:true},"Where a shipment is not delivered DDP or DAP, the Supplier shall check with Vendora\u2019s logistics department (logistics@vendora.se) before any freight is booked, so that the best price can be secured. The Supplier sends the shipment details \u2014 PO number, number of packages or pallets, dimensions and weight per unit, pick-up address and the date the goods are ready \u2014 together with its own proposed carrier and freight cost, if it has one. Vendora compares this with its own freight agreements and responds within three (3) business days, confirming either the Supplier\u2019s proposal or Vendora\u2019s own booking, with booking instructions or a shipping label where applicable. Nothing may be dispatched until Vendora has confirmed. If the Supplier ships without Vendora\u2019s confirmation, Vendora may invoice the Supplier for the difference between the actual freight cost and the routing Vendora would have confirmed, and for any additional costs that arise."]));
   children.push(h.par("For every shipment, regardless of delivery term, the tracking number and the commercial invoice shall be uploaded in the PO portal as soon as the goods have been collected."));
   children.push(h.par("All Products must be packed and sealed in a secure way to avoid damage, loss, and theft. The Supplier must ensure that all necessary documentation is included in each shipment. Extra costs associated with delays, faulty products, or errors in shipment will be invoiced to the Supplier; the Supplier shall not be accountable for delays caused by the shipping agent."));
@@ -24643,6 +24657,10 @@ async function buildRA(overrideData) {
     h.h1("13   Term and Termination"),
     clauseNode(h, "ra.s13.term", "This Agreement shall enter into force when signed by both Parties and shall remain in force until terminated by either Party upon the notice period stated in Appendix 1. If no notice period is specified in Appendix 1, the notice period shall be ninety (90) days."),
     h.par("Upon termination, neither Party shall be entitled to any compensation or indemnity, except for payment of any outstanding and due invoices. Following termination, the Reseller remains obligated to adhere to the terms of this Agreement for any remaining Product inventory until sold or returned."),
+    h.h3("13B   No compensation on termination"),
+    clauseNode(h, "ra.s13b.no_compensation", "The Reseller buys and resells the Products in its own name and for its own account. The Reseller is a reseller and not a commercial agent. The Reseller has no right to severance pay, goodwill compensation, or any other termination indemnity when this Agreement ends, whether by notice, expiry, or termination for cause. This clause applies notwithstanding the Swedish Commercial Agency Act (lag (1991:351) om handelsagentur) and Directive 86/653/EEC."),
+    h.h3("13C   After the agreement ends"),
+    clauseNode(h, "ra.s13c.after_end", "When this Agreement ends, for any reason, the Supplier has no obligation to buy back, repurchase, or otherwise take back the Reseller’s stock or inventory. There is no non-compete after the term of this Agreement."),
     // §14
     h.h1("14   Premature Termination"),
     h.par("Either Party shall be entitled to terminate this Agreement with immediate effect where: (i) the other Party has committed a material breach; (ii) the other Party fails to cure a remediable breach within thirty (30) calendar days of written notice; or (iii) the other Party is declared bankrupt, commences company reorganisation, or can otherwise be deemed insolvent."),
@@ -26651,11 +26669,24 @@ function renderVerifyResults(result){
     : "<div class='verify-none'>No new deviations.</div>";
   box.innerHTML = html;
 }
+function syncStoredAgreementType(){
+  var ctx = getAiContext();
+  var rv = window._aiReview;
+  var stored = (ctx && ctx._type) || (rv && rv.type) || "";
+  var family = storedFamily(stored);
+  if (!family) return;
+  ["verifyAgreementType","aiAgreementType"].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el && !el.value) el.value = family;
+  });
+}
 function verifyUploadedDocument(){
   var input = document.getElementById("verifyFile");
   var file = input && input.files && input.files[0];
   var status = document.getElementById("verifyStatus");
   var btn = document.getElementById("verifyBtn");
+  var family = familyFromSelect("verifyAgreementType");
+  if (!family) { if (status) status.textContent = "Choose the agreement type first."; return; }
   if (!file) { if (status) status.textContent = "Choose a .docx or PDF first."; return; }
   if (!/\.(docx|pdf)$/i.test(file.name || "")) { if (status) status.textContent = "Upload a .docx or a .pdf file."; return; }
   var savedId = window._editing && window._editing.id;
@@ -26665,6 +26696,7 @@ function verifyUploadedDocument(){
   var fd = new FormData();
   fd.append("file", file, file.name);
   fd.append("agreementId", String(savedId));
+  fd.append("agreementType", family);
   fetch("/api/ai/verify-document", { method:"POST", body: fd })
     .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
     .then(function(res){
@@ -26692,6 +26724,7 @@ function toggleAiDrawer(){
   var open = d.style.display==="flex";
   d.style.display = open?"none":"flex";
   if (!open){
+    syncStoredAgreementType();
     if (!window._aiMessages.length) renderAiMessages();
     setTimeout(function(){ var i=document.getElementById("aiInput"); if(i) i.focus(); }, 50);
   }
@@ -26737,7 +26770,8 @@ function redlineHtml(oldText, newText){
 }
 function normalizeIncomingProposals(raw){
   var LC = window.LawyerChanges;
-  if (LC) return LC.validateProposals(raw);
+  var ctx = (typeof writableAgreement === "function" && writableAgreement()) || window._lawyerState || {};
+  if (LC) return LC.validateProposals(raw, ctx);
   var proposals = (raw || []).map(function(p){
     if (!p) return null;
     if (p.target) return p;
@@ -26782,13 +26816,21 @@ function syncLawyerForm(data){
   if (data.terr) restoreTerr(type, data.terr);
 }
 function writableAgreement(){
+  var family = familyFromSelect("aiAgreementType");
   var ctx = getAiContext();
-  if (ctx) return ctx;
-  var type = ["da","ra","rb"][typeof activeTab === "number" ? activeTab : 1] || "ra";
-  var data = lawyerCarry(readForm(type));
-  data._type = type;
-  window._lawyerState = data;
-  return data;
+  if (family) {
+    var hint = (ctx && ctx._type) || (window._editing && window._editing.type) || "";
+    var type = templateTypeFor(family, hint);
+    if (ctx && storedFamily(ctx._type) === family) return ctx;
+    var chosen = readForm(type);
+    chosen._type = type;
+    chosen = lawyerCarry(chosen);
+    window._lawyerState = chosen;
+    return chosen;
+  }
+  if (ctx && ctx._type) return ctx;
+  if (window._lawyerState && window._lawyerState._type) return window._lawyerState;
+  return {};
 }
 function applyApproved(list){
   var locked = window._signData || (typeof editingLocked === "function" && editingLocked());
@@ -26807,7 +26849,7 @@ function applyApproved(list){
   var bar = document.getElementById("aiUpdatedBar");
   if (bar) bar.style.display = "flex";
   showConflicts(result.conflicts);
-  if (window._editing && window._editing.id && !editingLocked()) {
+  if (window._editing && window._editing.id && !editingLocked() && storedFamily(window._editing.type) === storedFamily(ctx._type)) {
     window._editing.base = ctx;
     if (typeof updateArchive === "function") updateArchive(window._editing, {}, false);
   }
@@ -26839,17 +26881,20 @@ function renderProposals(proposals){
     card.className = "lawyer-card";
     var where = (p.target.kind === "field" ? "Cover sheet" : (p.target.kind === "annex" ? "Annex" : "Clause")) + " · " + p.op;
     var view = proposalPreview(p);
+    var shown = (view.ok && view.proposal) ? view.proposal : p;
+    var place = (view && view.placement) || shown.placement || "";
     var body = view.ok
       ? redlineHtml(view.oldText, view.newText)
       : "<div style='color:#9a4b00'>"+esc((view.errors || []).join("; "))+"</div>";
-    card.innerHTML = "<div class='lawyer-label'>&#9998; "+esc(proposalLabel(p))+"</div>"
+    card.innerHTML = "<div class='lawyer-label'>&#9998; "+esc(proposalLabel(shown))+"</div>"
       + "<div class='lawyer-where'>"+esc(where)+"</div>"
-      + (p.rationale ? "<div style='color:var(--muted);margin-bottom:8px'>"+esc(p.rationale)+"</div>" : "")
+      + (place ? "<div class='lawyer-where'>"+esc(place)+"</div>" : "")
+      + (shown.rationale ? "<div style='color:var(--muted);margin-bottom:8px'>"+esc(shown.rationale)+"</div>" : "")
       + "<div class='pbDiff' style='white-space:pre-wrap'>"+body+"</div>"
       + "<div style='display:flex;gap:8px;margin-top:8px'><button class='pbAcc primary' type='button' style='background:var(--ok);color:#fff;border:none;padding:6px 12px;font-weight:600;cursor:pointer'>Approve</button>"
       + "<button class='pbRej secondary' type='button' style='background:#fff;border:1px solid var(--line);padding:6px 12px;cursor:pointer'>Reject</button></div>";
     box.appendChild(card);
-    var entry = { proposal:p, card:card };
+    var entry = { proposal:shown, card:card };
     window._openProposals.push(entry);
     if (!view.ok) {
       var acc = card.querySelector(".pbAcc");
@@ -26931,6 +26976,16 @@ function sendAi(){
   var input=document.getElementById("aiInput");
   var text=(input.value||"").trim();
   if (!text) return;
+  var family=familyFromSelect("aiAgreementType");
+  if (!family){
+    window._aiMessages.push({role:"assistant",content:"Choose the agreement type first — distribution or reseller."});
+    renderAiMessages();
+    return;
+  }
+  var ctx=getAiContext(), rv=window._aiReview||null;
+  var templateType = templateTypeFor(family, (ctx && ctx._type) || (rv && rv.type) || "");
+  if (ctx && ctx._type && storedFamily(ctx._type) !== family) ctx = { _type: templateType };
+  else if (ctx) ctx = Object.assign({}, ctx, { _type: (ctx._type && storedFamily(ctx._type) === family) ? ctx._type : templateType });
   input.value="";
   window._aiMessages.push({role:"user",content:text});
   renderAiMessages();
@@ -26939,10 +26994,9 @@ function sendAi(){
   thinking.id="aiThinking"; thinking.style.cssText="margin:10px 0;color:var(--muted);font-size:13px";
   thinking.textContent="The lawyer is thinking…"; box.appendChild(thinking); box.scrollTop=box.scrollHeight;
   document.getElementById("aiSend").disabled=true;
-  var ctx=getAiContext(), rv=window._aiReview||null;
   fetch("/api/ai/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ agreement: ctx || (rv ? {_type:rv.type} : null), messages:window._aiMessages,
-      clauses: ctx?getEditableClauses(ctx._type, ctx):[], reviewId: rv ? rv.id : null })
+    body: JSON.stringify({ agreement: ctx || { _type: templateType }, agreementType: templateType, messages:window._aiMessages,
+      clauses: getEditableClauses(templateType, ctx || {}), reviewId: rv && storedFamily(rv.type) === family ? rv.id : null })
   }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
     .then(function(res){
       if (res.ok && res.j.reply){ window._aiMessages.push({role:"assistant",content:res.j.reply}); }
@@ -26968,6 +27022,29 @@ var CR_VERDICT = {
   do_not_sign: {label:"Do not sign as drafted", bg:"#fdece9", fg:"#c0392b"}
 };
 function crCounterpartyWord(type){ return type==="da" ? "supplier" : "reseller"; }
+function agreementTypeSelectHtml(id){
+  return "<div class='f' style='margin-bottom:10px;max-width:520px'><label for='"+id+"'>Agreement type *</label>"
+    + "<select id='"+id+"' required>"
+    + "<option value=''>Choose…</option>"
+    + "<option value='distribution'>Distribution agreement — Vendora buys from a supplier</option>"
+    + "<option value='reseller'>Reseller agreement — Vendora sells to a customer or retailer</option>"
+    + "</select></div>";
+}
+function familyFromSelect(id){
+  var el = document.getElementById(id);
+  return el && el.value ? el.value : "";
+}
+function templateTypeFor(family, tab){
+  if (family === "distribution") return "da";
+  if (family === "reseller" && tab === "rb") return "rb";
+  if (family === "reseller") return "ra";
+  return "";
+}
+function storedFamily(type){
+  if (type === "da") return "distribution";
+  if (type === "ra" || type === "rb") return "reseller";
+  return "";
+}
 
 // The upload card, rendered into each agreement tab once the lawyer is available.
 function renderContractReviewCards(){
@@ -26975,8 +27052,9 @@ function renderContractReviewCards(){
     var slot=document.getElementById("cr_slot_"+t); if(!slot || slot.innerHTML) return;
     var who=crCounterpartyWord(t);
     slot.innerHTML = "<div class='card'>"
-      + "<h2>&#9878;&#65039; Review the "+who+"'s own contract</h2>"
-      + "<div class='desc'>If the "+who+" wants to use their own paper, upload it here. The Contract Lawyer compares it clause by clause with Vendora's "+esc(TYPE_NAME[t])+" as set up on this tab — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
+      + "<h2>&#9878;&#65039; Review the counterparty's own contract</h2>"
+      + "<div class='desc'>Upload their paper and choose the agreement type. The Contract Lawyer compares it only with that type's Vendora template and standard positions — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
+      + agreementTypeSelectHtml("cr_type_"+t)
       + "<div class='f' style='margin-bottom:10px;max-width:520px'><label>Name this review <em>(optional — it's saved under Archive &rarr; Contract reviews)</em></label><input id='cr_name_"+t+"' maxlength='120' placeholder='e.g. Komplett — their reseller terms, Oct 2026'></div>"
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
@@ -27037,7 +27115,8 @@ async function readContractFile(file){
 async function buildOurAgreementText(type){
   var data=readForm(type); data._type=type;
   if(!data.name) data.name = type==="da" ? "[Supplier]" : "[Reseller]";
-  data = lawyerCarry(data);
+  var src = window._lawyerState || (window._editing && window._editing.base) || {};
+  if (!src._type || src._type === type) data = lawyerCarry(data);
   var fn = type==="da" ? buildDA : (type==="rb" ? buildRB : buildRA);
   var r=await fn(data); if(!r) throw new Error("Could not build Vendora's agreement");
   return docxToText(await r.blob.arrayBuffer());
@@ -27046,22 +27125,29 @@ async function buildOurAgreementText(type){
 async function runContractReview(type){
   var inp=document.getElementById("cr_file_"+type), msg=document.getElementById("cr_msg_"+type), btn=document.getElementById("cr_btn_"+type), out=document.getElementById("cr_out_"+type);
   var file=inp.files && inp.files[0];
+  var family=familyFromSelect("cr_type_"+type);
+  var templateType=templateTypeFor(family, type);
   msg.style.color="#c0392b";
-  if(!file){ msg.textContent="Choose the "+crCounterpartyWord(type)+"'s contract first (PDF, DOCX or TXT)."; return; }
+  if(!family || !templateType){ msg.textContent="Choose the agreement type first."; return; }
+  if(!file){ msg.textContent="Choose the counterparty's contract first (PDF, DOCX or TXT)."; return; }
   if(file.size>15*1024*1024){ msg.textContent="Max 15 MB."; return; }
   btn.disabled=true; msg.style.color="var(--muted)"; out.innerHTML="";
   try{
     msg.textContent="Reading the document…";
     var doc=await readContractFile(file);
     msg.textContent="Building Vendora's agreement for comparison…";
-    var ourText=await buildOurAgreementText(type);
+    var ourText=await buildOurAgreementText(templateType);
     msg.textContent="Sending to the Contract Lawyer…";
     var nameEl=document.getElementById("cr_name_"+type);
+    var ctx=getAiContext();
+    var agreement = (ctx && ctx._type === templateType) ? ctx : { _type: templateType };
+    var drawerType=document.getElementById("aiAgreementType");
+    if (drawerType) drawerType.value = family;
     var r=await fetch("/api/ai/review",{method:"POST",headers:{"Content-Type":"text/plain"},
-      body:JSON.stringify({ type:type, doc:doc, ourText:ourText, agreement:getAiContext(),
+      body:JSON.stringify({ type:templateType, doc:doc, ourText:ourText, agreement:agreement,
         name: nameEl ? nameEl.value.trim() : "",
-        counterpartyName: (readForm(type).name||"").trim(),
-        agreementId: (window._editing && window._editing.id && window._editing.type===type) ? window._editing.id : null })});
+        counterpartyName: (readForm(templateType).name||"").trim(),
+        agreementId: (window._editing && window._editing.id && window._editing.type===templateType) ? window._editing.id : null })});
     var j=await r.json().catch(function(){ return {}; });
     if(!r.ok) throw new Error(j.error||"The review failed");
     // The review runs as a background job on the server — poll until it's done (a real contract
@@ -27078,7 +27164,7 @@ async function runContractReview(type){
       if(sec>20*60) throw new Error("The review is taking too long — please try again.");
     }
     window._crResults=window._crResults||{};
-    window._crResults[type]={ id:j.reviewId, name:j.name, filename:file.name, type:type, review:j.review, when:new Date(j.created_at||Date.now()), saveError:j.saveError||null };
+    window._crResults[type]={ id:j.reviewId, name:j.name, filename:file.name, type:templateType, review:j.review, when:new Date(j.created_at||Date.now()), saveError:j.saveError||null };
     if (j.saveError){ msg.style.color="#c0392b"; msg.textContent="Review ready, but it could not be saved to the archive — download the memo now."; }
     else { msg.style.color="#1e7e34"; msg.textContent="Review ready — saved under Archive → Contract reviews as “"+(j.name||file.name)+"”."; }
     if (nameEl) nameEl.value="";
@@ -27373,7 +27459,14 @@ initApp();
   </div>
   <div id="verifyBox" class="verify-box">
     <div class="verify-title">Check a document</div>
-    <p class="verify-copy">Upload a .docx or PDF of the agreement, for example the existing or updated contract. The lawyer compares it with the approved changes saved on this agreement. Nothing is written to the agreement.</p>
+    <p class="verify-copy">Upload a .docx or PDF of a new or updated contract. Choose the agreement type first. The lawyer compares it with that type's template and with the approved changes saved on this agreement. Clauses are not rewritten. If this agreement has no type yet, your choice is saved on it.</p>
+    <div class="f" style="margin-bottom:8px"><label for="verifyAgreementType">Agreement type *</label>
+      <select id="verifyAgreementType" required>
+        <option value="">Choose…</option>
+        <option value="distribution">Distribution agreement — Vendora buys from a supplier</option>
+        <option value="reseller">Reseller agreement — Vendora sells to a customer or retailer</option>
+      </select>
+    </div>
     <input id="verifyFile" class="verify-file" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
     <div class="verify-actions">
       <button type="button" id="verifyBtn" onclick="verifyUploadedDocument()">Check document</button>
@@ -27382,7 +27475,14 @@ initApp();
     <div id="verifyWarning"></div>
     <div id="verifyResults"></div>
   </div>
-  <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end">
+  <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+    <label for="aiAgreementType" style="flex:1 1 100%;font-size:11px;color:var(--muted)">Agreement type *
+      <select id="aiAgreementType" required style="display:block;width:100%;margin-top:4px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        <option value="">Choose…</option>
+        <option value="distribution">Distribution agreement — Vendora buys</option>
+        <option value="reseller">Reseller agreement — Vendora sells</option>
+      </select>
+    </label>
     <textarea id="aiInput" rows="2" placeholder="Ask about this agreement…" style="flex:1;resize:none;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;font-family:inherit" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAi();}"></textarea>
     <button id="aiSend" onclick="sendAi()" style="background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer">Send</button>
   </div>

@@ -74,6 +74,8 @@
       { id: 'ra.s10.ip', section: '10', label: 'IP indemnity (§10)', text: 'The Supplier warrants that, to its knowledge, the sale of the Products in the Territory does not infringe any third-party intellectual property rights, and shall indemnify the Reseller against finally determined liability for the Products as supplied.' },
       { id: 'ra.s11.audit', section: '11', label: 'Audit (§11)', text: 'Audits shall not be conducted more than once per calendar year, on fourteen (14) days’ prior written notice.' },
       { id: 'ra.s13.term', section: '13', label: 'Term and termination (§13)', text: 'This Agreement shall enter into force when signed by both Parties and shall remain in force until terminated by either Party upon {{notice}} days’ written notice.' },
+      { id: 'ra.s13b.no_compensation', section: '13', label: 'No compensation on termination (§13B)', text: 'The Reseller buys and resells the Products in its own name and for its own account. The Reseller is a reseller and not a commercial agent. The Reseller has no right to severance pay, goodwill compensation, or any other termination indemnity when this Agreement ends, whether by notice, expiry, or termination for cause. This clause applies notwithstanding the Swedish Commercial Agency Act (lag (1991:351) om handelsagentur) and Directive 86/653/EEC.' },
+      { id: 'ra.s13c.after_end', section: '13', label: 'After the agreement ends (§13C)', text: 'When this Agreement ends, for any reason, the Supplier has no obligation to buy back, repurchase, or otherwise take back the Reseller’s stock or inventory. There is no non-compete after the term of this Agreement.' },
       { id: 'ra.s15.fm', section: '15', label: 'Force majeure (§15)', text: 'Neither Party is in default to the extent performance is delayed by a Force Majeure Event. If it continues for more than thirty (30) calendar days, either Party may terminate the affected obligations without liability.' },
       { id: 'ra.antibribery', section: '16', label: 'Anti-bribery (§16)', text: 'Both Parties shall comply with the Swedish Anti-Bribery Act and other applicable anti-bribery and anti-corruption laws.' },
       { id: 'ra.s17.law', section: '17', label: 'Governing law (§17)', text: 'This Agreement is governed by and construed in accordance with Swedish law. Disputes shall be finally settled by SCC arbitration. Seat: Malmö. Language: English.' },
@@ -85,6 +87,24 @@
     da: [
       { id: 'da.s5.payment', section: '5', label: 'Payment (§5)', text: 'The Distributor shall pay for all ordered Products by bank transfer in {{curr}}, within {{pay}} days from the invoice date.' },
       { id: 'da.s6.warranty', section: '6', label: 'Warranty (§6)', text: 'The Supplier warrants that the Products are free from defects in materials and workmanship for a period of twenty-four (24) months from the date of delivery to the Distributor.' },
+    ],
+  };
+
+  // Delivery positions are type-specific. The street address is the distribution
+  // agreement's place of delivery. A reseller agreement collects ex works in Lomma.
+  var DA_DELIVERY_POSITION = 'DDP or DAP to Vendora Nordic AB, Ladugårdsvägen 1, 234 35 Lomma';
+  var RA_DELIVERY_POSITION = 'EXW Vendora Nordic AB, Lomma (Incoterms 2020)';
+  var STANDARD_POSITIONS = {
+    ra: [
+      { id: 'ra.delivery', label: 'Place of delivery', text: RA_DELIVERY_POSITION + '. The Reseller collects the Products or names its own warehouse. Vendora does not take delivery at its warehouse.' },
+      { id: 'ra.termination', label: 'No compensation on termination', text: 'The Reseller is a reseller and not a commercial agent, and has no right to severance pay or goodwill compensation when the agreement ends.' },
+      { id: 'ra.after_end', label: 'After the agreement ends', text: 'Vendora has no obligation to buy back stock, and there is no non-compete after the agreement period.' },
+    ],
+    rb: [
+      { id: 'rb.delivery', label: 'Place of delivery', text: RA_DELIVERY_POSITION + '. The Reseller collects the Products or names its own warehouse.' },
+    ],
+    da: [
+      { id: 'da.delivery', label: 'Place of delivery', text: DA_DELIVERY_POSITION + ' is the standard on all deliveries. The Supplier arranges and pays transport and bears the risk until delivery there.' },
     ],
   };
 
@@ -111,7 +131,7 @@
     return agreement.data || agreement;
   }
   function catalog(type) {
-    return CLAUSE_CATALOG[type] || CLAUSE_CATALOG.ra;
+    return CLAUSE_CATALOG[type] || [];
   }
   function clauseById(type, id) {
     var list = catalog(type);
@@ -145,17 +165,49 @@
     }
     return null;
   }
-  function clauseIdAllowed(id) {
+  function agreementTypeOf(data) {
+    var t = data && data._type;
+    return t === 'ra' || t === 'rb' || t === 'da' ? t : '';
+  }
+  function clauseFamily(type) {
+    if (type === 'da') return 'distribution';
+    if (type === 'ra' || type === 'rb') return 'reseller';
+    return '';
+  }
+  function clauseOwner(id) {
+    var types = ['ra', 'rb', 'da'];
+    for (var i = 0; i < types.length; i++) if (clauseById(types[i], id)) return types[i];
+    return '';
+  }
+  // A distribution clause is not a reseller clause, and the reverse. ra and rb are one family.
+  function clauseOwnedByOtherType(id, type) {
+    var owner = clauseOwner(id);
+    if (!owner || !type) return false;
+    var ownerFamily = clauseFamily(owner);
+    var typeFamily = clauseFamily(type);
+    if (!ownerFamily || !typeFamily) return owner !== type;
+    return ownerFamily !== typeFamily;
+  }
+  function clauseIdAllowed(id, type) {
     if (typeof id !== 'string' || !id) return false;
     if (id === '__proto__' || id === 'constructor' || id === 'prototype' || id === 'toString') return false;
     if (/^\d{1,2}[A-Z]$/.test(id)) return true;
+    var known = type === 'ra' || type === 'rb' || type === 'da';
+    if (known) return !!clauseById(type, id);
     return !!clauseByIdAny(id);
   }
-  // A catalog clause, an annex, or a clause already inserted on this agreement.
+  // A catalog clause of this agreement's type, an annex, or a clause already inserted.
+  // Another type's catalog id is not an anchor: a reseller review must not hang a clause
+  // on a distribution section.
   function anchorExists(id, data) {
     if (!id || typeof id !== 'string') return false;
     if (normalizeAnnexId(id)) return true;
-    if (clauseByIdAny(id)) return true;
+    var type = agreementTypeOf(data);
+    if (type) {
+      if (clauseById(type, id)) return true;
+    } else if (clauseByIdAny(id)) {
+      return true;
+    }
     var inserts = data && data.clauseInserts;
     if (!Array.isArray(inserts)) return false;
     for (var i = 0; i < inserts.length; i++) {
@@ -163,11 +215,135 @@
     }
     return false;
   }
-  function normalizeClauseId(raw) {
+  function normalizeClauseId(raw, type) {
     var s = String(raw == null ? '' : raw).trim();
     s = s.replace(/^clause\s+/i, '').replace(/^section\s+/i, '').replace(/^§\s*/, '');
-    if (!clauseIdAllowed(s)) return null;
+    if (!clauseIdAllowed(s, type)) return null;
     return s;
+  }
+  function sectionNumberFrom(value) {
+    var s = String(value == null ? '' : value).trim();
+    if (!s) return '';
+    var patterns = [
+      /\.s(\d{1,2})(?!\d)/i,
+      /§\s*(\d{1,2})(?!\d)/,
+      /\b(?:section|clause)\s+(\d{1,2})(?!\d)/i,
+      /^(\d{1,2})[A-Z]?$/i,
+    ];
+    for (var i = 0; i < patterns.length; i++) {
+      var m = s.match(patterns[i]);
+      if (m) return String(Number(m[1]));
+    }
+    return '';
+  }
+  function clauseLabel(type, id) {
+    var spec = type ? clauseById(type, id) : clauseByIdAny(id);
+    if (spec && spec.label) return spec.label;
+    return id;
+  }
+  function clipLabel(value) {
+    var s = String(value || '').replace(/\s+/g, ' ').trim();
+    return s.length > 80 ? s.slice(0, 80) + '…' : s;
+  }
+  function anchorsOf(data) {
+    var map = Object.create(null);
+    var inserts = data && data.clauseInserts;
+    if (!Array.isArray(inserts)) return map;
+    inserts.forEach(function (row) {
+      if (!row || typeof row.id !== 'string' || !row.id) return;
+      if (!hasOwn(map, row.id)) map[row.id] = typeof row.anchor === 'string' ? row.anchor : '';
+    });
+    return map;
+  }
+  function createsCycle(id, anchor, data) {
+    if (!id || !anchor) return false;
+    if (anchor === id) return true;
+    var map = anchorsOf(data);
+    var seen = Object.create(null);
+    seen[id] = 1;
+    var cur = anchor;
+    var guard = 0;
+    while (cur && guard < 100) {
+      if (seen[cur]) return true;
+      seen[cur] = 1;
+      if (!hasOwn(map, cur)) return false;
+      cur = map[cur];
+      guard++;
+    }
+    return false;
+  }
+  function explicitAnchorId(raw, type) {
+    var asAnnex = normalizeAnnexId(raw);
+    if (asAnnex) return asAnnex;
+    return normalizeClauseId(raw, type) || '';
+  }
+  function nearestSectionAnchor(type, section, selfId, data) {
+    if (!type || !section) return '';
+    var n = Number(section);
+    if (!n) return '';
+    for (var s = n; s >= 1; s--) {
+      var list = catalog(type).filter(function (c) { return String(c.section) === String(s); });
+      for (var i = list.length - 1; i >= 0; i--) {
+        var id = list[i].id;
+        if (!id || id === selfId) continue;
+        if (anchorExists(id, data) && !createsCycle(selfId, id, data)) return id;
+      }
+    }
+    return '';
+  }
+  // A new clause does not need its anchor to already be a catalog id. If the named
+  // section is missing or worded differently, place it after the nearest clause in
+  // that chapter, or at the end of the agreement, and say so.
+  function resolvePlacement(targetId, rawAnchor, data) {
+    var type = agreementTypeOf(data);
+    var self = String(targetId || '');
+    var raw = rawAnchor == null ? '' : String(rawAnchor);
+    var named = explicitAnchorId(raw, type || '');
+    if (named && named === self) {
+      return { ok: false, error: 'clause insert cannot anchor to itself' };
+    }
+    if (named && anchorExists(named, data)) {
+      if (createsCycle(self, named, data)) return { ok: false, error: 'clause inserts contain a cycle' };
+      return {
+        ok: true,
+        anchor: named,
+        fallback: false,
+        placement: 'Will be inserted after ' + clauseLabel(type, named) + '.',
+      };
+    }
+    var section = sectionNumberFrom(self) || sectionNumberFrom(raw);
+    var nearest = nearestSectionAnchor(type, section, self, data);
+    var quoted = raw.trim() ? ' The anchor “' + clipLabel(raw) + '” is not in this agreement.' : ' No anchor was given.';
+    if (nearest) {
+      return {
+        ok: true,
+        anchor: nearest,
+        fallback: true,
+        placement: 'Will be inserted after ' + clauseLabel(type, nearest) + '.' + quoted,
+      };
+    }
+    var endNote = section
+      ? ' No §' + section + ' clause was found in this agreement.'
+      : quoted;
+    return {
+      ok: true,
+      anchor: '',
+      fallback: true,
+      placement: 'Will be inserted at the end of the agreement.' + endNote,
+    };
+  }
+  function positionsFor(type) {
+    if (type === 'da') return STANDARD_POSITIONS.da;
+    if (type === 'rb') return STANDARD_POSITIONS.rb;
+    if (type === 'ra') return STANDARD_POSITIONS.ra;
+    return [];
+  }
+  // The other family's delivery standard must not be proposed on this agreement.
+  function foreignPositionText(type, text) {
+    var s = String(text || '');
+    if (clauseFamily(type) === 'reseller') return s.indexOf(DA_DELIVERY_POSITION) >= 0;
+    if (clauseFamily(type) === 'distribution') return s.indexOf(RA_DELIVERY_POSITION) >= 0;
+    return false;
   }
 
   // Flat tool payload, legacy {clauseId,newText}, or the canonical object.
@@ -232,11 +408,44 @@
     return null;
   }
   function canonicalAnchor(anchor, data) {
+    var type = agreementTypeOf(data);
     var asAnnex = normalizeAnnexId(anchor);
     if (asAnnex && anchorExists(asAnnex, data)) return asAnnex;
-    var asClause = normalizeClauseId(anchor);
+    var asClause = normalizeClauseId(anchor, type || undefined);
     if (asClause && anchorExists(asClause, data)) return asClause;
     return '';
+  }
+  // Explicit anchors in this batch that point at each other. A missing section
+  // is not a cycle; naming each other, or naming yourself, is.
+  function rawInsertCycles(list, data) {
+    var type = agreementTypeOf(data);
+    var namedOf = anchorsOf(data);
+    (list || []).forEach(function (raw) {
+      var src = fromToolChange(raw);
+      if (!src || !src.target) return;
+      if (String(src.op || '').toLowerCase() !== 'insert') return;
+      if (String((src.target && src.target.kind) || '').toLowerCase() !== 'clause') return;
+      var id = normalizeClauseId(src.target.id, type || undefined);
+      if (!id) return;
+      var named = explicitAnchorId(src.anchor, type || '');
+      if (named) namedOf[id] = named;
+    });
+    var cyclic = Object.create(null);
+    Object.keys(namedOf).forEach(function (start) {
+      var seen = Object.create(null);
+      var id = start;
+      var guard = 0;
+      while (namedOf[id] && guard < 80) {
+        if (seen[id]) {
+          Object.keys(seen).forEach(function (k) { cyclic[k] = 1; });
+          return;
+        }
+        seen[id] = 1;
+        id = namedOf[id];
+        guard++;
+      }
+    });
+    return cyclic;
   }
   function isWordChar(ch) {
     return !!ch && /[\p{L}\p{N}_]/u.test(ch);
@@ -329,6 +538,10 @@
     if (op === 'delete' && !oldText.trim() && kind !== 'field') errors.push('delete requires oldText');
     if ((op === 'replace' || op === 'insert') && !String(newText).trim()) errors.push(op + ' requires newText');
     if (oldText.length > TEXT_LIMIT || newText.length > TEXT_LIMIT) errors.push('text is too long');
+    var typeNow = agreementTypeOf(data);
+    if (typeNow && foreignPositionText(typeNow, [oldText, newText, label, rationale].join('\n'))) {
+      errors.push('position belongs to a different agreement type');
+    }
 
     var id = '';
     if (kind === 'annex') {
@@ -338,11 +551,22 @@
       id = normalizeFieldId(targetIn && targetIn.id);
       if (!id) errors.push('unknown cover-sheet field');
     } else if (kind === 'clause') {
-      id = normalizeClauseId(targetIn && targetIn.id);
+      id = normalizeClauseId(targetIn && targetIn.id, agreementTypeOf(data) || undefined);
       if (!id) errors.push('clause id is missing or not allowed');
+      else if (clauseOwnedByOtherType(id, agreementTypeOf(data))) errors.push('clause belongs to a different agreement type');
     }
-    var anchorId = canonicalAnchor(anchor, data);
-    if (op === 'insert' && kind === 'clause' && !anchorId) errors.push('anchor must exist');
+    var anchorId = '';
+    var placement = '';
+    if (op === 'insert' && kind === 'clause' && id) {
+      var resolved = resolvePlacement(id, anchor, data);
+      if (!resolved.ok) errors.push(resolved.error);
+      else {
+        anchorId = resolved.anchor;
+        placement = resolved.placement;
+      }
+    } else {
+      anchorId = canonicalAnchor(anchor, data);
+    }
     var checklistNr = null;
     if (src.checklistNr == null || src.checklistNr === '') checklistNr = null;
     else if (typeof src.checklistNr !== 'number' || !Number.isInteger(src.checklistNr) || src.checklistNr < 1 || src.checklistNr > 999) {
@@ -359,6 +583,7 @@
       label: label.slice(0, 200),
       rationale: rationale.slice(0, 2000),
       anchor: anchorId,
+      placement: placement,
     };
     if (!proposal.label) {
       proposal.label = kind === 'field' ? FIELDS[id].label
@@ -380,22 +605,30 @@
       };
     }
     // Earlier inserts in this call, plus clauses already stored, are real anchors.
-    var known = { clauseInserts: [] };
+    // Keep the agreement type on this working copy so a fallback stays inside that type.
+    var known = { _type: agreementTypeOf(data), clauseInserts: [] };
     var prior = data && data.clauseInserts;
     if (Array.isArray(prior)) {
       prior.forEach(function (row) {
-        if (row && typeof row.id === 'string') known.clauseInserts.push({ id: row.id });
+        if (row && typeof row.id === 'string') known.clauseInserts.push({ id: row.id, anchor: row.anchor || '' });
       });
     }
+    var cyclic = rawInsertCycles(list, known);
     var proposals = [];
     var rejected = [];
     list.forEach(function (raw, i) {
+      var src = fromToolChange(raw);
+      var incomingId = src && src.target ? normalizeClauseId(src.target.id, agreementTypeOf(known) || undefined) : '';
+      if (incomingId && cyclic[incomingId] && String(src.op || '').toLowerCase() === 'insert') {
+        rejected.push({ index: i, errors: ['clause inserts contain a cycle'] });
+        return;
+      }
       var v = validateProposal(raw, known);
       if (!v.ok) rejected.push({ index: i, errors: v.errors });
       else {
         proposals.push(v.proposal);
         if (v.proposal.op === 'insert' && v.proposal.target.kind === 'clause') {
-          known.clauseInserts.push({ id: v.proposal.target.id });
+          known.clauseInserts.push({ id: v.proposal.target.id, anchor: v.proposal.anchor || '' });
         }
       }
     });
@@ -423,7 +656,7 @@
   function writeClauseText(data, id, text, p) {
     data.clauseDeletes = (data.clauseDeletes || []).filter(function (x) { return x !== id; });
     var inserts = (data.clauseInserts || []).filter(function (c) { return c && c.id === id; });
-    var catalogHit = clauseById(data._type || 'ra', id);
+    var catalogHit = clauseById(agreementTypeOf(data), id);
     if (!catalogHit && (inserts.length || /^\d{1,2}[A-Z]$/.test(id))) {
       var prev = inserts[inserts.length - 1] || {};
       data.clauseInserts = without(data.clauseInserts, id);
@@ -495,7 +728,7 @@
     var curText = currentText(data, kind, id);
     if (p.op === 'insert') {
       if (String(curText).trim()) return kind + ' already exists';
-      if (kind === 'clause' && !anchorExists(p.anchor, data)) return 'anchor must exist';
+      if (kind === 'clause' && p.anchor && !anchorExists(p.anchor, data)) return 'anchor must exist';
       if (kind === 'annex') writeAnnexText(data, id, p.newText);
       else writeClauseText(data, id, p.newText, p);
       return null;
@@ -548,7 +781,14 @@
     var rejected = [];
     var applied = [];
     var touched = Object.create(null);
+    var cyclic = rawInsertCycles(proposals, next);
     proposals.forEach(function (raw, i) {
+      var src = fromToolChange(raw);
+      var incomingId = src && src.target ? normalizeClauseId(src.target.id, agreementTypeOf(next) || undefined) : '';
+      if (incomingId && cyclic[incomingId] && String(src.op || '').toLowerCase() === 'insert') {
+        rejected.push({ index: i, errors: ['clause inserts contain a cycle'] });
+        return;
+      }
       var v = validateProposal(raw, next);
       if (!v.ok) { rejected.push({ index: i, errors: v.errors }); return; }
       var p = v.proposal;
@@ -588,9 +828,8 @@
     var id = p.target.id;
     var cur = currentText(data || {}, kind, id);
     if (kind !== 'field' && p.op === 'insert') {
-      if (String(cur).trim()) return { ok: false, errors: [kind + ' already exists'], proposal: p, oldText: '', newText: '' };
-      if (kind === 'clause' && !anchorExists(p.anchor, data)) return { ok: false, errors: ['anchor must exist'], proposal: p, oldText: '', newText: '' };
-      return { ok: true, errors: [], proposal: p, oldText: '', newText: p.newText };
+      if (String(cur).trim()) return { ok: false, errors: [kind + ' already exists'], proposal: p, oldText: '', newText: '', placement: p.placement || '' };
+      return { ok: true, errors: [], proposal: p, oldText: '', newText: p.newText, placement: p.placement || '' };
     }
     if (p.op === 'replace' && !String(p.oldText).trim()) {
       return { ok: true, errors: [], proposal: p, oldText: cur, newText: p.newText };
@@ -624,7 +863,7 @@
     if (ov[id] != null && String(ov[id]).trim()) return String(ov[id]);
     var ins = (data.clauseInserts || []).filter(function (c) { return c.id === id; });
     if (ins.length) return String(ins[ins.length - 1].text || '');
-    var spec = clauseById(data._type || 'ra', id);
+    var spec = clauseById(agreementTypeOf(data), id);
     return spec ? fill(spec.text, data) : '';
   }
   function resolvedAnnexText(data, id) {
@@ -698,7 +937,8 @@
   function consistencyCheck(data) {
     data = data || {};
     var issues = [];
-    var type = data._type || 'ra';
+    var type = agreementTypeOf(data);
+    if (!type) return issues;
 
     var bodyMonths = [];
     var bodyWhere = [];
@@ -797,14 +1037,28 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
   }
+  function positionsBlock(type) {
+    var rows = positionsFor(type);
+    if (!rows.length) return '';
+    return 'STANDARD POSITIONS FOR THIS AGREEMENT TYPE ONLY:\n' + rows.map(function (p) {
+      return '[' + fenceText(p.id) + '] ' + fenceText(p.label) + ':\n"' + fenceText(p.text) + '"';
+    }).join('\n\n');
+  }
   function catalogBlock(type, agreement, extraClauses) {
     var data = agreementData(agreement);
-    var typeName = type || data._type || 'ra';
+    var typeName = type || agreementTypeOf(data);
+    if (!typeName) {
+      return 'Choose the agreement type before proposing changes. No template clauses or standard positions are loaded until then.';
+    }
+    if (agreementTypeOf(data) && clauseFamily(agreementTypeOf(data)) !== clauseFamily(typeName)) {
+      data = { _type: typeName };
+    }
     var rows = catalogForPrompt(typeName, data);
     var byId = {};
     rows.forEach(function (r) { byId[r.id] = r; });
     (extraClauses || []).forEach(function (c) {
       if (!c || !c.id) return;
+      if (clauseOwnedByOtherType(c.id, typeName)) return;
       if (byId[c.id]) byId[c.id].text = c.text || byId[c.id].text;
       else rows.push({ id: c.id, label: c.label || c.id, text: c.text || '' });
     });
@@ -819,11 +1073,14 @@
       var text = resolvedAnnexText(data, id);
       return '[annex ' + id + ']' + (text ? ':\n"' + fenceText(text) + '"' : ' (not in the template — use insert or replace to add it)');
     }).join('\n\n');
-    var body = 'COVER-SHEET AND FORM FIELDS:\n' + fieldLines + '\n\nCLAUSES:\n' + clauseLines + '\n\nANNEXES:\n' + annexLines;
+    var positions = positionsBlock(typeName);
+    var body = (positions ? positions + '\n\n' : '') + 'COVER-SHEET AND FORM FIELDS:\n' + fieldLines + '\n\nCLAUSES:\n' + clauseLines + '\n\nANNEXES:\n' + annexLines;
     return 'STRUCTURED EDITS — when you recommend concrete wording or a commercial term, call propose_changes. '
       + 'Every change is one item the user can approve. Do not tell the user to paste anything manually.\n'
+      + 'Use only the clauses and standard positions below. Positions from the other agreement type are not in this list and must not be proposed.\n'
       + 'Each change has target_kind (clause, annex, or field), target_id, op (replace, insert, or delete), old_text, new_text, label, rationale, and anchor.\n'
-      + 'Use the exact clause id from the list below. For a NEW clause (for example 4A), op is insert, target_id is 4A, and anchor is the clause id it should follow. The anchor must already exist.\n'
+      + 'Use the exact clause id from the list below. For a NEW clause (for example 4A or 13B), op is insert, target_id is 4A, and anchor is the clause id it should follow. '
+      + 'If that section is missing or worded differently, set anchor to the section number (for example 13). The clause can still be approved; the user is shown where it will be inserted. Do not anchor a clause to itself.\n'
       + 'Annex target_id is 1A, 1B, 2, 3, 4, or 5. Field target_id is one of: ' + Object.keys(FIELDS).join(', ') + '.\n'
       + 'old_text must match the current clause, annex, or field exactly once after whitespace and quote characters are normalised, on word boundaries, so "30 days" does not match "130 days". '
       + 'An empty old_text on replace replaces the whole clause, annex, or field. Zero matches or several matches are rejected. '
@@ -1036,7 +1293,7 @@
         var ovKeys = Object.keys(data.clauseOverrides);
         if (ovKeys.length > STORED_CAP) pushErr(errors, 'too many clause overrides');
         ovKeys.forEach(function (id) {
-          if (!clauseIdAllowed(id)) pushErr(errors, 'clauseOverrides contains an id that is not allowed');
+          if (!clauseIdAllowed(id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clauseOverrides contains an id that is not allowed');
           else if (typeof data.clauseOverrides[id] !== 'string') pushErr(errors, 'clause override text must be a string');
           else if (data.clauseOverrides[id].length > TEXT_LIMIT) pushErr(errors, 'clause override text is too long');
         });
@@ -1051,8 +1308,8 @@
             pushErr(errors, 'clause insert has an unexpected field');
             return;
           }
-          if (typeof row.id !== 'string' || !clauseIdAllowed(row.id)) pushErr(errors, 'clause insert id is not allowed');
-          if (typeof row.anchor !== 'string' || !anchorExists(row.anchor, data)) pushErr(errors, 'clause insert anchor must exist');
+          if (typeof row.id !== 'string' || !clauseIdAllowed(row.id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clause insert id is not allowed');
+          if (typeof row.anchor !== 'string' || (row.anchor && !anchorExists(row.anchor, data))) pushErr(errors, 'clause insert anchor must exist');
           if (row.label != null && typeof row.label !== 'string') pushErr(errors, 'clause insert label must be a string');
           if (typeof row.text !== 'string') pushErr(errors, 'clause insert text must be a string');
           else if (row.text.length > TEXT_LIMIT || (row.label && row.label.length > 200)) pushErr(errors, 'clause insert text is too long');
@@ -1065,7 +1322,7 @@
       else {
         if (data.clauseDeletes.length > STORED_CAP) pushErr(errors, 'too many clause deletes');
         data.clauseDeletes.forEach(function (id) {
-          if (typeof id !== 'string' || !clauseIdAllowed(id)) pushErr(errors, 'clauseDeletes contains an id that is not allowed');
+          if (typeof id !== 'string' || !clauseIdAllowed(id, agreementTypeOf(data) || undefined)) pushErr(errors, 'clauseDeletes contains an id that is not allowed');
         });
       }
     }
@@ -1106,7 +1363,7 @@
           if (KINDS.indexOf(row.target.kind) < 0) pushErr(errors, 'redline target kind is not allowed');
           if (OPS.indexOf(row.op) < 0) pushErr(errors, 'redline op is not allowed');
           var tid = row.target.id;
-          var idOk = row.target.kind === 'clause' ? clauseIdAllowed(tid)
+          var idOk = row.target.kind === 'clause' ? clauseIdAllowed(tid, agreementTypeOf(data) || undefined)
             : row.target.kind === 'annex' ? ANNEX_IDS.indexOf(tid) >= 0
             : row.target.kind === 'field' ? hasOwn(FIELDS, tid)
             : false;
@@ -1159,6 +1416,12 @@
     FIELD_ALIAS: FIELD_ALIAS,
     CLAUSE_CATALOG: CLAUSE_CATALOG,
     ANNEX_DEFAULTS: ANNEX_DEFAULTS,
+    DA_DELIVERY_POSITION: DA_DELIVERY_POSITION,
+    RA_DELIVERY_POSITION: RA_DELIVERY_POSITION,
+    positionsFor: positionsFor,
+    positionsBlock: positionsBlock,
+    resolvePlacement: resolvePlacement,
+    clauseOwnedByOtherType: clauseOwnedByOtherType,
     TOOL_CHANGE_SCHEMA: TOOL_CHANGE_SCHEMA,
     PROPOSE_CHANGES_TOOL: PROPOSE_CHANGES_TOOL,
     fill: fill,

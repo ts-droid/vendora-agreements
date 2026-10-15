@@ -65,7 +65,7 @@ test('schema rejects a bad target, a delete without old text, and a replace with
   assert.equal(LC.validateProposal({ target: { kind: 'field', id: 'bonus' }, op: 'replace', newText: 'a' }).ok, false);
   assert.equal(LC.validateProposal(clause('ra.s4.payment', 'delete', '   ', '')).ok, false);
   assert.equal(LC.validateProposal(clause('ra.s4.payment', 'replace', 'old', '  ')).ok, false);
-  assert.equal(LC.validateProposal(clause('ra.s4.payment', 'insert', '', 'text', { anchor: 'not a clause' })).ok, false);
+  assert.equal(LC.validateProposal(clause('da.s5.payment', 'replace', 'old', 'new'), { _type: 'ra' }).ok, false);
 
   const mixed = LC.validateProposals([
     clause('ra.s4.payment', 'replace', 'old', 'new'),
@@ -352,7 +352,7 @@ test('old text must match the clause once, including whitespace and quotes', fun
   assert.match(LC.redlineFor(whole.data, 'clause', 'ra.s17.law').oldText, /Swedish law/);
 });
 
-test('prototype keys are not field or clause ids, and an insert needs a real anchor', function () {
+test('prototype keys are not field or clause ids, and a missing anchor is placed in the open section', function () {
   ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'prototype'].forEach(function (id) {
     assert.equal(LC.normalizeFieldId(id), null, id);
     assert.equal(LC.normalizeClauseId(id), null, id);
@@ -366,9 +366,15 @@ test('prototype keys are not field or clause ids, and an insert needs a real anc
   assert.equal(Object.prototype.hasOwnProperty.call(LC.FIELD_ALIAS, 'constructor'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(LC.FIELD_ALIAS, 'toString'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(LC.FIELD_ALIAS, '__proto__'), false);
-  assert.equal(LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: '' })).ok, false);
-  assert.equal(LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: '4A' })).ok, false);
-  assert.equal(LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: 'constructor' })).ok, false);
+  const unanchored = LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: '' }), { _type: 'ra' });
+  assert.equal(unanchored.ok, true);
+  assert.equal(unanchored.proposal.anchor, 'ra.s4.title');
+  assert.match(unanchored.proposal.placement, /No anchor was given/);
+  assert.equal(LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: '4A' }), { _type: 'ra' }).ok, false);
+  const ctor = LC.validateProposal(clause('4A', 'insert', '', 'New clause.', { anchor: 'constructor' }), { _type: 'ra' });
+  assert.equal(ctor.ok, true);
+  assert.notEqual(ctor.proposal.anchor, 'constructor');
+  assert.match(ctor.proposal.placement, /not in this agreement/);
   assert.equal(LC.validateProposal(clause('10.6', 'delete', 'missing wording', '')).ok, false);
   const stored = LC.validateStoredAgreement({
     clauseOverrides: { constructor: 'x', toString: 'y', __proto__: 'z' },
@@ -540,7 +546,10 @@ test('findSpans keeps word boundaries for åäö and for a digit glued to a lett
 });
 
 test('an inserted clause can be an anchor for a later insert', function () {
-  assert.equal(LC.validateProposal(clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' })).ok, false);
+  const lone = LC.validateProposal(clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' }), { _type: 'ra' });
+  assert.equal(lone.ok, true);
+  assert.equal(lone.proposal.anchor, 'ra.s4.title');
+  assert.match(lone.proposal.placement, /not in this agreement/);
   const chained = LC.validateProposals([
     clause('4A', 'insert', '', 'Parent guarantee.', { anchor: 'ra.s4.payment' }),
     clause('4B', 'insert', '', 'Audit right.', { anchor: '4A' }),
@@ -784,6 +793,71 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', { skip:
     if (browser) await browser.close();
     await new Promise(function (resolve) { server.close(resolve); });
   }
+});
+
+test('a new reseller clause with a missing section anchor can be approved, and the placement is stated', function () {
+  const text13b = 'The Reseller is a reseller and not a commercial agent. The Reseller has no right to severance pay or goodwill compensation when this Agreement ends.';
+  const text13c = 'The Supplier has no obligation to buy back stock. There is no non-compete after the term of this Agreement.';
+  const section = LC.describeProposal(
+    { _type: 'ra' },
+    clause('13B', 'insert', '', text13b, { anchor: '§13', label: 'No compensation on termination (§13B)' })
+  );
+  assert.equal(section.ok, true, JSON.stringify(section.errors));
+  assert.equal(section.proposal.anchor, 'ra.s13c.after_end');
+  assert.match(section.placement, /Will be inserted after After the agreement ends \(§13C\)/);
+  assert.match(section.placement, /not in this agreement/);
+
+  const named = LC.describeProposal(
+    { _type: 'ra' },
+    clause('13C', 'insert', '', text13c, { anchor: 'ra.s13.term', label: 'After the agreement ends (§13C)' })
+  );
+  assert.equal(named.ok, true, JSON.stringify(named.errors));
+  assert.equal(named.proposal.anchor, 'ra.s13.term');
+  assert.match(named.placement, /Will be inserted after Term and termination \(§13\)/);
+  assert.equal(named.placement.indexOf('not in this agreement'), -1);
+
+  const applied = LC.applyProposals({ _type: 'ra' }, [
+    clause('13B', 'insert', '', text13b, { anchor: '§13', label: 'No compensation on termination (§13B)' }),
+    clause('13C', 'insert', '', text13c, { anchor: '13B', label: 'After the agreement ends (§13C)' }),
+  ]);
+  assert.equal(applied.rejected.length, 0, JSON.stringify(applied.rejected));
+  assert.equal(applied.data.clauseInserts[0].anchor, 'ra.s13c.after_end');
+  assert.equal(applied.data.clauseInserts[1].anchor, '13B');
+  assert.match(applied.data.clauseInserts[0].text, /not a commercial agent/);
+  assert.match(applied.data.clauseInserts[1].text, /no non-compete/);
+
+  assert.equal(LC.validateProposal(clause('13B', 'insert', '', text13b, { anchor: '13B' }), { _type: 'ra' }).ok, false);
+  const cycle = LC.validateProposals([
+    clause('13B', 'insert', '', text13b, { anchor: '13C' }),
+    clause('13C', 'insert', '', text13c, { anchor: '13B' }),
+  ], { _type: 'ra' });
+  assert.equal(cycle.ok, false);
+  assert.ok(cycle.rejected.some(function (r) { return r.errors.join(' ').indexOf('cycle') >= 0; }));
+  const storedCycle = LC.applyProposals({ _type: 'ra' }, [
+    clause('4A', 'insert', '', 'A.', { anchor: '4B' }),
+    clause('4B', 'insert', '', 'B.', { anchor: '4A' }),
+  ]);
+  assert.equal(storedCycle.applied.length, 0);
+
+  assert.equal(LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: '13B', anchor: '', label: '§13B', text: text13b }],
+  }).ok, true);
+  assert.equal(LC.validateStoredAgreement({
+    _type: 'ra',
+    clauseInserts: [{ id: '13B', anchor: '13B', label: '§13B', text: text13b }],
+  }).ok, false);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /view\.placement/);
+  assert.match(html, /No compensation on termination/);
+  assert.match(html, /not a commercial agent/);
+  assert.match(html, /no non-compete/);
+  assert.match(html, /ra\.s13b\.no_compensation/);
+  assert.match(html, /ra\.s13c\.after_end/);
+  const catalog = LC.catalog('ra').map(function (c) { return c.id; });
+  assert.ok(catalog.indexOf('ra.s13b.no_compensation') > catalog.indexOf('ra.s13.term'));
+  assert.ok(catalog.indexOf('ra.s13c.after_end') > catalog.indexOf('ra.s13b.no_compensation'));
 });
 
 test('propose_changes schema avoids JSON-schema keywords the Anthropic API rejects', function () {
