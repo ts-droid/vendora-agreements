@@ -41,12 +41,13 @@ jobs:
           mkdir -p test-results
           set -o pipefail
           npm test 2>&1 | tee test-results/tests.log
-      - name: Capture exact tested source
+      - name: Capture exact tested source and dependencies
         if: always()
         run: |
           mkdir -p test-results
           git rev-parse HEAD > test-results/commit.txt
           git archive --format=tar.gz --output=test-results/tested-source.tar.gz HEAD
+          tar -czf test-results/test-dependencies.tar.gz node_modules
       - uses: actions/upload-artifact@v4
         if: always()
         with:
