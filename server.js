@@ -11,6 +11,7 @@ const webhook          = require('./webhook');
 const lawyerChanges    = require('./lawyer-changes');
 const lawyerVerify     = require('./lawyer-verify');
 const documentExtract  = require('./document-extract');
+const agreementImport  = require('./agreement-import');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -57,6 +58,7 @@ const authLimiter   = rateLimit('auth',   60, 15 * 60 * 1000); // 60 sign-ins / 
 const publicLimiter = rateLimit('public', 30, 10 * 60 * 1000); // 30 requests / 10 min / IP
 const reviewLimiter = rateLimit('review', 20, 60 * 60 * 1000); // 20 contract reviews / hour / IP (each is a large model call)
 const verifyLimiter = rateLimit('verify-document', 20, 60 * 60 * 1000);
+const importLimiter = rateLimit('import-details', 20, 60 * 60 * 1000); // 20 detail imports / hour / IP (each is a model call)
 const exportLimiter = rateLimit('export', 30, 10 * 60 * 1000); // 30 exports / 10 min / IP
 
 // Escape untrusted strings before putting them in email HTML.
@@ -660,6 +662,42 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
     console.error('Verify document error:', err && (err.code || err.name) || 'error');
     const status = err && err.status ? err.status : 500;
     res.status(status).json({ error: (err && err.publicMessage) || 'The document could not be checked.' });
+  }
+});
+
+// Read counterparty details and commercial terms from an uploaded reseller contract.
+// The response is a preview. Nothing is written to an agreement.
+app.post('/api/ai/import-details', auth.requireAuth, importLimiter, async (req, res) => {
+  try {
+    const parts = await documentExtract.readRequest(req);
+    if (!parts.ok) return res.status(parts.status).json({ error: parts.error });
+    const sniffed = documentExtract.sniff(parts.file.filename, parts.file.buffer);
+    if (!sniffed.ok) return res.status(sniffed.status).json({ error: sniffed.error });
+    const type = agreementImport.normalizeType(parts.agreementType);
+    if (!type) return res.status(400).json({ error: 'Choose the agreement type before importing details.' });
+    if (!agreementImport.isImportEnabled(type)) {
+      return res.status(400).json({ error: 'Importing details is available for reseller agreements only.' });
+    }
+    if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
+    const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
+    const out = await agreementImport.extractDetails({
+      type: type,
+      documentText: extracted.text,
+      filename: parts.file.filename,
+      documentTruncated: extracted.documentTruncated,
+      pagesTruncated: extracted.pagesTruncated,
+    });
+    console.log('Agreement import type=' + type + ' kind=' + sniffed.kind + ' fields=' + out.fields.length);
+    res.json({
+      type: out.type,
+      filename: safeFilename(parts.file.filename),
+      fields: out.fields,
+      warnings: out.warnings,
+    });
+  } catch (err) {
+    console.error('Agreement import error:', (err && (err.code || err.name)) || 'error');
+    const status = err && err.status ? err.status : 500;
+    res.status(status).json({ error: (err && err.publicMessage) || 'The contract could not be read right now.' });
   }
 });
 
@@ -1438,6 +1476,11 @@ app.get('/lawyer-changes.js', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.type('application/javascript');
   res.sendFile(path.join(__dirname, 'lawyer-changes.js'));
+});
+app.get('/agreement-import.js', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'agreement-import.js'));
 });
 // Vendora wordmark from the Plaud License portal. Registered before the HTML catch-all.
 app.get('/vendora-nordic.png', (req, res) => {

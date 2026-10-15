@@ -219,6 +219,17 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .verify-dev-head{margin-top:8px;font-weight:600}
 .verify-note{color:var(--muted);margin-top:2px}
 .verify-none{margin-top:8px;color:var(--muted)}
+.import-file{width:auto;max-width:360px}
+.import-wrap{overflow-x:auto;margin-top:14px}
+.import-table{width:100%;border-collapse:collapse;font-size:13px;min-width:720px}
+.import-table th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+.import-table td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.import-table tr.import-hit td{background:#fff8e1}
+.import-quote{color:var(--muted);font-size:12px;margin-top:4px}
+.import-note{color:#9a4b00;font-size:12px;font-weight:600;margin-top:4px}
+.import-same{color:var(--muted);font-size:12px;margin-top:4px}
+.import-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+.import-group{margin:16px 0 4px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 #aiFab{background:var(--pine) !important;color:#f6f3ec !important;font-family:var(--sans) !important;box-shadow:var(--shadow) !important}
 #aiDrawer{background:var(--paper) !important;border:1px solid var(--line) !important;border-radius:18px !important;box-shadow:var(--shadow) !important;font-family:var(--sans)}
 #aiDrawer > div:first-child{background:var(--pine-deep) !important;color:#e7f0ea !important}
@@ -432,6 +443,16 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 <!-- ═══════════════════════════════════════════════════════ TAB 1: RA FULL -->
 <div id="tab1" class="tab-panel">
 <div id="cr_slot_ra"></div>
+<div class="card" id="import_card_ra">
+  <h2>Import from the reseller's contract</h2>
+  <div class="desc">Upload a contract from the reseller (.docx or PDF). Vendora reads the counterparty details and commercial terms and shows a preview. Nothing is written into this form until you choose the fields and apply them. Their clauses stay in their document &mdash; this does not replace Vendora's template text.</div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <input class="import-file" type="file" id="import_file_ra" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+    <button type="button" class="btn-invite" id="import_btn_ra" onclick="importCounterpartyDetails('ra')">Import details from the counterparty's contract</button>
+    <span id="import_msg_ra" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div id="import_preview_ra"></div>
+</div>
 <div class="card">
   <h2>Reseller Identity</h2>
   <div class="g2">
@@ -561,6 +582,16 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 <!-- ═══════════════════════════════════════════════════════ TAB 2: RA BASIC -->
 <div id="tab2" class="tab-panel">
 <div id="cr_slot_rb"></div>
+<div class="card" id="import_card_rb">
+  <h2>Import from the reseller's contract</h2>
+  <div class="desc">Upload a contract from the reseller (.docx or PDF). Vendora reads the counterparty details and commercial terms and shows a preview. Nothing is written into this form until you choose the fields and apply them. Their clauses stay in their document &mdash; this does not replace the simplified template text.</div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <input class="import-file" type="file" id="import_file_rb" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+    <button type="button" class="btn-invite" id="import_btn_rb" onclick="importCounterpartyDetails('rb')">Import details from the counterparty's contract</button>
+    <span id="import_msg_rb" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div id="import_preview_rb"></div>
+</div>
 <div class="card">
   <h2>Reseller Identity</h2>
   <div class="g2">
@@ -23767,6 +23798,7 @@ if(typeof docx!=='undefined'&&typeof window!=='undefined')window.docx=docx;
 if(typeof saveAs!=='undefined'&&typeof window!=='undefined')window.saveAs=saveAs;
 </script>
 <script src="/lawyer-changes.js"></script>
+<script src="/agreement-import.js"></script>
 <script>
 var activeTab = 0;
 
@@ -26711,6 +26743,132 @@ function verifyUploadedDocument(){
     })
     .catch(function(){ if (status) status.textContent = "The document could not be checked."; })
     .finally(function(){ if (btn) btn.disabled = false; });
+}
+function importGroupLabel(group){
+  if (group === "contacts") return "Contact persons";
+  if (group === "commercial") return "Commercial terms";
+  return "Counterparty";
+}
+function renderImportPreview(type, view, warnings){
+  var box = document.getElementById("import_preview_" + type);
+  if (!box) return;
+  var fields = (view && view.fields) || [];
+  if (!fields.length) { box.innerHTML = ""; return; }
+  var warn = (warnings || []).map(function(w){ return "<div class='import-note'>"+esc(w)+"</div>"; }).join("");
+  var html = warn
+    + "<p class='desc' style='margin-top:14px'>Check the fields to write into this form. A field you have already filled in is left unchecked &mdash; check it only if you want to replace that value. Their clauses are not copied.</p>";
+  var last = "";
+  html += "<div class='import-wrap'><table class='import-table'><thead><tr><th>Apply</th><th>Field</th><th>From their contract</th><th>Current value</th><th>Source</th></tr></thead><tbody>";
+  fields.forEach(function(field){
+    if (field.group !== last) {
+      last = field.group;
+      html += "<tr><td colspan='5' class='import-group'>"+esc(importGroupLabel(field.group))+"</td></tr>";
+    }
+    var note = field.overwrite
+      ? "<div class='import-note'>Already filled in. Check the box to replace it.</div>"
+      : (field.same ? "<div class='import-same'>Already matches this form.</div>" : "");
+    var current = field.current ? esc(field.currentLabel || field.current) : "<span style='color:var(--muted)'>&mdash;</span>";
+    html += "<tr class='"+(field.overwrite ? "import-hit" : "")+"'>"
+      + "<td><input type='checkbox' data-import-id='"+esc(field.id)+"'"+(field.checked ? " checked" : "")+(field.overwrite ? " data-overwrite='1'" : "")+"></td>"
+      + "<td><strong>"+esc(field.label)+"</strong>"+note+"</td>"
+      + "<td>"+esc(field.valueLabel || field.value)+"</td>"
+      + "<td>"+current+"</td>"
+      + "<td><div class='import-quote'>&ldquo;"+esc(field.quote)+"&rdquo;</div></td>"
+      + "</tr>";
+  });
+  html += "</tbody></table></div>"
+    + "<div class='import-actions'>"
+    + "<button type='button' class='btn-invite' onclick='applyImportedDetails(\""+type+"\")'>Apply selected fields</button>"
+    + "<button type='button' class='secondary' onclick='reviewImportedContract(\""+type+"\")'>Review their clauses against our reseller agreement</button>"
+    + "</div>";
+  box.innerHTML = html;
+}
+function importCounterpartyDetails(type){
+  if (type !== "ra" && type !== "rb") return;
+  var input = document.getElementById("import_file_" + type);
+  var file = input && input.files && input.files[0];
+  var msg = document.getElementById("import_msg_" + type);
+  var btn = document.getElementById("import_btn_" + type);
+  var box = document.getElementById("import_preview_" + type);
+  if (msg) { msg.style.color = "#c0392b"; }
+  if (!file) { if (msg) msg.textContent = "Choose a .docx or PDF first."; return; }
+  if (!/\.(docx|pdf)$/i.test(file.name || "")) { if (msg) msg.textContent = "Upload a .docx or a .pdf file."; return; }
+  if (msg) { msg.style.color = "var(--muted)"; msg.textContent = "Reading the contract…"; }
+  if (btn) btn.disabled = true;
+  if (box) box.innerHTML = "";
+  var fd = new FormData();
+  fd.append("file", file, file.name);
+  fd.append("agreementType", type);
+  fetch("/api/ai/import-details", { method: "POST", body: fd })
+    .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
+    .then(function(res){
+      if (!res.ok) {
+        if (msg) { msg.style.color = "#c0392b"; msg.textContent = (res.j && res.j.error) || "The contract could not be read."; }
+        return;
+      }
+      window._importFile = window._importFile || {};
+      window._importFile[type] = file;
+      var extracted = (res.j && res.j.fields) || [];
+      var view = window.AgreementImport.preview(extracted, readForm(type), type);
+      window._importPreview = window._importPreview || {};
+      window._importPreview[type] = view;
+      window._importWarnings = window._importWarnings || {};
+      window._importWarnings[type] = (res.j && res.j.warnings) || [];
+      renderImportPreview(type, view, window._importWarnings[type]);
+      if (msg) {
+        msg.style.color = "#1e7e34";
+        msg.textContent = extracted.length
+          ? "Preview ready. Nothing has been written into the form."
+          : "No details could be read with confidence. The form was not changed.";
+      }
+    })
+    .catch(function(){ if (msg) { msg.style.color = "#c0392b"; msg.textContent = "The contract could not be read."; } })
+    .finally(function(){ if (btn) btn.disabled = false; });
+}
+function applyImportedDetails(type){
+  var msg = document.getElementById("import_msg_" + type);
+  if (typeof editingLocked === "function" && editingLocked()) {
+    if (msg) { msg.style.color = "#9a4b00"; msg.textContent = "This agreement is locked for signature. Withdraw it before importing details."; }
+    return;
+  }
+  var view = window._importPreview && window._importPreview[type];
+  if (!view || !window.AgreementImport) return;
+  var ids = [];
+  document.querySelectorAll("#import_preview_" + type + " input[data-import-id]:checked").forEach(function(el){
+    ids.push(el.getAttribute("data-import-id"));
+  });
+  if (!ids.length) {
+    if (msg) { msg.style.color = "#9a4b00"; msg.textContent = "Select at least one field to apply."; }
+    return;
+  }
+  var result = window.AgreementImport.applyChecked(readForm(type), view.fields, ids);
+  hydrateForm(type, result.data);
+  var again = window.AgreementImport.preview(view.fields, readForm(type), type);
+  window._importPreview[type] = again;
+  renderImportPreview(type, again, (window._importWarnings && window._importWarnings[type]) || []);
+  if (msg) {
+    msg.style.color = "#1e7e34";
+    msg.textContent = "Applied " + result.applied.length + (result.applied.length === 1 ? " field" : " fields") + ". Vendora's agreement text was not changed.";
+  }
+}
+function reviewImportedContract(type){
+  var msg = document.getElementById("import_msg_" + type);
+  var file = window._importFile && window._importFile[type];
+  if (!file) { if (msg) msg.textContent = "Upload the contract before starting a review."; return; }
+  if (window._aiEnabled && typeof renderContractReviewCards === "function") renderContractReviewCards();
+  var input = document.getElementById("cr_file_" + type);
+  var sel = document.getElementById("cr_type_" + type);
+  if (!input || !sel || typeof DataTransfer === "undefined") {
+    if (msg) { msg.style.color = "#9a4b00"; msg.textContent = "Open Review the counterparty's own contract above and upload the same file there."; }
+    return;
+  }
+  var dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+  sel.value = "reseller";
+  var slot = document.getElementById("cr_slot_" + type);
+  if (slot && slot.scrollIntoView) slot.scrollIntoView({ behavior: "smooth", block: "start" });
+  runContractReview(type);
 }
 function getAiContext(){
   if (window._signData) return window._signData;   // the CEO asking about an agreement awaiting signature
