@@ -70,7 +70,7 @@ test('submit checks the token before validation and does not write a locked or s
     3: { update_token: 'good-token', status: 'pending_signature', vendora_signed_at: null, data: { name: 'Locked Co', curr: 'EUR' } },
     4: { update_token: 'good-token', status: 'vendora_signed', vendora_signed_at: new Date().toISOString(), data: { name: 'CEO Co', curr: 'EUR' } },
     5: { update_token: 'good-token', status: 'invited', vendora_signed_at: new Date().toISOString(), data: { name: 'Stamp Co', curr: 'EUR' } },
-    6: { update_token: 'good-token', status: 'submitted', vendora_signed_at: null, data: legacy, id: 6 },
+    6: { update_token: 'good-token', status: 'submitted', vendora_signed_at: null, data: legacy, id: 6, type: 'ra', created_by: 7 },
   };
   db.enabled = true;
   db.query = async function (sql, params) {

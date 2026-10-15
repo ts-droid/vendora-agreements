@@ -617,9 +617,9 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
     if (!/^\d+$/.test(agreementId)) {
       return res.status(400).json({ error: 'Open a saved agreement before checking a document.' });
     }
+    if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
     const chosen = ai.normalizeAgreementType(parts.agreementType);
     if (!chosen) return res.status(400).json({ error: 'Choose the agreement type before checking a document.' });
-    if (!db.enabled) return res.status(503).json({ error: 'Archive is not enabled on this server' });
     req.params.id = agreementId;
     const row = await loadOwned(req, res);
     if (!row) return;
@@ -629,15 +629,12 @@ app.post('/api/ai/verify-document', auth.requireAuth, verifyLimiter, async (req,
       return res.status(400).json({ error: 'This agreement is stored as a ' + which + ' agreement. Choose that type.' });
     }
     // A stored reseller-simplified row stays rb when the user confirms "reseller".
+    // This check does not write. A missing data._type is filled in memory from the
+    // stored column, or from the choice just made, and kept on the next save.
     const type = stored && ai.sameFamily(stored, chosen) ? stored : chosen;
     let agreementData = row.data && typeof row.data === 'object' ? row.data : {};
     if (!ai.normalizeAgreementType(agreementData._type)) {
       agreementData = Object.assign({}, agreementData, { _type: type });
-      try {
-        await db.query('UPDATE agreements SET data=$1, type=$2, updated_at=now() WHERE id=$3', [agreementData, type, row.id]);
-      } catch (e) {
-        console.error('Store agreement type error:', e.message);
-      }
     }
     const extracted = await documentExtract.extractText(sniffed.kind, parts.file.buffer);
     const out = await lawyerVerify.verifyDocument({
