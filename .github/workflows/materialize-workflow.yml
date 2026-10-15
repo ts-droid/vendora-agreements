@@ -1,0 +1,96 @@
+name: Materialize and verify Vendora workflow
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: vendora-workflow-materialization
+  cancel-in-progress: false
+jobs:
+  materialize:
+    if: github.repository == 'ts-droid/vendora-agreements' && github.event.pull_request.number == 39 && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/vendora-first-workflow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/vendora-first-workflow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install one-time source migration parser
+        run: npm install --no-save --package-lock=false --ignore-scripts acorn@8.15.0 acorn-walk@8.3.4
+      - name: Materialize exact local implementation
+        run: python3 scripts/workflow-migration/materialize.py
+      - name: Commit to feature branch only
+        id: commit
+        run: |
+          git add agreement-clauses.js agreement-defaults.json ai-document.js ai.js db.js document-extract.js index.html lawyer-changes.js server.js test/fixtures/workflow-seeds.json test/lawyer-changes.test.js test/upload-limits.test.js test/workflow-api.test.js test/workflow-core.test.js upload-limits.js workflow-api.js workflow-core.js workflow-ui.js
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'feat: implement persisted Vendora-first workflow and 50 MB uploads'
+            git push origin HEAD:refs/heads/feat/vendora-first-workflow
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  verify:
+    needs: materialize
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agreement_test
+          POSTGRES_PASSWORD: local_test_only
+          POSTGRES_DB: agreement_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U agreement_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      ANTHROPIC_API_KEY: ''
+      DATABASE_URL: ''
+      TEST_DATABASE_URL: postgres://agreement_test:local_test_only@127.0.0.1:5432/agreement_test
+      SMTP_HOST: ''
+      SMTP_USER: ''
+      SMTP_PASS: ''
+      GOOGLE_SERVICE_ACCOUNT_JSON: ''
+      MAIL_FROM: ''
+      AGREEMENT_WEBHOOK_URL: ''
+      CHROME_BIN: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.materialize.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: All unit, upload boundary and two-round browser/API tests
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npm test 2>&1 | tee test-results/tests.log
+      - name: Capture exact tested source
+        if: always()
+        run: |
+          mkdir -p test-results
+          git rev-parse HEAD > test-results/commit.txt
+          git archive --format=tar.gz --output=test-results/tested-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workflow-implementation-verification
+          path: test-results/
+          retention-days: 7
