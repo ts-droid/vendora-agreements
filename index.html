@@ -26841,14 +26841,39 @@ function applyImportedDetails(type){
     if (msg) { msg.style.color = "#9a4b00"; msg.textContent = "Select at least one field to apply."; }
     return;
   }
-  var result = window.AgreementImport.applyChecked(readForm(type), view.fields, ids);
+  var live = readForm(type);
+  var stale = window.AgreementImport.filledSincePreview(view.fields, live, ids);
+  var confirmed = [];
+  if (stale.length) {
+    var list = stale.map(function(field){
+      return "• " + field.label + "\n  You entered: " + field.current + "\n  From the contract: " + (field.valueLabel || field.value);
+    }).join("\n");
+    var replace = confirm("You filled these in after the preview was made:\n\n" + list + "\n\nReplace them with the values from the contract?\n\nOK replaces those fields. Cancel keeps what you typed and still applies the other selected fields.");
+    if (replace) confirmed = stale.map(function(field){ return field.id; });
+    else {
+      var skip = Object.create(null);
+      stale.forEach(function(field){ skip[field.id] = true; });
+      ids = ids.filter(function(id){ return !skip[id]; });
+    }
+  }
+  if (!ids.length) {
+    if (msg) { msg.style.color = "#9a4b00"; msg.textContent = "Kept what you typed. Nothing was replaced."; }
+    return;
+  }
+  var result = window.AgreementImport.applyChecked(live, view.fields, ids, type, confirmed);
   hydrateForm(type, result.data);
   var again = window.AgreementImport.preview(view.fields, readForm(type), type);
   window._importPreview[type] = again;
   renderImportPreview(type, again, (window._importWarnings && window._importWarnings[type]) || []);
   if (msg) {
+    var kept = (result.skipped || []).map(function(id){
+      var field = view.fields.filter(function(item){ return item.id === id; })[0];
+      return field && field.label ? field.label : id;
+    });
     msg.style.color = "#1e7e34";
-    msg.textContent = "Applied " + result.applied.length + (result.applied.length === 1 ? " field" : " fields") + ". Vendora's agreement text was not changed.";
+    msg.textContent = "Applied " + result.applied.length + (result.applied.length === 1 ? " field" : " fields")
+      + (kept.length ? ". Kept what you typed in " + kept.join(", ") : "")
+      + ". Vendora's agreement text was not changed.";
   }
 }
 function reviewImportedContract(type){

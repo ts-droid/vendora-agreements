@@ -440,14 +440,48 @@
     return cur == null ? '' : cur;
   }
 
+  function blockedSegment(part) {
+    return part === '__proto__' || part === 'constructor' || part === 'prototype';
+  }
+
   function setPath(data, id, value) {
     var parts = String(id || '').split('.');
+    if (!data || typeof data !== 'object' || !parts.length) return false;
+    if (parts.some(function (part) { return !part || blockedSegment(part); })) return false;
     var cur = data;
     for (var i = 0; i < parts.length - 1; i++) {
-      if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
-      cur = cur[parts[i]];
+      var key = parts[i];
+      var next = cur[key];
+      if (!next || typeof next !== 'object' || Array.isArray(next)) {
+        next = {};
+        cur[key] = next;
+      }
+      cur = next;
     }
     cur[parts[parts.length - 1]] = value;
+    return true;
+  }
+
+  // Checked fields that were empty in the preview and now hold a different value.
+  function filledSincePreview(fields, live, checkedIds) {
+    var chosen = Object.create(null);
+    (checkedIds || []).forEach(function (id) { chosen[String(id)] = true; });
+    var stale = [];
+    (fields || []).forEach(function (item) {
+      if (!item || !item.id || !chosen[item.id] || !item.value) return;
+      var previewCurrent = String(item.current == null ? '' : item.current).trim();
+      if (previewCurrent) return;
+      var liveValue = String(getPath(live, item.id) == null ? '' : getPath(live, item.id)).trim();
+      if (!liveValue || liveValue === String(item.value).trim()) return;
+      stale.push({
+        id: item.id,
+        label: item.label || item.id,
+        current: liveValue,
+        value: String(item.value),
+        valueLabel: item.valueLabel || String(item.value),
+      });
+    });
+    return stale;
   }
 
   // Compare extracted values with the form. Does not write.
@@ -490,19 +524,31 @@
     return view;
   }
 
-  // Write only the checked ids onto a copy of the form data.
-  function applyChecked(current, fields, checkedIds) {
+  // Write only checked, allowlisted ids onto a copy of the form data.
+  // A field that was empty in the preview and has since been filled in is left
+  // alone unless its id is in confirmedIds.
+  function applyChecked(current, fields, checkedIds, type, confirmedIds) {
     var chosen = Object.create(null);
     (checkedIds || []).forEach(function (id) { chosen[String(id)] = true; });
-    var out = JSON.parse(JSON.stringify(current || {}));
+    var confirmed = Object.create(null);
+    (confirmedIds || []).forEach(function (id) { confirmed[String(id)] = true; });
+    var out = JSON.parse(JSON.stringify(current && typeof current === 'object' ? current : {}));
     var applied = [];
+    var skipped = [];
     (fields || []).forEach(function (item) {
       if (!item || !item.id || !chosen[item.id] || !item.value) return;
-      setPath(out, item.id, item.value);
+      if (!fieldById(type, item.id)) return;
+      var liveValue = String(getPath(out, item.id) == null ? '' : getPath(out, item.id)).trim();
+      var previewCurrent = String(item.current == null ? '' : item.current).trim();
+      if (!previewCurrent && liveValue && liveValue !== String(item.value).trim() && !confirmed[item.id]) {
+        skipped.push(item.id);
+        return;
+      }
+      if (!setPath(out, item.id, item.value)) return;
       applied.push(item.id);
     });
     if (applied.some(function (id) { return /^t[123][ftb]$/.test(id); })) out.targetsOn = true;
-    return { data: out, applied: applied };
+    return { data: out, applied: applied, skipped: skipped };
   }
 
   function toolFor(type) {
@@ -634,6 +680,8 @@
     bannedSchemaKeys: bannedSchemaKeys,
     normalizeExtraction: normalizeExtraction,
     preview: previewFor,
+    filledSincePreview: filledSincePreview,
+    setPath: setPath,
     applyChecked: applyChecked,
     displayValue: displayValue,
     extractDetails: extractDetails,

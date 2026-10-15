@@ -237,7 +237,7 @@ test('preview does not write, and apply changes only checked fields', async func
   assert.equal(checked.indexOf('name'), -1);
   assert.equal(checked.indexOf('pay'), -1);
   assert.ok(checked.indexOf('vat') >= 0);
-  const applied = importer.applyChecked(current, view.fields, checked);
+  const applied = importer.applyChecked(current, view.fields, checked, 'ra');
   assert.equal(JSON.stringify(current), before);
   assert.equal(applied.data.name, 'Nordic Demo Handel AB');
   assert.equal(applied.data.pay, '30');
@@ -247,15 +247,88 @@ test('preview does not write, and apply changes only checked fields', async func
   assert.deepEqual(applied.data.clauseOverrides, current.clauseOverrides);
   assert.equal(applied.applied.indexOf('name'), -1);
 
-  const chosen = importer.applyChecked(current, view.fields, ['name', 'pay']);
+  const chosen = importer.applyChecked(current, view.fields, ['name', 'pay'], 'ra');
   assert.equal(JSON.stringify(current), before);
   assert.equal(chosen.data.name, 'Fictional Reseller AB');
   assert.equal(chosen.data.pay, '45');
   assert.equal(chosen.data.vat, '');
   assert.deepEqual(chosen.data.redlines, current.redlines);
-  assert.equal(importer.applyChecked(current, view.fields, ['name']).data.targetsOn, undefined);
-  assert.equal(importer.applyChecked(current, view.fields, ['t1b']).data.targetsOn, true);
-  assert.equal(importer.applyChecked(current, view.fields, ['redlines', 'clauseOverrides']).data.name, 'Nordic Demo Handel AB');
+  assert.equal(importer.applyChecked(current, view.fields, ['name'], 'ra').data.targetsOn, undefined);
+  assert.equal(importer.applyChecked(current, view.fields, ['t1b'], 'ra').data.targetsOn, true);
+  assert.equal(importer.applyChecked(current, view.fields, ['redlines', 'clauseOverrides'], 'ra').data.name, 'Nordic Demo Handel AB');
+});
+
+test('a value typed after the preview is not overwritten unless it is confirmed', function () {
+  const extracted = [{
+    id: 'vat',
+    label: 'VAT / Tax ID',
+    value: 'SE559999123401',
+    valueLabel: 'SE559999123401',
+    quote: 'VAT number SE559999123401.',
+    group: 'identity',
+  }, {
+    id: 'reg',
+    label: 'Registration / company number',
+    value: '559999-1234',
+    valueLabel: '559999-1234',
+    quote: 'Company number 559999-1234.',
+    group: 'identity',
+  }];
+  const view = importer.preview(extracted, { vat: '', reg: '' }, 'ra');
+  assert.equal(byId(view.fields, 'vat').checked, true);
+  assert.equal(byId(view.fields, 'vat').current, '');
+  const live = { vat: 'SE111111111101', reg: '' };
+  const checked = ['vat', 'reg'];
+  const stale = importer.filledSincePreview(view.fields, live, checked);
+  assert.deepEqual(stale.map(function (field) { return field.id; }), ['vat']);
+  assert.equal(stale[0].current, 'SE111111111101');
+  assert.equal(stale[0].value, 'SE559999123401');
+  const before = JSON.stringify(live);
+  const silent = importer.applyChecked(live, view.fields, checked, 'ra');
+  assert.equal(JSON.stringify(live), before);
+  assert.equal(silent.data.vat, 'SE111111111101');
+  assert.equal(silent.data.reg, '559999-1234');
+  assert.deepEqual(silent.skipped, ['vat']);
+  assert.deepEqual(silent.applied, ['reg']);
+  const confirmed = importer.applyChecked(live, view.fields, checked, 'ra', ['vat']);
+  assert.equal(confirmed.data.vat, 'SE559999123401');
+  assert.deepEqual(confirmed.applied, ['vat', 'reg']);
+  assert.equal(importer.filledSincePreview(view.fields, { vat: 'SE559999123401' }, ['vat']).length, 0);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /filledSincePreview\(view\.fields, live, ids\)/);
+  assert.match(html, /Replace them with the values from the contract/);
+  assert.match(html, /applyChecked\(live, view\.fields, ids, type, confirmed\)/);
+});
+
+test('apply writes only allowlisted fields and refuses prototype paths', function () {
+  const victim = { name: 'Keep' };
+  assert.equal(importer.setPath(victim, '__proto__.polluted', 'yes'), false);
+  assert.equal(importer.setPath(victim, 'constructor.prototype.polluted', 'yes'), false);
+  assert.equal(importer.setPath(victim, 'prototype', 'yes'), false);
+  assert.equal(importer.setPath(victim, 'rcontacts.constructor.e', 'yes'), false);
+  assert.equal(victim.polluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.equal(({}).polluted, undefined);
+  assert.equal(importer.setPath(victim, 'vat', 'SE1'), true);
+  assert.equal(victim.vat, 'SE1');
+  assert.equal(importer.setPath(victim, 'rcontacts.main.e', 'a@b.example'), true);
+  assert.equal(victim.rcontacts.main.e, 'a@b.example');
+
+  const out = importer.applyChecked({ name: 'Keep', vat: '' }, [
+    { id: 'name', value: 'Fictional Reseller AB', current: 'Keep' },
+    { id: 'not-a-field', value: 'x', current: '' },
+    { id: '__proto__', value: 'x', current: '' },
+    { id: 'constructor', value: 'x', current: '' },
+    { id: 'rcontacts.__proto__.e', value: 'x', current: '' },
+    { id: 'vat', value: 'SE559999123401', current: '' },
+  ], ['name', 'not-a-field', '__proto__', 'constructor', 'rcontacts.__proto__.e', 'vat'], 'ra');
+  assert.deepEqual(out.applied, ['name', 'vat']);
+  assert.equal(out.data.name, 'Fictional Reseller AB');
+  assert.equal(out.data.vat, 'SE559999123401');
+  assert.equal(out.data['not-a-field'], undefined);
+  assert.equal(out.data.polluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.equal(importer.applyChecked({ name: 'Keep' }, [{ id: 'name', value: 'Other', current: '' }], ['name'], 'da').data.name, 'Keep');
 });
 
 test('the reseller form offers import and distribution does not', function () {
