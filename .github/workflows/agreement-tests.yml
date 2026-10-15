@@ -25,6 +25,10 @@ jobs:
       DATABASE_URL: ''
       TEST_DATABASE_URL: postgres://agreement_test:local_test_only@127.0.0.1:5432/agreement_test
       SMTP_HOST: ''
+      SMTP_USER: ''
+      SMTP_PASS: ''
+      GOOGLE_SERVICE_ACCOUNT_JSON: ''
+      MAIL_FROM: ''
       AGREEMENT_WEBHOOK_URL: ''
       CHROME_BIN: /usr/bin/google-chrome
     steps:
@@ -36,18 +40,20 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Unit and existing browser tests
+      - name: Record tested source identity
         run: |
           mkdir -p test-results
+          git rev-parse HEAD | tee test-results/commit.txt
+          sha256sum db.js workflow-api.js test/workflow-api.test.js | tee test-results/source-checksums.txt
+      - name: Unit, upload boundary and integration tests
+        run: |
           set -o pipefail
           npm test 2>&1 | tee test-results/tests.log
-      - name: Capture exact tested source and dependencies
+      - name: Capture exact tested source
         if: always()
         run: |
           mkdir -p test-results
-          git rev-parse HEAD > test-results/commit.txt
           git archive --format=tar.gz --output=test-results/tested-source.tar.gz HEAD
-          tar -czf test-results/test-dependencies.tar.gz node_modules
       - uses: actions/upload-artifact@v4
         if: always()
         with:
