@@ -1,0 +1,107 @@
+'use strict';
+const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('fs');const path=require('path');
+const seeds=require('./fixtures/workflow-seeds.json');const C=require('../workflow-core');
+const url=process.env.TEST_DATABASE_URL;
+if(url&&!/\/agreement_test(?:\?|$)/.test(url))throw new Error('Only the disposable agreement_test database is allowed.');
+test('Vendora-first: two real API/browser review rounds, persisted Word edits, locking and signature requests', {skip:!url?'TEST_DATABASE_URL not set':false,timeout:180000},async()=>{
+  Object.assign(process.env,{DATABASE_URL:url,NODE_ENV:'test',SIGNER_EMAIL:'signer@vendora.se',ADMIN_EMAILS:'owner@vendora.se,signer@vendora.se',SMTP_USER:'test@example.test',SMTP_PASS:'mock',GOOGLE_SERVICE_ACCOUNT_JSON:'',ANTHROPIC_API_KEY:'',AGREEMENT_WEBHOOK_URL:''});
+  const db=require('../db');await db.init();
+  const nodemailer=require('nodemailer');const mail=[];let failMail=false;
+  nodemailer.createTransport=()=>({sendMail:async m=>{if(failMail)throw new Error('mock mail failure');mail.push(m);return {messageId:'test-message'};}});
+  const ai=require('../ai');ai.enabled=true;
+  ai.reviewContract=async a=>{
+    assert.equal(a.type,'ra');assert.match(a.ourText,/RESELLER AGREEMENT/);assert.match(a.ourText,/insolvency/);
+    const ch=(kind,id,oldT,newT)=>({target_kind:kind,target_id:id,op:'replace',old_text:oldT,new_text:newT,label:id,rationale:'synthetic test',anchor:''});
+    const findings=[
+      {classification:'deal_breaker',topic:'Safe payment alternative',changes:[ch('field','pay',a.agreement.pay,'45')]},
+      {classification:'negotiate',topic:'Retain full protection',changes:[ch('clause','ra.s4.title','full payment','complete payment')]},
+      {classification:'red_flag',topic:'Keep our law',changes:[]},
+      {classification:'acceptable',topic:'Equivalent',changes:[]},
+      {classification:'negotiate',topic:'Delivery alternative',changes:[ch('field','terr',a.agreement.terr,'Sweden')]}
+    ].map(f=>({...f,their_clause_ref:'test',their_position:'Synthetic request',our_position:'Vendora baseline',why_it_matters:'Test only',proposed_wording:f.changes.map(c=>c.new_text).join('\n'),legal_note:'',requires_counsel:false}));
+    return {document_summary:'Synthetic counterparty comparison',governing_law_and_forum:'Swedish law',overall_verdict:'negotiate',overall_rationale:'Synthetic test',findings,questions_for_seller:[],refer_to_counsel:false,counsel_reason:''};
+  };
+  ai.chat=async (agreement,messages)=>({reply:'Synthetic alternative in OUR agreement',proposals:[{target_kind:'field',target_id:'pay',op:'replace',old_text:agreement.pay,new_text:'50',label:'Payment alternative',rationale:'test alternative',anchor:''}]});
+  const app=require('../server'),auth=require('../auth');
+  const owner=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('owner@vendora.se','Test owner',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
+  const signer=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('signer@vendora.se','Test signer',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
+  const stranger=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('other@vendora.se','Other',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;
+  const cookie=u=>auth.COOKIE+'='+auth.signToken(u);let browser;let id;
+  async function api(p,method='GET',body,user=owner,rawHeaders){
+    const headers={...(user?{Cookie:cookie(user)}:{}),...(body?{'Content-Type':'application/json'}:{}),...rawHeaders};
+    const r=await fetch(base+p,{method,headers,body:body?typeof body==='string'?body:JSON.stringify(body):undefined});let j;try{j=await r.json();}catch(_){j={};}return {status:r.status,body:j};
+  }
+  async function good(p,method,body,user){const r=await api(p,method,body,user);assert.equal(r.status,200,JSON.stringify(r.body));return r.body;}
+  try {
+    // Real frontend upload -> saved review -> direct approval cards.
+    const puppeteer=require('puppeteer-core');browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+    const page=await browser.newPage();page.setDefaultTimeout(30000);const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+    await page.setCookie({name:auth.COOKIE,value:auth.signToken(owner),url:base});
+    await page.goto(base,{waitUntil:'domcontentloaded'});
+    await page.waitForFunction(()=>window.wfEnsure&&window.LawyerChanges);
+    await page.evaluate(d=>{window._authUser={id:d.id,email:d.email,name:d.name,isAdmin:true};window._archiveEnabled=true;window._isAdmin=true;window._aiEnabled=true;switchTab(1);renderContractReviewCards();},owner);
+    await page.evaluate(d=>hydrateForm('ra',d),seeds.ra);
+    await page.evaluate(()=>sv('ra_inv_email','customer@example.test'));
+    fs.mkdirSync('test-results',{recursive:true});const inputPath=path.resolve('test-results/customer-input.txt');fs.writeFileSync(inputPath,'Synthetic customer terms for testing the entire Vendora review flow. No real customer data.');
+    const upload=await page.$('#cr_file_ra');await upload.uploadFile(inputPath);
+    await page.click('#cr_btn_ra');
+    await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);
+    id=await page.evaluate(()=>window._editing.id);
+    const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
+    const blocked=await api('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
+    for(let n=0;n<5;n++){
+      const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;
+      await page.click('[data-item="'+itemId+'"] [data-wf="'+action+'"]');
+      await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf="accept"]');},{},itemId);
+    }
+    let r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'45');assert.equal(r.state.decisions.length,5);assert.equal(C.digest(r.state.baseline),baseline);
+    assert.match(r.data.clauseOverrides['ra.s4.title'],/reclaim unpaid Products/);
+    const amendments=C.copy(r.data.clauseOverrides);
+    // Reopening uses the server state, not local approval cards.
+    await page.reload({waitUntil:'domcontentloaded'});await page.evaluate(id=>wfRefresh(id),id);
+    assert.equal(await page.evaluate(()=>window._editing.base.pay),'45');
+    const exportData=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const r=await buildRA(d);const buf=await r.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});
+    assert.match(exportData.xml,/complete payment/);assert.match(exportData.xml,/reclaim unpaid Products/);assert.match(exportData.xml,/45/);
+    fs.writeFileSync('test-results/our-agreement-after-initial-review.docx',Buffer.from(exportData.bytes));
+    await page.screenshot({path:'test-results/initial-review.png',fullPage:true});
+    // The same saved agreement is invited; the copy includes the approved clauses but no internals.
+    await page.evaluate(()=>sv('ra_inv_email','customer@example.test'));
+    await page.click('#wf_panel_ra [data-wf="invite"]');await page.waitForFunction(()=>window._editing.status==='invited');
+    r=await good('/api/workflow/'+id);assert.equal(r.state.sent.delivery,'sent');assert.deepEqual(r.state.sent.data.clauseOverrides,amendments);assert.equal(r.state.sent.data.redlines,undefined);
+    let stored=(await db.query('SELECT * FROM agreements WHERE id=$1',[id])).rows[0];const sentVersion=stored.workflow_state.sent.version;const token=stored.update_token;
+    // Public submission: factual completion succeeds, proposed terms and malicious internal fields do not overwrite content.
+    const submission={...r.state.sent.data,name:'Completed Customer AB',country:'Sweden',addr:'Testgatan 2',sig_name:'Counterparty Signer',sig_email:'signer@example.test',rcontacts:{notices:{e:'notice@example.test'}},_proposals:{pay:{original:'forged 999',proposed:'60',comment:'Please extend'}},clauseOverrides:{},_vendoraSignature:{name:'Forged'}};
+    assert.equal((await api('/api/agreements/'+id+'/submit','POST',{token:'wrong',sentVersion,data:submission},null)).status,403);
+    assert.equal((await api('/api/agreements/'+id+'/submit','POST',{token,sentVersion:sentVersion-1,data:submission},null)).status,409);
+    await good('/api/agreements/'+id+'/submit','POST',{token,sentVersion,data:submission},null);
+    r=await good('/api/workflow/'+id);assert.equal(r.data.name,'Completed Customer AB');assert.equal(r.data.pay,'45');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.data._vendoraSignature,undefined);assert.equal(r.data._proposals.pay.original,'45');
+    assert.equal((await api('/api/workflow/'+id,'GET',undefined,stranger)).status,404);
+    // Second round: rework the customer's request, then explicitly approve the new alternative.
+    await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const request=r.state.items.find(i=>i.status==='pending');
+    await good('/api/workflow/'+id+'/rework','POST',{itemId:request.id,instruction:'Offer 50 days while retaining our protection.',expectedRevision:r.revision});
+    await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const alternative=r.state.items.find(i=>i.status==='pending');assert.equal(r.data.pay,'45');
+    await page.click('[data-item="'+alternative.id+'"] [data-wf="accept"]');await page.waitForFunction(()=>window._editing.base.pay==='50');
+    r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'50');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.signatureProblems.length,0,JSON.stringify(r.signatureProblems));
+    // A concurrent save cannot overwrite an acknowledged decision.
+    assert.equal((await api('/api/agreements/'+id,'PUT',{data:r.data,expectedRevision:r.revision-1})).status,409);
+    // No configured real mail is used. Test both failure reporting and a real server signature lock.
+    failMail=true;const sent=await good('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:r.revision,summary:{terms:[],deviations:[]}});assert.equal(sent.notified,false);failMail=false;
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'pending_signature');assert.ok(r.summary.deviations.length>0);
+    assert.equal((await api('/api/agreements/'+id,'PUT',{data:{...r.data,pay:'1'},expectedRevision:r.revision})).status,409);
+    assert.equal((await api('/api/agreements/'+id+'/sign','POST',{},owner)).status,403);
+    await good('/api/agreements/'+id+'/sign','POST',{},signer);
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'vendora_signed');assert.equal(r.data._vendoraSignature.digest,r.state.approval.digest);
+    const requestMail=await good('/api/workflow/'+id+'/send-signature','POST',{expectedRevision:r.revision});assert.equal(requestMail.sent,true);assert.equal(requestMail.status,'sent');
+    const published=await good('/api/public-agreements/'+id+'?token='+requestMail.state.signatureShare.token,'GET',undefined,null);assert.equal(published.data.pay,'50');assert.equal(published.data.redlines,undefined);assert.equal(published.data.workflow_state,undefined);
+    assert.equal((await api('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:999999,expectedRevision:requestMail.revision})).status,400);
+    await page.evaluate(id=>wfRefresh(id),id);
+    const finalExport=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const result=await buildRA(d);const buf=await result.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});assert.match(finalExport.xml,/50/);assert.match(finalExport.xml,/complete payment/);fs.writeFileSync('test-results/final-agreement-synthetic.docx',Buffer.from(finalExport.bytes));
+    const doc=Buffer.from(finalExport.bytes);const uploadResponse=await fetch(base+'/api/agreements/'+id+'/files',{method:'POST',headers:{Cookie:cookie(owner),'Content-Type':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','X-Filename':'synthetic-countersigned-copy.docx'},body:doc});const fileResult=await uploadResponse.json();assert.equal(uploadResponse.status,200,JSON.stringify(fileResult));assert.equal(fileResult.status,'sent');
+    r=await good('/api/workflow/'+id);await good('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:fileResult.file.id,expectedRevision:r.revision});
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'signed');assert.equal(r.state.counterpartySignature.verification,'manual');
+    const history=await good('/api/workflow/'+id+'/versions');assert.ok(history.versions.length>=16);
+    assert.equal(pageErrors.length,0,pageErrors.join('\n'));assert.ok(mail.length>=3);
+    fs.writeFileSync('test-results/workflow-outcome.json',JSON.stringify({agreementId:id,status:r.status,revision:r.revision,decisions:r.state.decisions.length,versions:history.versions.length,mailMockCalls:mail.length,ai:'mocked',counterpartySignature:'synthetic file with manual confirmation'},null,2));
+  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));if(id)await db.query('DELETE FROM agreements WHERE id=$1',[id]);await db.pool.end();}
+});

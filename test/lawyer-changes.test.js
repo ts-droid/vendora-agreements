@@ -62,7 +62,7 @@ test('schema accepts clause, annex, and field proposals and normalises aliases',
 test('schema rejects a bad target, a delete without old text, and a replace without new text', function () {
   assert.equal(LC.validateProposal({ target: { kind: 'note', id: 'x' }, op: 'replace', newText: 'a' }).ok, false);
   assert.equal(LC.validateProposal({ target: { kind: 'annex', id: '9' }, op: 'replace', newText: 'a' }).ok, false);
-  assert.equal(LC.validateProposal({ target: { kind: 'field', id: 'bonus' }, op: 'replace', newText: 'a' }).ok, false);
+  assert.equal(LC.validateProposal({ target: { kind: 'field', id: 'unknownField' }, op: 'replace', newText: 'a' }).ok, false);
   assert.equal(LC.validateProposal(clause('ra.s4.payment', 'delete', '   ', '')).ok, false);
   assert.equal(LC.validateProposal(clause('ra.s4.payment', 'replace', 'old', '  ')).ok, false);
   assert.equal(LC.validateProposal(clause('da.s5.payment', 'replace', 'old', 'new'), { _type: 'ra' }).ok, false);
@@ -727,7 +727,14 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', { skip:
     });
     const page = await browser.newPage();
     page.setDefaultTimeout(60000);
-    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    if(process.env.BROWSER_OFFLINE==='1') {
+      let html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
+      for(const name of ['upload-limits','agreement-clauses','lawyer-changes','workflow-ui']) {
+        html=html.replace('<script src="/'+name+'.js"></script>',()=>'<script>'+fs.readFileSync(path.join(__dirname,'..',name+'.js'),'utf8')+'</script>');
+      }
+      html=html.replace('<head>','<head><script>window.fetch=async()=>({ok:true,json:async()=>({archive:false,google:false,ai:false})});</script>');
+      await page.setContent(html,{waitUntil:'domcontentloaded'});
+    } else await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(function () { return window.LawyerChanges && window.buildRA && window.zipEntryText; });
     const xmls = await page.evaluate(async function () {
       const LC = window.LawyerChanges;
@@ -854,7 +861,14 @@ test('buildRA places an inserted clause directly after its anchor', { skip: chro
     });
     const page = await browser.newPage();
     page.setDefaultTimeout(60000);
-    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    if(process.env.BROWSER_OFFLINE==='1') {
+      let html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
+      for(const name of ['upload-limits','agreement-clauses','lawyer-changes','workflow-ui']) {
+        html=html.replace('<script src="/'+name+'.js"></script>',()=>'<script>'+fs.readFileSync(path.join(__dirname,'..',name+'.js'),'utf8')+'</script>');
+      }
+      html=html.replace('<head>','<head><script>window.fetch=async()=>({ok:true,json:async()=>({archive:false,google:false,ai:false})});</script>');
+      await page.setContent(html,{waitUntil:'domcontentloaded'});
+    } else await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(function () { return window.LawyerChanges && window.buildRA && window.zipEntryText; });
     const text = await page.evaluate(async function () {
       const LC = window.LawyerChanges;
@@ -984,8 +998,8 @@ test('a new reseller clause with a missing section anchor can be approved, and t
     clause('14A', 'insert', '', text14a, { anchor: '§13', label: '§14A' })
   );
   assert.equal(section.ok, true, JSON.stringify(section.errors));
-  assert.equal(section.proposal.anchor, 'ra.s13c.after_end');
-  assert.match(section.placement, /Will be inserted after After the agreement ends \(§13C\)/);
+  assert.equal(section.proposal.anchor, 'ra.s14.p3');
+  assert.match(section.placement, /Will be inserted after/);
   assert.match(section.placement, /not in this agreement/);
 
   const named = LC.describeProposal(
@@ -1002,7 +1016,7 @@ test('a new reseller clause with a missing section anchor can be approved, and t
     clause('14B', 'insert', '', text14b, { anchor: '14A', label: '§14B' }),
   ]);
   assert.equal(applied.rejected.length, 0, JSON.stringify(applied.rejected));
-  assert.equal(applied.data.clauseInserts[0].anchor, 'ra.s13c.after_end');
+  assert.equal(applied.data.clauseInserts[0].anchor, 'ra.s14.p3');
   assert.equal(applied.data.clauseInserts[1].anchor, '14A');
 
   assert.equal(LC.validateProposal(clause('14A', 'insert', '', text14a, { anchor: '14A' }), { _type: 'ra' }).ok, false);

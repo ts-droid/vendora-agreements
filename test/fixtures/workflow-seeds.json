@@ -1,0 +1,283 @@
+{
+  "ra": {
+    "name": "Testpartner AB",
+    "reg": "TEST-001",
+    "country": "Sweden",
+    "addr": "Testgatan 1",
+    "vat": "",
+    "products": "",
+    "terr": "",
+    "excl": "non-exclusive",
+    "date": "2026-10-15",
+    "notice": "90",
+    "curr": "EUR",
+    "pay": "30",
+    "credit": "",
+    "inco": "EXW",
+    "incoplace": "Vendora Nordic AB, Lomma, Sweden",
+    "moq": "",
+    "minact": "",
+    "t1f": "",
+    "t1t": "",
+    "t1b": "",
+    "t2f": "",
+    "t2t": "",
+    "t2b": "",
+    "t3f": "",
+    "t3t": "",
+    "t3b": "",
+    "mdfb": "",
+    "mdft": "",
+    "mdff": "Quarterly",
+    "targetsOn": false,
+    "vname": "",
+    "vemail": "",
+    "sig_name": "Test Signer",
+    "sig_email": "signer@example.test",
+    "sig_title": "",
+    "sig_phone": "",
+    "rcontacts": {
+      "notices": {
+        "n": "",
+        "e": "",
+        "p": ""
+      },
+      "main": {
+        "n": "",
+        "e": "",
+        "p": ""
+      },
+      "mktg": {
+        "n": "",
+        "e": "",
+        "p": ""
+      },
+      "logi": {
+        "n": "",
+        "e": "",
+        "p": ""
+      },
+      "fin": {
+        "n": "",
+        "e": "",
+        "p": ""
+      }
+    },
+    "_type": "ra",
+    "pos_web": [
+      "example.test"
+    ]
+  },
+  "rb": {
+    "name": "Testpartner AB",
+    "reg": "TEST-001",
+    "country": "Sweden",
+    "addr": "Testgatan 1",
+    "vat": "",
+    "products": "",
+    "terr": "",
+    "curr": "EUR",
+    "pay": "30",
+    "notice": "30",
+    "inco": "EXW",
+    "moq": "",
+    "target": "",
+    "bonus": "",
+    "mdf": "",
+    "date": "2026-10-15",
+    "special": "",
+    "vname": "",
+    "vemail": "",
+    "sig_name": "Test Signer",
+    "sig_email": "signer@example.test",
+    "sig_title": "",
+    "sig_phone": "",
+    "_type": "rb",
+    "pos_web": [
+      "example.test"
+    ]
+  },
+  "da": {
+    "name": "Testpartner AB",
+    "reg": "TEST-001",
+    "country": "Sweden",
+    "addr": "Testgatan 1",
+    "vat": "",
+    "eori": "",
+    "parent": "",
+    "products": "",
+    "excluded": "",
+    "date": "2026-10-15",
+    "term": "three (3)",
+    "terr": "Sweden, Norway, Denmark, Finland, Iceland, Estonia, Latvia, Lithuania and Poland",
+    "excl": "exclusive",
+    "curr": "EUR",
+    "pay": "60",
+    "invmail": "invoice@vendora.se",
+    "inco": "DDP",
+    "incoy": "2020",
+    "delplace": "Vendora Nordic AB, Ladugårdsvägen 1, 234 35 Lomma",
+    "lead": "7",
+    "moq": "",
+    "rot": "",
+    "rotw": "twice",
+    "pcurr": "EUR",
+    "t1f": "",
+    "t1t": "",
+    "t1b": "",
+    "t2f": "",
+    "t2t": "",
+    "t2b": "",
+    "t3f": "",
+    "t3t": "",
+    "t3b": "",
+    "targetsOn": false,
+    "mdfb": "",
+    "mdft": "",
+    "mdfc": "",
+    "mdff": "Quarterly",
+    "rmae": "",
+    "rmaf": "Quarterly",
+    "rmam": "",
+    "vname": "",
+    "vemail": "",
+    "contacts": {
+      "mgmt": {
+        "label": "General Management / Authorised Signatory",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "sales": {
+        "label": "Sales & Account Management",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "ord": {
+        "label": "Order Management / Customer Service",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "fin": {
+        "label": "Finance / Accounts Receivable",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "logi": {
+        "label": "Logistics / Shipping",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "pim": {
+        "label": "Product Data / PIM / Customs",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "mktg": {
+        "label": "Marketing & MDF",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "rma": {
+        "label": "RMA / Returns",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "tech": {
+        "label": "Technical Support",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      },
+      "legal": {
+        "label": "Legal / Compliance",
+        "p": {
+          "n": "",
+          "e": "",
+          "p": ""
+        },
+        "b": {
+          "n": "",
+          "e": "",
+          "p": ""
+        }
+      }
+    },
+    "_type": "da",
+    "sig_name": "Test Signer",
+    "sig_email": "signer@example.test",
+    "pos_web": [
+      "example.test"
+    ]
+  }
+}

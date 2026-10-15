@@ -6,7 +6,7 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const Busboy = require('busboy');
 
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_BYTES = require('./upload-limits').MAX_FILE_BYTES;
 const MAX_TEXT = 120000;
 const MAX_ENTRIES = 200;
 const MAX_UNCOMPRESSED = 50 * 1024 * 1024;
@@ -61,7 +61,7 @@ function sniff(filename, buffer) {
     return { ok: false, status: 400, error: 'Choose a .docx or PDF file.' };
   }
   if (buffer.length > MAX_BYTES) {
-    return { ok: false, status: 413, error: 'That file is larger than 8 MB.' };
+    return { ok: false, status: 413, error: 'That file is larger than 50 MB.' };
   }
   const ext = extensionOf(filename);
   if (ext !== 'docx' && ext !== 'pdf') {
@@ -339,7 +339,7 @@ function readRequest(req) {
     try {
       busboy = Busboy({
         headers: req.headers,
-        limits: { files: 1, fields: 6, parts: 8, fileSize: MAX_BYTES, fieldSize: 8 * 1024 },
+        limits: { files: 1, fields: 6, parts: 8, fileSize: MAX_BYTES + 1, fieldSize: 8 * 1024 },
       });
     } catch (e) {
       done({ ok: false, status: 400, error: 'Upload the document as a file.' });
@@ -358,7 +358,8 @@ function readRequest(req) {
         return;
       }
       const chunks = [];
-      stream.on('data', function (chunk) { chunks.push(chunk); });
+      let size = 0;
+      stream.on('data', function (chunk) { size += chunk.length; if(size > MAX_BYTES) { tooBig = true; chunks.length = 0; } else if(!tooBig) chunks.push(chunk); });
       stream.on('limit', function () { tooBig = true; });
       stream.on('end', function () {
         file = { filename: info && info.filename ? info.filename : '', buffer: Buffer.concat(chunks) };
@@ -369,9 +370,11 @@ function readRequest(req) {
       if (name === 'agreementId') agreementId = String(value || '').slice(0, 20);
       if (name === 'agreementType') agreementType = String(value || '').slice(0, 40);
     });
+    ['filesLimit','fieldsLimit','partsLimit'].forEach(function(event){busboy.on(event,function(){extraFile=true;});});
+    req.on('aborted',function(){done({ok:false,status:400,error:'Upload interrupted.'});});
     busboy.on('error', function () { done({ ok: false, status: 400, error: 'Upload the document as a file.' }); });
     busboy.on('finish', function () {
-      if (tooBig) return done({ ok: false, status: 413, error: 'That file is larger than 8 MB.' });
+      if (tooBig) return done({ ok: false, status: 413, error: 'That file is larger than 50 MB.' });
       if (fieldLimited || extraFile) return done({ ok: false, status: 400, error: 'Upload the document as a file.' });
       if (!file || !file.buffer || !file.buffer.length) return done({ ok: false, status: 400, error: 'Choose a .docx or PDF file.' });
       done({ ok: true, file: file, agreementId: agreementId, agreementType: agreementType });

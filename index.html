@@ -23766,6 +23766,8 @@ if(typeof docx!=='undefined'&&typeof window!=='undefined')window.docx=docx;
 //# sourceMappingURL=FileSaver.min.js.map
 if(typeof saveAs!=='undefined'&&typeof window!=='undefined')window.saveAs=saveAs;
 </script>
+<script src="/upload-limits.js"></script>
+<script src="/agreement-clauses.js"></script>
 <script src="/lawyer-changes.js"></script>
 <script>
 var activeTab = 0;
@@ -24116,20 +24118,8 @@ function docxHelpers() {
 
 /* ──────────────────────────────────────────────── DA */
 /* ── EDITABLE CLAUSES (clause-as-data: AI can redraft these; overrides live on the agreement) */
-var CLAUSES = {
-  ra: [
-    { id:"ra.marketplaces", label:"Third-party marketplaces (§3)",
-      text:"Third-party online marketplaces. The Reseller shall not list, advertise, or sell the Products on any third-party online marketplace (including but not limited to Amazon, eBay, Bol, Cdiscount, Allegro, or similar platforms) without the Supplier’s prior written authorisation, which the Supplier may grant, withhold, condition, or revoke at its sole discretion. Any authorisation granted applies only to the specific marketplace, account, and territory identified, and may be subject to conditions including minimum pricing, content, and brand-presentation requirements. The Supplier may withdraw authorisation on written notice where marketplace activity conflicts with the Supplier’s or the brand owner’s own sales channels or brand strategy, and the Reseller shall cease the relevant listings within five (5) business days of such notice. Selling the Products on any marketplace without valid authorisation shall constitute a material breach." },
-    { id:"ra.no_subreselling", label:"No sub-reselling (§3)",
-      text:"The Reseller shall not appoint sub-resellers, sub-distributors, or sub-agents for the Products, nor grant any third party the right to sell or distribute the Products, without the prior written consent of the Supplier. Any such arrangement made without consent shall be null and void and shall constitute a material breach." },
-    { id:"ra.liability_indirect", label:"Limitation of liability — indirect (§10)",
-      text:"Neither Party shall be liable for any indirect or consequential damages, including loss of profit, loss of revenue, or loss of anticipated savings, regardless of whether such damages were foreseeable." },
-    { id:"ra.warranty_asis", label:"Products “as is” (§10)",
-      text:"The Reseller acknowledges that, except as expressly provided in this Agreement or in the Supplier’s standard warranty terms in Appendix 3, the Products are provided “as is” and the Supplier makes no warranties, express or implied, as to merchantability, fitness for a particular purpose, or non-infringement." },
-    { id:"ra.antibribery", label:"Anti-bribery (§16)",
-      text:"Both Parties shall comply with the Swedish Anti-Bribery Act and other applicable anti-bribery and anti-corruption laws." }
-  ]
-};
+var CLAUSES = {};
+["ra","rb","da"].forEach(function(type){CLAUSES[type]=LawyerChanges.catalogForPrompt(type, {_type:type});});
 var CLAUSE_BY_ID = {};
 Object.keys(CLAUSES).forEach(function(t){ CLAUSES[t].forEach(function(c){ CLAUSE_BY_ID[c.id]=c; }); });
 // cl(id) → the per-agreement override if set (window._clauseOverrides), else the registry default.
@@ -24140,14 +24130,18 @@ function cl(id){
   return reg ? reg.text : "";
 }
 // Editable clauses for a type with any overrides applied — sent to the AI as context.
-function getEditableClauses(type, data){
-  var list = CLAUSES[type]; if (!list) return [];
-  var ov = (data && data.clauseOverrides) || {};
-  return list.map(function(c){ return { id:c.id, label:c.label, text:(ov[c.id]!=null&&String(ov[c.id]).trim())?String(ov[c.id]):c.text }; });
-}
+function getEditableClauses(type,data){ return LawyerChanges.catalogForPrompt(type,data || {_type:type}); }
 
 // Lawyer edits live on the agreement (clauses, annexes, cover-sheet fields, redlines).
 // The document builders call these so an approved change is in the .docx, with w:ins/w:del when tracked.
+function clauseItemsNode(h,id,items,opts){
+  items=AgreementClauses.items((window._lawyerDocData||{})._type,id,window._lawyerDocData||{});
+  var data=window._lawyerDocData||{};
+  var changed=(data.clauseOverrides&&data.clauseOverrides[id]!=null)||(data.clauseDeletes||[]).indexOf(id)>=0;
+  if(changed) return clauseNode(h,id,LawyerChanges.standardClauseText(data._type,id,data),null,opts);
+  window._renderedClauseIds[id]=1;
+  return [h.par(items,opts)].concat(flushAnchored(h,id));
+}
 function beginLawyerDoc(data){
   window._lawyerDocData = data || {};
   window._renderedClauseIds = {};
@@ -24315,6 +24309,7 @@ function gtcWarrantyText(fallback){
 async function buildDA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readDAForm();
+  data._type='da';
   if (!data.name) { alert("Please enter the Supplier name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
   beginLawyerDoc(data);
@@ -24358,135 +24353,135 @@ async function buildDA(overrideData) {
     h.sp(),
     // §2
     h.h1("2   Purpose and Interpretation"),
-    h.par("For the purpose of initiating a long-term cooperation between the Parties with the objective to increase sales of the Products in the Territory, the Supplier wishes to appoint the Distributor as the "+data.excl+" distributor of the Supplier\u2019s Products within the Territory, and the Distributor has declared its capability and willingness to accept such appointment."),
-    h.par("This Agreement consists of a main agreement body and three (3) appendices. In the event of any inconsistency, the following order of precedence applies: (1) main agreement body; (2) Appendix 1; (3) Appendix 2; (4) Appendix 3; (5) any order placed under the Agreement."),
+    clauseItemsNode(h, "da.s2.p1", "For the purpose of initiating a long-term cooperation between the Parties with the objective to increase sales of the Products in the Territory, the Supplier wishes to appoint the Distributor as the "+data.excl+" distributor of the Supplier\u2019s Products within the Territory, and the Distributor has declared its capability and willingness to accept such appointment.", undefined),
+    clauseItemsNode(h, "da.s2.p2", "This Agreement consists of a main agreement body and three (3) appendices. In the event of any inconsistency, the following order of precedence applies: (1) main agreement body; (2) Appendix 1; (3) Appendix 2; (4) Appendix 3; (5) any order placed under the Agreement.", undefined),
     // §3
     h.h1("3   Appointment and Territory"),
-    h.par("The Supplier hereby appoints the Distributor as the Supplier\u2019s authorised and "+data.excl+" distributor for the distribution of the Products in the Territory as set out in Appendix 1."),
-    h.par([{t:"Supplier\u2019s non-compete in Territory. ",b:true},"During the term of this Agreement, the Supplier shall not, directly or indirectly, sell or supply the Products to any third party in the Territory \u2014 including distributors, resellers, retailers, agents, or end customers \u2014 without the prior written consent of the Distributor. Any breach entitles the Distributor to claim damages equal to lost margin on diverted sales, and constitutes a material breach entitling the Distributor to terminate with immediate effect."]),
-    h.par([{t:"Sales targets and exclusivity review. ",b:true},"Where annual sales targets are agreed in Appendix 1, the Distributor shall use commercially reasonable efforts to achieve them. Failure to meet a target shall not constitute grounds for termination or removal of exclusivity unless a specific cure mechanism is expressly agreed in Appendix 1. Reduction of exclusive rights requires one hundred and eighty (180) days\u2019 written notice and does not take effect during the first twelve (12) months after signing."]),
-    h.par("The Distributor has the right to describe itself as the Supplier\u2019s \u201cauthorised distributor\u201d of the Products to third parties."),
-    h.par("The Supplier shall promptly notify the Distributor of any approach or inquiry received from any third party in the Territory relating to the Products, and shall refer all such approaches and inquiries to the Distributor."),
-    h.par("Outside the Territory and in relation to the Products, the Distributor shall refrain from actively seeking customers, from establishing any branch, and from maintaining any distribution depot. This restriction shall not prevent the Distributor from fulfilling unsolicited (passive) orders received from outside the Territory where permitted by applicable law."),
+    clauseItemsNode(h, "da.s3.p1", "The Supplier hereby appoints the Distributor as the Supplier\u2019s authorised and "+data.excl+" distributor for the distribution of the Products in the Territory as set out in Appendix 1.", undefined),
+    clauseItemsNode(h, "da.s3.p2", [{t:"Supplier\u2019s non-compete in Territory. ",b:true},"During the term of this Agreement, the Supplier shall not, directly or indirectly, sell or supply the Products to any third party in the Territory \u2014 including distributors, resellers, retailers, agents, or end customers \u2014 without the prior written consent of the Distributor. Any breach entitles the Distributor to claim damages equal to lost margin on diverted sales, and constitutes a material breach entitling the Distributor to terminate with immediate effect."], undefined),
+    clauseItemsNode(h, "da.s3.p3", [{t:"Sales targets and exclusivity review. ",b:true},"Where annual sales targets are agreed in Appendix 1, the Distributor shall use commercially reasonable efforts to achieve them. Failure to meet a target shall not constitute grounds for termination or removal of exclusivity unless a specific cure mechanism is expressly agreed in Appendix 1. Reduction of exclusive rights requires one hundred and eighty (180) days\u2019 written notice and does not take effect during the first twelve (12) months after signing."], undefined),
+    clauseItemsNode(h, "da.s3.p4", "The Distributor has the right to describe itself as the Supplier\u2019s \u201cauthorised distributor\u201d of the Products to third parties.", undefined),
+    clauseItemsNode(h, "da.s3.p5", "The Supplier shall promptly notify the Distributor of any approach or inquiry received from any third party in the Territory relating to the Products, and shall refer all such approaches and inquiries to the Distributor.", undefined),
+    clauseItemsNode(h, "da.s3.p6", "Outside the Territory and in relation to the Products, the Distributor shall refrain from actively seeking customers, from establishing any branch, and from maintaining any distribution depot. This restriction shall not prevent the Distributor from fulfilling unsolicited (passive) orders received from outside the Territory where permitted by applicable law.", undefined),
     // §4
     h.h1("4   Purchase Orders"),
-    h.par("The Distributor\u2019s purchase orders shall be in writing (including email or EDI) on the Distributor\u2019s standard purchase order form and in accordance with the Trade Routines in Appendix 2. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence constitutes acceptance."),
-    h.par("The Supplier must accept orders in the Distributor\u2019s Order Management System and follow all instructions provided therein. This includes, but is not limited to, confirming orders, providing tracking information, and updating product status in the system. Failure to comply with this requirement may result in delayed processing of orders and payments."),
-    h.par("The Distributor may cancel any purchase order, in full or in part, at any time before dispatch without cost or penalty. The Distributor also has the right to cancel without cost if the ordered Products have not been dispatched within "+data.lead+" calendar days after the confirmed order date."),
+    clauseItemsNode(h, "da.s4.p1", "The Distributor\u2019s purchase orders shall be in writing (including email or EDI) on the Distributor\u2019s standard purchase order form and in accordance with the Trade Routines in Appendix 2. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence constitutes acceptance.", undefined),
+    clauseItemsNode(h, "da.s4.p2", "The Supplier must accept orders in the Distributor\u2019s Order Management System and follow all instructions provided therein. This includes, but is not limited to, confirming orders, providing tracking information, and updating product status in the system. Failure to comply with this requirement may result in delayed processing of orders and payments.", undefined),
+    clauseItemsNode(h, "da.s4.p3", "The Distributor may cancel any purchase order, in full or in part, at any time before dispatch without cost or penalty. The Distributor also has the right to cancel without cost if the ordered Products have not been dispatched within "+data.lead+" calendar days after the confirmed order date.", undefined),
     // §5
     h.h1("5   Pricing and Payment Conditions"),
     h.h3("Prices"),
-    h.par("Unless otherwise expressly agreed in Appendix 1, all Prices are quoted in "+data.pcurr+" on "+data.inco+" "+data.incoy+", "+data.delplace+" terms. Where Appendix 1 specifies DDP Vendora Nordic AB, Lomma, Sweden (Incoterms 2020), the Prices shall be deemed to include delivery to the agreed place of destination, including freight, export clearance, import clearance, customs duties, and all other costs for which the Supplier is responsible under the agreed Incoterm. The Supplier may not invoice any additional shipping, logistics, delivery, customs, or import-related charges unless expressly agreed in writing by the Distributor in advance. Any applicable value added tax or sales tax shall be added separately where required by law."),
-    h.par("If another Incoterm is expressly agreed in writing between the Parties for a particular shipment or Product line, the allocation of costs and risks shall follow that agreed Incoterm (Incoterms 2020), and the Prices shall be adjusted accordingly."),
-    h.par("The Supplier shall maintain up-to-date Product Prices and shall notify the Distributor of any price change in accordance with this section. The Prices do not include Market Development Funds (MDF) support, Return Merchandise Authorization (RMA) support, or any other backend rebate as stated in Appendix 1."),
+    clauseItemsNode(h, "da.s5.p1", "Unless otherwise expressly agreed in Appendix 1, all Prices are quoted in "+data.pcurr+" on "+data.inco+" "+data.incoy+", "+data.delplace+" terms. Where Appendix 1 specifies DDP Vendora Nordic AB, Lomma, Sweden (Incoterms 2020), the Prices shall be deemed to include delivery to the agreed place of destination, including freight, export clearance, import clearance, customs duties, and all other costs for which the Supplier is responsible under the agreed Incoterm. The Supplier may not invoice any additional shipping, logistics, delivery, customs, or import-related charges unless expressly agreed in writing by the Distributor in advance. Any applicable value added tax or sales tax shall be added separately where required by law.", undefined),
+    clauseItemsNode(h, "da.s5.p2", "If another Incoterm is expressly agreed in writing between the Parties for a particular shipment or Product line, the allocation of costs and risks shall follow that agreed Incoterm (Incoterms 2020), and the Prices shall be adjusted accordingly.", undefined),
+    clauseItemsNode(h, "da.s5.p3", "The Supplier shall maintain up-to-date Product Prices and shall notify the Distributor of any price change in accordance with this section. The Prices do not include Market Development Funds (MDF) support, Return Merchandise Authorization (RMA) support, or any other backend rebate as stated in Appendix 1.", undefined),
     h.h3("Payment"),
-    clauseNode(h, "da.s5.payment", "The Distributor shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date, or such other payment term as set out in Appendix 1. Invoices shall be sent electronically to "+data.invmail+" only after dispatch."),
+    clauseNode(h, "da.s5.payment", LawyerChanges.standardClauseText("da", "da.s5.payment", data)),
     h.h3("Price Protection"),
-    h.par("If the Supplier reduces its transfer price or the MSRP for any Product by more than five (5) per cent (other than by promotional or temporary discounts), the Supplier shall issue a credit equal to the price difference for all units of that Product remaining in the Distributor\u2019s inventory as of the effective date of the reduction. For the purposes of this clause, \u201cinventory\u201d includes all units purchased within the preceding one hundred and eighty (180) calendar days that have not yet been invoiced to a customer. The Supplier shall provide no less than thirty (30) days\u2019 written advance notice before any permanent price reduction takes effect. If the Supplier implements a price reduction without providing the required notice, the Distributor shall be entitled to apply the credit retroactively."),
+    clauseItemsNode(h, "da.s5.p4", "If the Supplier reduces its transfer price or the MSRP for any Product by more than five (5) per cent (other than by promotional or temporary discounts), the Supplier shall issue a credit equal to the price difference for all units of that Product remaining in the Distributor\u2019s inventory as of the effective date of the reduction. For the purposes of this clause, \u201cinventory\u201d includes all units purchased within the preceding one hundred and eighty (180) calendar days that have not yet been invoiced to a customer. The Supplier shall provide no less than thirty (30) days\u2019 written advance notice before any permanent price reduction takes effect. If the Supplier implements a price reduction without providing the required notice, the Distributor shall be entitled to apply the credit retroactively.", undefined),
     h.h3("Price Increases"),
-    h.par("Price increases require written agreement by both Parties at least ninety (90) days in advance of the effective date. Increases do not apply to orders confirmed prior to the notice date. If the Supplier implements an increase without the required notice, the Distributor may: (i) cancel affected open orders without penalty; (ii) treat the increase as void and continue purchasing at the previous prices; or (iii) accept the new prices with effect from the date the ninety-day notice would have expired."),
+    clauseItemsNode(h, "da.s5.p5", "Price increases require written agreement by both Parties at least ninety (90) days in advance of the effective date. Increases do not apply to orders confirmed prior to the notice date. If the Supplier implements an increase without the required notice, the Distributor may: (i) cancel affected open orders without penalty; (ii) treat the increase as void and continue purchasing at the previous prices; or (iii) accept the new prices with effect from the date the ninety-day notice would have expired.", undefined),
     // §6
     h.h1("6   Product Information and Warranty"),
     h.h3("Warranty"),
-    clauseNode(h, "da.s6.warranty", "The Supplier warrants that the Products delivered under this Agreement are free from defects in materials and workmanship and conform to their specifications for a period of twenty-four (24) months from the date of delivery to the Distributor."),
+    clauseNode(h, "da.s6.warranty", LawyerChanges.standardClauseText("da", "da.s6.warranty", data)),
     h.h3("Certifications and Compliance Documentation"),
-    h.par("The Supplier shall provide all required certifications, compliance documentation, CE markings, RoHS, REACH declarations, and all documentation necessary for the lawful sale and distribution of the Products in each country within the Territory, kept up-to-date throughout the term."),
+    clauseItemsNode(h, "da.s6.p1", "The Supplier shall provide all required certifications, compliance documentation, CE markings, RoHS, REACH declarations, and all documentation necessary for the lawful sale and distribution of the Products in each country within the Territory, kept up-to-date throughout the term.", undefined),
     h.h3("Product Data (PIM)"),
-    h.par("The Supplier shall provide complete, accurate and up-to-date product data for all Products in the Distributor\u2019s designated PIM format. The Supplier shall complete all mandatory fields within ten (10) business days of receipt of the template, and in any event before the first shipment, launch, or sale of the relevant Product in the Territory. The minimum product data shall include, where applicable: SKU/MPN, product name and family, EAN/UPC, HS code, EU CN code and TARIC classification where applicable, non-preferential country of origin, preferential origin status where applicable, regulatory and dangerous goods information, unit/inner box/master carton/pallet dimensions and weights, battery type, capacity in Wh, lithium content where relevant, dangerous goods or battery classification, WEEE/EPR and battery registration references, declarations of conformity, certifications, and EOL status; launch date, lead time, short and long descriptions, category mappings, recommended retail prices, Distributor buying price, warranty terms, packaging material data, packaging language, box contents, power specifications, manual links, compatibility data, product images, copy text, SEO and meta data, and key features."),
+    clauseItemsNode(h, "da.s6.p2", "The Supplier shall provide complete, accurate and up-to-date product data for all Products in the Distributor\u2019s designated PIM format. The Supplier shall complete all mandatory fields within ten (10) business days of receipt of the template, and in any event before the first shipment, launch, or sale of the relevant Product in the Territory. The minimum product data shall include, where applicable: SKU/MPN, product name and family, EAN/UPC, HS code, EU CN code and TARIC classification where applicable, non-preferential country of origin, preferential origin status where applicable, regulatory and dangerous goods information, unit/inner box/master carton/pallet dimensions and weights, battery type, capacity in Wh, lithium content where relevant, dangerous goods or battery classification, WEEE/EPR and battery registration references, declarations of conformity, certifications, and EOL status; launch date, lead time, short and long descriptions, category mappings, recommended retail prices, Distributor buying price, warranty terms, packaging material data, packaging language, box contents, power specifications, manual links, compatibility data, product images, copy text, SEO and meta data, and key features.", undefined),
     h.h3("EU Customs Classification and Origin"),
-    h.par("The Supplier shall provide, warrant, and maintain the correct customs classification for each Product for importation into the European Union, including the applicable HS code, CN code and TARIC classification where relevant, together with the correct non-preferential country of origin and, where applicable, preferential origin status and supporting origin documentation. The Supplier shall be liable for all documented direct costs, additional duties, reclassification costs, customs broker fees, storage costs, delay costs, and penalties arising from incorrect, incomplete, or outdated customs classification or origin data."),
-    h.par("The Supplier shall ensure that the Products comply with all applicable European Union rules and regulations, notably CE marking, the Radio Equipment Directive (RED) where applicable, RoHS, and REACH, and shall provide the corresponding declarations of conformity and supporting documentation."),
-    h.par("The Supplier shall update all product data without undue delay and no later than ten (10) business days after any change. The same customs and trade data (HS code, CN code, TARIC classification, and country of origin) shall be used consistently in the PIM, commercial invoices, packing lists, customs documentation, and other shipping and trade documents. The Supplier shall notify the Distributor in writing of any change to a Product\u2019s customs classification or country of origin before the affected shipment is dispatched."),
+    clauseItemsNode(h, "da.s6.p3", "The Supplier shall provide, warrant, and maintain the correct customs classification for each Product for importation into the European Union, including the applicable HS code, CN code and TARIC classification where relevant, together with the correct non-preferential country of origin and, where applicable, preferential origin status and supporting origin documentation. The Supplier shall be liable for all documented direct costs, additional duties, reclassification costs, customs broker fees, storage costs, delay costs, and penalties arising from incorrect, incomplete, or outdated customs classification or origin data.", undefined),
+    clauseItemsNode(h, "da.s6.p4", "The Supplier shall ensure that the Products comply with all applicable European Union rules and regulations, notably CE marking, the Radio Equipment Directive (RED) where applicable, RoHS, and REACH, and shall provide the corresponding declarations of conformity and supporting documentation.", undefined),
+    clauseItemsNode(h, "da.s6.p5", "The Supplier shall update all product data without undue delay and no later than ten (10) business days after any change. The same customs and trade data (HS code, CN code, TARIC classification, and country of origin) shall be used consistently in the PIM, commercial invoices, packing lists, customs documentation, and other shipping and trade documents. The Supplier shall notify the Distributor in writing of any change to a Product\u2019s customs classification or country of origin before the affected shipment is dispatched.", undefined),
     h.h3("Consequences of Non-Compliance with Product Data Obligations"),
-    h.par("Where the Supplier fails to provide complete, accurate, and up-to-date product data, customs data, certifications, or compliance documentation as required under this section, the Distributor shall be entitled to suspend onboarding, listing, launch, or order processing of the affected Products until the deficiency has been remedied, without such suspension constituting a breach by the Distributor or relieving the Supplier of any obligation under this Agreement. The Supplier shall additionally be liable for any documented, direct loss, cost, or rework caused by materially incomplete, inaccurate, or outdated Product data, subject to the limitation of liability in section 13."),
+    clauseItemsNode(h, "da.s6.p6", "Where the Supplier fails to provide complete, accurate, and up-to-date product data, customs data, certifications, or compliance documentation as required under this section, the Distributor shall be entitled to suspend onboarding, listing, launch, or order processing of the affected Products until the deficiency has been remedied, without such suspension constituting a breach by the Distributor or relieving the Supplier of any obligation under this Agreement. The Supplier shall additionally be liable for any documented, direct loss, cost, or rework caused by materially incomplete, inaccurate, or outdated Product data, subject to the limitation of liability in section 13.", undefined),
     // §7
     h.h1("7   Compliance with Laws"),
-    h.par("Each Party shall comply with all applicable laws, regulations, business ethics, and industry standards, including: anti-bribery and anti-corruption laws; competition and antitrust laws; sustainability and environmental laws; labour and human rights laws; and customs, export control, trade compliance, tariff classification, and origin-marking laws."),
-    h.par("The Supplier shall comply with all applicable customs and trade requirements relevant to the Products, including correct tariff classification, origin declarations, export documentation, and all product-related customs information required for lawful importation into the Territory."),
-    h.par("Upon written request from the Distributor, the Supplier shall complete, sign, and return all supplier compliance, sustainability, due diligence, code of conduct, and related documentation within thirty (30) days of the request. Failure to provide the requested documentation shall constitute a material breach if not remedied within thirty (30) days after written notice."),
-    h.par("Each Party represents and warrants that it shall comply with all applicable laws, regulations, business ethics and industry standards in connection with its activities under this Agreement. Upon request from the Distributor, the Supplier shall provide information regarding the measures implemented to ensure such compliance. Repeated or serious violations of this clause shall constitute a material breach, entitling the Distributor to terminate this Agreement with immediate effect."),
-    h.par("Both Parties shall maintain policies prohibiting bribery, corruption, and other unethical business practices, and shall conduct their business in accordance with the highest standards of ethical conduct."),
-    h.par("The Distributor may introduce sustainability guidelines, a supplier code of conduct, and product stewardship programs during the term of this Agreement, on ninety (90) days\u2019 written notice, which the Supplier shall make reasonable efforts to implement."),
+    clauseItemsNode(h, "da.s7.p1", "Each Party shall comply with all applicable laws, regulations, business ethics, and industry standards, including: anti-bribery and anti-corruption laws; competition and antitrust laws; sustainability and environmental laws; labour and human rights laws; and customs, export control, trade compliance, tariff classification, and origin-marking laws.", undefined),
+    clauseItemsNode(h, "da.s7.p2", "The Supplier shall comply with all applicable customs and trade requirements relevant to the Products, including correct tariff classification, origin declarations, export documentation, and all product-related customs information required for lawful importation into the Territory.", undefined),
+    clauseItemsNode(h, "da.s7.p3", "Upon written request from the Distributor, the Supplier shall complete, sign, and return all supplier compliance, sustainability, due diligence, code of conduct, and related documentation within thirty (30) days of the request. Failure to provide the requested documentation shall constitute a material breach if not remedied within thirty (30) days after written notice.", undefined),
+    clauseItemsNode(h, "da.s7.p4", "Each Party represents and warrants that it shall comply with all applicable laws, regulations, business ethics and industry standards in connection with its activities under this Agreement. Upon request from the Distributor, the Supplier shall provide information regarding the measures implemented to ensure such compliance. Repeated or serious violations of this clause shall constitute a material breach, entitling the Distributor to terminate this Agreement with immediate effect.", undefined),
+    clauseItemsNode(h, "da.s7.p5", "Both Parties shall maintain policies prohibiting bribery, corruption, and other unethical business practices, and shall conduct their business in accordance with the highest standards of ethical conduct.", undefined),
+    clauseItemsNode(h, "da.s7.p6", "The Distributor may introduce sustainability guidelines, a supplier code of conduct, and product stewardship programs during the term of this Agreement, on ninety (90) days\u2019 written notice, which the Supplier shall make reasonable efforts to implement.", undefined),
     // §8
     h.h1("8   Delivery and Inspection of Goods"),
-    h.par("The Supplier shall dispatch ordered Products within "+data.lead+" calendar days of a confirmed purchase order, under "+data.inco+" ("+data.incoy+"), "+data.delplace+", unless otherwise agreed in writing."),
-    h.par("The Supplier shall ensure that each shipment is accompanied by commercial invoices, packing lists, customs documents, and origin documents that correctly reflect the applicable Product description, HS code, EU CN code and TARIC classification where relevant, non-preferential country of origin, and any dangerous goods or battery classification. The customs and trade data used in shipment documents must match the latest data submitted in Vendora\u2019s designated PIM template."),
-    h.par("The Distributor shall inspect all Products upon delivery and notify the Supplier in writing of any visible damages, defects, or shortages within thirty (30) calendar days of receipt. Hidden defects must be reported as soon as reasonably possible after discovery, and no later than the end of the Warranty Period."),
-    h.par("The Supplier is responsible for obtaining any necessary export licences, certificates of origin, or other governmental approval required to sell the Products within the European Union."),
-    h.par("The Supplier shall confirm the dispatch time with tracking information in the Distributor\u2019s Order Management System. Upon request from the Distributor, the relevant customs authority, or a customs broker, the Supplier shall provide clarifications, revised documents, or supporting evidence in relation to a shipment."),
-    h.par("If the Supplier accepts the Distributor\u2019s complaint as valid, the Supplier shall issue a credit note for the non-conforming Products, or arrange replacement, within thirty (30) calendar days of accepting the complaint. The credit note may be deducted from invoices due or applied against future purchases."),
+    clauseItemsNode(h, "da.s8.p1", "The Supplier shall dispatch ordered Products within "+data.lead+" calendar days of a confirmed purchase order, under "+data.inco+" ("+data.incoy+"), "+data.delplace+", unless otherwise agreed in writing.", undefined),
+    clauseItemsNode(h, "da.s8.p2", "The Supplier shall ensure that each shipment is accompanied by commercial invoices, packing lists, customs documents, and origin documents that correctly reflect the applicable Product description, HS code, EU CN code and TARIC classification where relevant, non-preferential country of origin, and any dangerous goods or battery classification. The customs and trade data used in shipment documents must match the latest data submitted in Vendora\u2019s designated PIM template.", undefined),
+    clauseItemsNode(h, "da.s8.p3", "The Distributor shall inspect all Products upon delivery and notify the Supplier in writing of any visible damages, defects, or shortages within thirty (30) calendar days of receipt. Hidden defects must be reported as soon as reasonably possible after discovery, and no later than the end of the Warranty Period.", undefined),
+    clauseItemsNode(h, "da.s8.p4", "The Supplier is responsible for obtaining any necessary export licences, certificates of origin, or other governmental approval required to sell the Products within the European Union.", undefined),
+    clauseItemsNode(h, "da.s8.p5", "The Supplier shall confirm the dispatch time with tracking information in the Distributor\u2019s Order Management System. Upon request from the Distributor, the relevant customs authority, or a customs broker, the Supplier shall provide clarifications, revised documents, or supporting evidence in relation to a shipment.", undefined),
+    clauseItemsNode(h, "da.s8.p6", "If the Supplier accepts the Distributor\u2019s complaint as valid, the Supplier shall issue a credit note for the non-conforming Products, or arrange replacement, within thirty (30) calendar days of accepting the complaint. The credit note may be deducted from invoices due or applied against future purchases.", undefined),
     // §9
     h.h1("9   Stock Rotation and Returns"),
     h.h3("Stock Rotation Rights"),
-    h.par("The Distributor shall have the right to return slow-moving or excess inventory to the Supplier "+data.rotw+" per calendar year, with a total annual value not exceeding "+(data.rot||"[___]")+"% of the previous year\u2019s net purchases."),
+    clauseItemsNode(h, "da.s9.p1", "The Distributor shall have the right to return slow-moving or excess inventory to the Supplier "+data.rotw+" per calendar year, with a total annual value not exceeding "+(data.rot||"[___]")+"% of the previous year\u2019s net purchases.", undefined),
     h.h3("Stock Repurchase upon Termination"),
-    h.par("Upon termination or expiry of this Agreement for any reason, the Distributor shall have the right to return all unsold Active Products to the Supplier for full credit at the Repurchase Price."),
-    h.par([{t:"Mandatory repurchase obligation. ",b:true},"If this Agreement is terminated, not renewed, or expires following notice from either Party, for any reason other than the Distributor\u2019s material breach, the Supplier shall repurchase all Active Products remaining in the Distributor\u2019s inventory at the Repurchase Price, being the book value of the relevant Products (purchase price paid to the Supplier plus documented inbound logistics costs: freight, customs duties, and import charges). The Supplier shall settle the repurchase amount by payment or credit note, at the Distributor\u2019s election, within thirty (30) calendar days."]),
-    h.par([{t:"Active Products \u2014 meaning. ",b:true},"\u201cActive Products\u201d means all Products that have at any time been supplied to, approved for sale by, or otherwise made available to the Distributor under this Agreement, and that remain in the Distributor\u2019s inventory, irrespective of their current sales velocity or assortment status."]),
-    h.par([{t:"Valid EOL notice. ",b:true},"A valid end-of-life (EOL) notice must be in writing, must identify the relevant Product and SKU/MPN, must state the effective EOL date, and must be given to the Distributor at least one hundred and eighty (180) days before that effective date."]),
-    h.par([{t:"Active Products definition. ",b:true},"No Product shall cease to be an Active Product solely by reason of reduced or absent sales, reduced or absent deliveries, internal assortment classifications, replacement, phase-out status, or removal from the Supplier\u2019s price lists, catalogues, websites, or marketing materials, unless valid prior written EOL notice has been provided at least one hundred and eighty (180) days in advance. In the absence of such valid prior written notice, the Supplier may not invoke any alleged discontinuation or phase-out as grounds for refusing repurchase, return, credit, support, supply, or any other obligation under this Agreement. The Supplier bears the burden of proving that valid prior written notice was received by the Distributor."]),
+    clauseItemsNode(h, "da.s9.p2", "Upon termination or expiry of this Agreement for any reason, the Distributor shall have the right to return all unsold Active Products to the Supplier for full credit at the Repurchase Price.", undefined),
+    clauseItemsNode(h, "da.s9.p3", [{t:"Mandatory repurchase obligation. ",b:true},"If this Agreement is terminated, not renewed, or expires following notice from either Party, for any reason other than the Distributor\u2019s material breach, the Supplier shall repurchase all Active Products remaining in the Distributor\u2019s inventory at the Repurchase Price, being the book value of the relevant Products (purchase price paid to the Supplier plus documented inbound logistics costs: freight, customs duties, and import charges). The Supplier shall settle the repurchase amount by payment or credit note, at the Distributor\u2019s election, within thirty (30) calendar days."], undefined),
+    clauseItemsNode(h, "da.s9.p4", [{t:"Active Products \u2014 meaning. ",b:true},"\u201cActive Products\u201d means all Products that have at any time been supplied to, approved for sale by, or otherwise made available to the Distributor under this Agreement, and that remain in the Distributor\u2019s inventory, irrespective of their current sales velocity or assortment status."], undefined),
+    clauseItemsNode(h, "da.s9.p5", [{t:"Valid EOL notice. ",b:true},"A valid end-of-life (EOL) notice must be in writing, must identify the relevant Product and SKU/MPN, must state the effective EOL date, and must be given to the Distributor at least one hundred and eighty (180) days before that effective date."], undefined),
+    clauseItemsNode(h, "da.s9.p6", [{t:"Active Products definition. ",b:true},"No Product shall cease to be an Active Product solely by reason of reduced or absent sales, reduced or absent deliveries, internal assortment classifications, replacement, phase-out status, or removal from the Supplier\u2019s price lists, catalogues, websites, or marketing materials, unless valid prior written EOL notice has been provided at least one hundred and eighty (180) days in advance. In the absence of such valid prior written notice, the Supplier may not invoke any alleged discontinuation or phase-out as grounds for refusing repurchase, return, credit, support, supply, or any other obligation under this Agreement. The Supplier bears the burden of proving that valid prior written notice was received by the Distributor."], undefined),
     h.h3("Return Process"),
-    h.par("The Distributor shall submit a list of Products proposed for return to the Supplier at least thirty (30) days before the intended return date. The Supplier shall review and approve returns within ten (10) business days of receipt of the Distributor\u2019s request, with approval not to be unreasonably withheld. Only current, unopened, and saleable Products in original packaging shall be eligible for return. Products specifically ordered by the Distributor for a particular customer that are not part of the standard product offering shall not be eligible for return unless defective. The Distributor shall be responsible for the cost of shipping Products back to the Supplier unless otherwise agreed."),
+    clauseItemsNode(h, "da.s9.p7", "The Distributor shall submit a list of Products proposed for return to the Supplier at least thirty (30) days before the intended return date. The Supplier shall review and approve returns within ten (10) business days of receipt of the Distributor\u2019s request, with approval not to be unreasonably withheld. Only current, unopened, and saleable Products in original packaging shall be eligible for return. Products specifically ordered by the Distributor for a particular customer that are not part of the standard product offering shall not be eligible for return unless defective. The Distributor shall be responsible for the cost of shipping Products back to the Supplier unless otherwise agreed.", undefined),
     h.h3("Credit Terms"),
-    h.par("The Supplier shall settle approved returns by payment or credit note, at the Distributor\u2019s election, at the original purchase price within thirty (30) calendar days of receiving the returned Products. Credit notes may be applied against due or future invoices."),
-    h.par([{t:"Repurchase Price. ",b:true},"The \u201cRepurchase Price\u201d means the book value of the relevant Products (the purchase price paid to the Supplier plus documented inbound logistics costs: freight, customs duties, and import charges). In no event shall the Repurchase Price be lower than the original invoice price paid by the Distributor for the relevant Products."]),
+    clauseItemsNode(h, "da.s9.p8", "The Supplier shall settle approved returns by payment or credit note, at the Distributor\u2019s election, at the original purchase price within thirty (30) calendar days of receiving the returned Products. Credit notes may be applied against due or future invoices.", undefined),
+    clauseItemsNode(h, "da.s9.p9", [{t:"Repurchase Price. ",b:true},"The \u201cRepurchase Price\u201d means the book value of the relevant Products (the purchase price paid to the Supplier plus documented inbound logistics costs: freight, customs duties, and import charges). In no event shall the Repurchase Price be lower than the original invoice price paid by the Distributor for the relevant Products."], undefined),
     // §10
     h.h1("10   Service and Support"),
-    h.par("The Supplier shall: provide a dedicated point of contact for product enquiries, technical support, and account management; respond to technical support queries within twenty-four (24) hours on business days; provide access to up-to-date marketing materials; issue credits for defective Products in accordance with the RMA process; and provide regular product and troubleshooting training to the Distributor\u2019s staff."),
-    h.par([{t:"Distributor obligations. ",b:true},"The Distributor shall: ensure that its staff is well-trained on the Supplier\u2019s product portfolio; provide competent and trained staff and appropriate service facilities to offer prompt and professional service; provide email and phone support to its customers on all Products; and provide the Supplier with a quarterly report of warranty returns."]),
+    clauseItemsNode(h, "da.s10.p1", "The Supplier shall: provide a dedicated point of contact for product enquiries, technical support, and account management; respond to technical support queries within twenty-four (24) hours on business days; provide access to up-to-date marketing materials; issue credits for defective Products in accordance with the RMA process; and provide regular product and troubleshooting training to the Distributor\u2019s staff.", undefined),
+    clauseItemsNode(h, "da.s10.p2", [{t:"Distributor obligations. ",b:true},"The Distributor shall: ensure that its staff is well-trained on the Supplier\u2019s product portfolio; provide competent and trained staff and appropriate service facilities to offer prompt and professional service; provide email and phone support to its customers on all Products; and provide the Supplier with a quarterly report of warranty returns."], undefined),
     h.h3("RMA (Return Merchandise Authorization) Handling"),
-    h.par("The Parties shall establish and maintain a joint RMA tracking system to ensure efficient processing of all returns."),
-    h.par([{t:"The Distributor shall: ",b:true},"provide first-level support for end customers and resellers; issue RMA numbers for approved returns; where required, handle the physical receipt and inspection of returned Products; provide the Supplier with detailed information about defective Products; and maintain accurate records of all RMA transactions."]),
-    h.par([{t:"The Supplier shall: ",b:true},"provide technical support to the Distributor for complex issues; issue credit notes within thirty (30) days of receiving RMA information; cover all shipping costs associated with the return of defective Products from the Distributor; and provide regular training to the Distributor\u2019s staff regarding troubleshooting of Products. The maximum defective rate (MDR) and related thresholds are set out in Appendix 1."]),
+    clauseItemsNode(h, "da.s10.p3", "The Parties shall establish and maintain a joint RMA tracking system to ensure efficient processing of all returns.", undefined),
+    clauseItemsNode(h, "da.s10.p4", [{t:"The Distributor shall: ",b:true},"provide first-level support for end customers and resellers; issue RMA numbers for approved returns; where required, handle the physical receipt and inspection of returned Products; provide the Supplier with detailed information about defective Products; and maintain accurate records of all RMA transactions."], undefined),
+    clauseItemsNode(h, "da.s10.p5", [{t:"The Supplier shall: ",b:true},"provide technical support to the Distributor for complex issues; issue credit notes within thirty (30) days of receiving RMA information; cover all shipping costs associated with the return of defective Products from the Distributor; and provide regular training to the Distributor\u2019s staff regarding troubleshooting of Products. The maximum defective rate (MDR) and related thresholds are set out in Appendix 1."], undefined),
     // §11
     h.h1("11   Intellectual Property Rights"),
-    h.par("All intellectual property rights, including but not limited to trademarks, trade names, logos, patents, copyrights, trade secrets, and other proprietary information relating to the Products, are and shall remain the sole property of the Supplier."),
-    h.par("The Distributor shall not make any modifications to the Products or their packaging."),
-    h.par("The Supplier grants a non-exclusive, non-transferable licence to the Distributor to use the Supplier\u2019s trademarks, trade names, and logos in connection with the marketing, promotion, and sale of the Products in the Territory. The Distributor may create, publish, and maintain brand pages, product listings, and marketing content across digital and physical channels, and may translate, localise, and adapt content for local market conditions, SEO, and AIEO purposes. The Distributor’s own brand pages, product pages, product listings, and search-optimised marketing content do not require prior approval, it being acknowledged that such pages are a primary channel through which the Distributor markets the Products and generates organic and paid traffic in the Territory. The Distributor shall follow the Supplier’s brand guidelines where these have been provided in writing, and shall correct or remove any specific item of content upon the Supplier’s reasonable written request."),
-    h.par("The Distributor may operate and maintain dedicated brand and product pages referencing the Supplier\u2019s brand for the purpose of promoting the Products and informing customers in the Territory, and may direct customers to authorised resellers of the Products in the Territory. This right subsists for as long as the Distributor is appointed as a distributor of the Products under this Agreement and applies to the Distributor\u2019s own websites and channels, including the use of the brand name in page titles, descriptions, and URLs to the extent reasonably necessary for those purposes."),
-    h.par([{t:"IP defence (Alt A \u2014 full protection). ",b:true},"If legal measures are taken or threatened against the Distributor claiming that the Products infringe any third-party intellectual property rights in the Territory, the Distributor shall promptly notify the Supplier in writing. The Supplier shall, upon such notification and at its own cost, take over the conduct of the defence of such claim (including the instruction of legal counsel) and shall keep the Distributor regularly informed. The Distributor shall provide the Supplier with all reasonable assistance requested, at the Supplier\u2019s cost. The Supplier shall bear all costs and expenses from the date of notification onwards."]),
-    h.par("The Supplier shall not enter into any settlement of any such claim that: (i) imposes any financial liability on the Distributor; (ii) restricts the Distributor\u2019s ability to continue marketing or selling the Products in the Territory; or (iii) otherwise adversely affects the Distributor\u2019s rights or business, without the prior written consent of the Distributor."),
-    h.par("The Supplier shall indemnify and hold harmless the Distributor against all liability, damages, costs, and expenses (including all legal costs on a full indemnity basis) that are finally determined, or that the Distributor is required to pay pursuant to a settlement approved in advance by the Supplier. The Supplier\u2019s indemnification obligations under this section shall not be subject to the aggregate liability cap in section 13."),
-    h.par("Post-termination: The Distributor may retain and continue to publish historical, editorial, comparative, informational, review-based, or SEO/AIEO-oriented content, including historical brand pages and product content, after termination, provided discontinued Products are not presented as currently orderable."),
+    clauseItemsNode(h, "da.s11.p1", "All intellectual property rights, including but not limited to trademarks, trade names, logos, patents, copyrights, trade secrets, and other proprietary information relating to the Products, are and shall remain the sole property of the Supplier.", undefined),
+    clauseItemsNode(h, "da.s11.p2", "The Distributor shall not make any modifications to the Products or their packaging.", undefined),
+    clauseItemsNode(h, "da.s11.p3", "The Supplier grants a non-exclusive, non-transferable licence to the Distributor to use the Supplier\u2019s trademarks, trade names, and logos in connection with the marketing, promotion, and sale of the Products in the Territory. The Distributor may create, publish, and maintain brand pages, product listings, and marketing content across digital and physical channels, and may translate, localise, and adapt content for local market conditions, SEO, and AIEO purposes. The Distributor’s own brand pages, product pages, product listings, and search-optimised marketing content do not require prior approval, it being acknowledged that such pages are a primary channel through which the Distributor markets the Products and generates organic and paid traffic in the Territory. The Distributor shall follow the Supplier’s brand guidelines where these have been provided in writing, and shall correct or remove any specific item of content upon the Supplier’s reasonable written request.", undefined),
+    clauseItemsNode(h, "da.s11.p4", "The Distributor may operate and maintain dedicated brand and product pages referencing the Supplier\u2019s brand for the purpose of promoting the Products and informing customers in the Territory, and may direct customers to authorised resellers of the Products in the Territory. This right subsists for as long as the Distributor is appointed as a distributor of the Products under this Agreement and applies to the Distributor\u2019s own websites and channels, including the use of the brand name in page titles, descriptions, and URLs to the extent reasonably necessary for those purposes.", undefined),
+    clauseItemsNode(h, "da.s11.p5", [{t:"IP defence (Alt A \u2014 full protection). ",b:true},"If legal measures are taken or threatened against the Distributor claiming that the Products infringe any third-party intellectual property rights in the Territory, the Distributor shall promptly notify the Supplier in writing. The Supplier shall, upon such notification and at its own cost, take over the conduct of the defence of such claim (including the instruction of legal counsel) and shall keep the Distributor regularly informed. The Distributor shall provide the Supplier with all reasonable assistance requested, at the Supplier\u2019s cost. The Supplier shall bear all costs and expenses from the date of notification onwards."], undefined),
+    clauseItemsNode(h, "da.s11.p6", "The Supplier shall not enter into any settlement of any such claim that: (i) imposes any financial liability on the Distributor; (ii) restricts the Distributor\u2019s ability to continue marketing or selling the Products in the Territory; or (iii) otherwise adversely affects the Distributor\u2019s rights or business, without the prior written consent of the Distributor.", undefined),
+    clauseItemsNode(h, "da.s11.p7", "The Supplier shall indemnify and hold harmless the Distributor against all liability, damages, costs, and expenses (including all legal costs on a full indemnity basis) that are finally determined, or that the Distributor is required to pay pursuant to a settlement approved in advance by the Supplier. The Supplier\u2019s indemnification obligations under this section shall not be subject to the aggregate liability cap in section 13.", undefined),
+    clauseItemsNode(h, "da.s11.p8", "Post-termination: The Distributor may retain and continue to publish historical, editorial, comparative, informational, review-based, or SEO/AIEO-oriented content, including historical brand pages and product content, after termination, provided discontinued Products are not presented as currently orderable.", undefined),
     // §12
     h.h1("12   Confidentiality"),
-    h.par("During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement."),
-    h.par("This confidentiality undertaking shall not apply to information that the receiving Party can prove it learned of in a manner other than through this Agreement, or which is or becomes public knowledge other than through a breach of this Agreement. Nor does this undertaking apply where the receiving Party is required to disclose information in accordance with any law, enactment, stock market regulation, or decision by a governmental authority or court, provided that the receiving Party gives the disclosing Party prompt notice and cooperates in seeking protection of the information."),
+    clauseItemsNode(h, "da.s12.p1", "During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement.", undefined),
+    clauseItemsNode(h, "da.s12.p2", "This confidentiality undertaking shall not apply to information that the receiving Party can prove it learned of in a manner other than through this Agreement, or which is or becomes public knowledge other than through a breach of this Agreement. Nor does this undertaking apply where the receiving Party is required to disclose information in accordance with any law, enactment, stock market regulation, or decision by a governmental authority or court, provided that the receiving Party gives the disclosing Party prompt notice and cooperates in seeking protection of the information.", undefined),
     // §13
     h.h1("13   Limitation of Liability"),
-    h.par("Neither Party shall be liable for any indirect, consequential, special, incidental, or punitive damages, including loss of profit, loss of revenue, or loss of anticipated savings, regardless of whether such damages were foreseeable."),
-    h.par("Subject to the exceptions below, the aggregate liability of either Party in any twelve (12) month period shall not exceed the total net purchase value invoiced by the Supplier to the Distributor during the preceding twelve (12) months."),
-    h.par("The above limitations shall not apply to: (i) liability for death or personal injury caused by negligence; (ii) liability for fraud or fraudulent misrepresentation; (iii) the Supplier\u2019s IP indemnification obligations under section 11; (iv) the Supplier\u2019s repurchase obligations under section 9; (v) the Supplier\u2019s liability for documented direct costs arising from materially incorrect, incomplete, or outdated customs classification, origin, or mandatory product data; or (vi) any other liability that cannot be limited or excluded under applicable law."),
+    clauseItemsNode(h, "da.s13.p1", "Neither Party shall be liable for any indirect, consequential, special, incidental, or punitive damages, including loss of profit, loss of revenue, or loss of anticipated savings, regardless of whether such damages were foreseeable.", undefined),
+    clauseItemsNode(h, "da.s13.p2", "Subject to the exceptions below, the aggregate liability of either Party in any twelve (12) month period shall not exceed the total net purchase value invoiced by the Supplier to the Distributor during the preceding twelve (12) months.", undefined),
+    clauseItemsNode(h, "da.s13.p3", "The above limitations shall not apply to: (i) liability for death or personal injury caused by negligence; (ii) liability for fraud or fraudulent misrepresentation; (iii) the Supplier\u2019s IP indemnification obligations under section 11; (iv) the Supplier\u2019s repurchase obligations under section 9; (v) the Supplier\u2019s liability for documented direct costs arising from materially incorrect, incomplete, or outdated customs classification, origin, or mandatory product data; or (vi) any other liability that cannot be limited or excluded under applicable law.", undefined),
     // §14
     h.h1("14   GDPR and Data Protection"),
-    h.par("Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. Data breaches affecting personal data shared under this Agreement must be reported to the other Party and to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery, in accordance with Article 33 GDPR."),
-    h.par("Each Party shall implement appropriate technical and organizational measures to ensure and to be able to demonstrate that processing is performed in accordance with the GDPR. The Parties shall enter into a Data Processing Agreement (DPA) if and to the extent personal data is shared between them or processed by one Party on behalf of the other."),
+    clauseItemsNode(h, "da.s14.p1", "Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. Data breaches affecting personal data shared under this Agreement must be reported to the other Party and to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery, in accordance with Article 33 GDPR.", undefined),
+    clauseItemsNode(h, "da.s14.p2", "Each Party shall implement appropriate technical and organizational measures to ensure and to be able to demonstrate that processing is performed in accordance with the GDPR. The Parties shall enter into a Data Processing Agreement (DPA) if and to the extent personal data is shared between them or processed by one Party on behalf of the other.", undefined),
     // §15
     h.h1("15   Notices"),
-    h.par("Any notice required under this Agreement to be in writing shall be sent to the addresses in Appendix 3 or as later updated. Notice shall be deemed received: (i) if by courier: upon delivery; (ii) if by registered letter: five (5) business days after posting; (iii) if by email: at the time of transmission, if receipt is confirmed by the recipient Party or if the transmitting Party also sent the notice by registered letter the same day. Written confirmation showing that a notice has been delivered by courier or sent by registered letter shall constitute proof of receipt. Any change of address must be communicated within fourteen (14) calendar days."),
+    clauseItemsNode(h, "da.s15.p1", "Any notice required under this Agreement to be in writing shall be sent to the addresses in Appendix 3 or as later updated. Notice shall be deemed received: (i) if by courier: upon delivery; (ii) if by registered letter: five (5) business days after posting; (iii) if by email: at the time of transmission, if receipt is confirmed by the recipient Party or if the transmitting Party also sent the notice by registered letter the same day. Written confirmation showing that a notice has been delivered by courier or sent by registered letter shall constitute proof of receipt. Any change of address must be communicated within fourteen (14) calendar days.", undefined),
     // §16
     h.h1("16   Term"),
-    h.par("This Agreement shall enter into force when signed by both Parties and shall remain in force for an initial period of "+data.term+" years, unless a written notice of termination has been given by either Party no less than six (6) months prior to the end of the initial term. If no such notice is given, the Agreement shall automatically extend for successive periods of one (1) year, subject to the same six (6) months\u2019 notice requirement."),
-    h.par("Any notice of termination or non-renewal issued by the Supplier shall be subject to the Supplier\u2019s stock repurchase obligations under section 9."),
+    clauseItemsNode(h, "da.s16.p1", "This Agreement shall enter into force when signed by both Parties and shall remain in force for an initial period of "+data.term+" years, unless a written notice of termination has been given by either Party no less than six (6) months prior to the end of the initial term. If no such notice is given, the Agreement shall automatically extend for successive periods of one (1) year, subject to the same six (6) months\u2019 notice requirement.", undefined),
+    clauseItemsNode(h, "da.s16.p2", "Any notice of termination or non-renewal issued by the Supplier shall be subject to the Supplier\u2019s stock repurchase obligations under section 9.", undefined),
     // §17
     h.h1("17   Premature Termination"),
-    h.par("Either Party shall be entitled to terminate this Agreement with immediate effect where: (i) the other Party has committed a material breach; (ii) the other Party fails to cure a remediable breach within thirty (30) calendar days of written notice; or (iii) the other Party is declared bankrupt, commences company reorganisation, commences composition with its creditors, or can otherwise be deemed insolvent."),
-    h.par("Notice of termination must always be given in writing, without unreasonable delay after the terminating Party learns of the circumstance which is invoked as grounds for termination."),
+    clauseItemsNode(h, "da.s17.p1", "Either Party shall be entitled to terminate this Agreement with immediate effect where: (i) the other Party has committed a material breach; (ii) the other Party fails to cure a remediable breach within thirty (30) calendar days of written notice; or (iii) the other Party is declared bankrupt, commences company reorganisation, commences composition with its creditors, or can otherwise be deemed insolvent.", undefined),
+    clauseItemsNode(h, "da.s17.p2", "Notice of termination must always be given in writing, without unreasonable delay after the terminating Party learns of the circumstance which is invoked as grounds for termination.", undefined),
     // §18
     h.h1("18   Force Majeure"),
-    h.par("Neither Party shall be in default of this Agreement to the extent that performance is delayed or prevented by reason of war, pandemic, strike, fire, natural disaster, civil disturbance, act or ordinance of any governmental authority, terrorism, or any other cause genuinely beyond the reasonable control of such Party and not foreseeable at the time of signing (a \u201cForce Majeure Event\u201d). In the event that either Party\u2019s performance is affected by a Force Majeure Event, such Party shall promptly notify the other Party in writing, providing details of the event and an estimate of the period during which the delay or prevention shall continue. Both Parties agree to use their best efforts to alleviate and mitigate the effects of the Force Majeure Event as promptly as possible. If the Force Majeure Event continues for more than thirty (30) calendar days, either Party may terminate upon written notice without liability, except for obligations accrued prior to the Force Majeure Event. The Supplier\u2019s stock repurchase obligations under section 9 shall survive any such termination."),
+    clauseItemsNode(h, "da.s18.p1", "Neither Party shall be in default of this Agreement to the extent that performance is delayed or prevented by reason of war, pandemic, strike, fire, natural disaster, civil disturbance, act or ordinance of any governmental authority, terrorism, or any other cause genuinely beyond the reasonable control of such Party and not foreseeable at the time of signing (a \u201cForce Majeure Event\u201d). In the event that either Party\u2019s performance is affected by a Force Majeure Event, such Party shall promptly notify the other Party in writing, providing details of the event and an estimate of the period during which the delay or prevention shall continue. Both Parties agree to use their best efforts to alleviate and mitigate the effects of the Force Majeure Event as promptly as possible. If the Force Majeure Event continues for more than thirty (30) calendar days, either Party may terminate upon written notice without liability, except for obligations accrued prior to the Force Majeure Event. The Supplier\u2019s stock repurchase obligations under section 9 shall survive any such termination.", undefined),
     // §19
     h.h1("19   Miscellaneous"),
-    h.par([{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."]),
-    h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements and may not be modified except by a written instrument signed by duly authorised representatives of both Parties."]),
-    h.par([{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."]),
-    h.par([{t:"Counterparts. ",b:true},"This Agreement may be executed in any number of counterparts, each of which when executed and delivered shall constitute an original, and all of which together shall constitute one and the same instrument. Electronic signatures shall be deemed valid and binding."]),
-    h.par([{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party. Either Party may, without consent, assign this Agreement to a successor entity in connection with a merger, acquisition, or sale of substantially all of its assets, provided the assignee assumes all obligations."]),
-    h.par([{t:"Survival. ",b:true},"The following sections shall survive termination or expiry: sections 9 (stock repurchase), 11 (IP warranties and post-termination content), 12 (confidentiality), 13 (limitation of liability), and 20 (governing law)."]),
+    clauseItemsNode(h, "da.s19.p1", [{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."], undefined),
+    clauseItemsNode(h, "da.s19.p2", [{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements and may not be modified except by a written instrument signed by duly authorised representatives of both Parties."], undefined),
+    clauseItemsNode(h, "da.s19.p3", [{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."], undefined),
+    clauseItemsNode(h, "da.s19.p4", [{t:"Counterparts. ",b:true},"This Agreement may be executed in any number of counterparts, each of which when executed and delivered shall constitute an original, and all of which together shall constitute one and the same instrument. Electronic signatures shall be deemed valid and binding."], undefined),
+    clauseItemsNode(h, "da.s19.p5", [{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party. Either Party may, without consent, assign this Agreement to a successor entity in connection with a merger, acquisition, or sale of substantially all of its assets, provided the assignee assumes all obligations."], undefined),
+    clauseItemsNode(h, "da.s19.p6", [{t:"Survival. ",b:true},"The following sections shall survive termination or expiry: sections 9 (stock repurchase), 11 (IP warranties and post-termination content), 12 (confidentiality), 13 (limitation of liability), and 20 (governing law)."], undefined),
 
     // §20
     h.h1("20   Governing Law",{keepNext:true}),
-    h.par("This Agreement is governed by and construed in accordance with Swedish law, without regard to its conflict of law provisions. Disputes shall first be resolved through good-faith negotiations. If not resolved within thirty (30) days of a written request, the Parties agree to submit to SCC mediation, unless one Party objects. If mediation fails, the dispute shall be finally settled by SCC arbitration. Rules for Expedited Arbitrations apply unless the SCC determines otherwise. Seat: Malm\u00f6. Language: English.",{keepNext:true}),
+    clauseItemsNode(h, "da.s20.p1", "This Agreement is governed by and construed in accordance with Swedish law, without regard to its conflict of law provisions. Disputes shall first be resolved through good-faith negotiations. If not resolved within thirty (30) days of a written request, the Parties agree to submit to SCC mediation, unless one Party objects. If mediation fails, the dispute shall be finally settled by SCC arbitration. Rules for Expedited Arbitrations apply unless the SCC determines otherwise. Seat: Malm\u00f6. Language: English.", {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE SUPPLIER]","[Authorised signatory / name]",h.LITE,h.GREY,vendoraStamp(data)),
@@ -24521,20 +24516,20 @@ async function buildDA(overrideData) {
   // Appendix 2
   children.push(h.appHdr("APPENDIX 2 — VENDORA NORDIC AB TRADE ROUTINES",h.BL));children.push(h.sp());
   children.push(h.h2("Purchase Orders (PO)"));
-  children.push(h.par("Within two (2) banking days after receiving a PO, the order must be confirmed in Vendora\u2019s Order Management System (PO portal)."));
-  children.push(h.par("It is crucial that information is given on the estimated time of arrival (ETA) of the Products and that tracking information is submitted to ensure warehouse slots. If Products on the PO are not in stock, Vendora requires the Supplier to provide Vendora with an ETA for those Products."));
-  children.push(h.par([{t:"Onboarding gate. ",b:true},"A PIM link shall be provided to the Supplier upon signing. All mandatory product data, digital assets, and compliance documentation must be submitted and complete in the PIM before onboarding, listing, or first shipment of the relevant Products. The Supplier shall update product data within ten (10) business days of any change to specifications, pricing, EAN/UPC, warranty terms, HS/CN/TARIC classification, country of origin, logistics data, battery data, or EOL status."]));
+  children.push(clauseItemsNode(h, "da.appendix.p1", "Within two (2) banking days after receiving a PO, the order must be confirmed in Vendora\u2019s Order Management System (PO portal).", undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p2", "It is crucial that information is given on the estimated time of arrival (ETA) of the Products and that tracking information is submitted to ensure warehouse slots. If Products on the PO are not in stock, Vendora requires the Supplier to provide Vendora with an ETA for those Products.", undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p3", [{t:"Onboarding gate. ",b:true},"A PIM link shall be provided to the Supplier upon signing. All mandatory product data, digital assets, and compliance documentation must be submitted and complete in the PIM before onboarding, listing, or first shipment of the relevant Products. The Supplier shall update product data within ten (10) business days of any change to specifications, pricing, EAN/UPC, warranty terms, HS/CN/TARIC classification, country of origin, logistics data, battery data, or EOL status."], undefined));
   children.push(h.h2("Product Data and Customs Operations"));
-  children.push(h.par("The Supplier shall maintain a single source of truth for all Product, customs, and logistics data in Vendora\u2019s designated PIM. The HS code, EU CN code, TARIC classification, and non-preferential country of origin submitted in the PIM shall be used consistently across commercial invoices, packing lists, customs declarations, and all shipping and trade documents. Any change to specifications, pricing, EAN/UPC, warranty terms, customs classification, origin, logistics data, battery data, or EOL status must be reflected in the PIM within ten (10) business days of the change, and the Supplier shall notify the Distributor in writing of any customs classification or origin change before the next affected shipment is dispatched."));
-  children.push(h.par("Where customs, origin, or product data submitted by the Supplier is incorrect, incomplete, or outdated, the Distributor may suspend onboarding, listing, launch, or order processing of the affected Products until corrected, and the Supplier shall bear all resulting documented direct costs, additional duties, reclassification costs, customs broker fees, storage costs, delay costs, and penalties."));
+  children.push(clauseItemsNode(h, "da.appendix.p4", "The Supplier shall maintain a single source of truth for all Product, customs, and logistics data in Vendora\u2019s designated PIM. The HS code, EU CN code, TARIC classification, and non-preferential country of origin submitted in the PIM shall be used consistently across commercial invoices, packing lists, customs declarations, and all shipping and trade documents. Any change to specifications, pricing, EAN/UPC, warranty terms, customs classification, origin, logistics data, battery data, or EOL status must be reflected in the PIM within ten (10) business days of the change, and the Supplier shall notify the Distributor in writing of any customs classification or origin change before the next affected shipment is dispatched.", undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p5", "Where customs, origin, or product data submitted by the Supplier is incorrect, incomplete, or outdated, the Distributor may suspend onboarding, listing, launch, or order processing of the affected Products until corrected, and the Supplier shall bear all resulting documented direct costs, additional duties, reclassification costs, customs broker fees, storage costs, delay costs, and penalties.", undefined));
   children.push(h.h2("Deliveries and Transport"));
-  children.push(h.par([{t:"Agreed delivery term: ",b:true}, data.inco+" "+data.delplace+" ("+data.incoy+"). Vendora\u2019s standard for all deliveries is DDP or DAP to Vendora Nordic AB, Ladug\u00e5rdsv\u00e4gen 1, 234 35 Lomma: the Supplier arranges and pays for transport to the place of delivery with a carrier of its own choice, and bears the risk until the Products have been delivered there."]));
-  children.push(h.par([{t:"Shipments on any other term (e.g. EXW, FCA, FOB, CIF). ",b:true},"Where a shipment is not delivered DDP or DAP, the Supplier shall check with Vendora\u2019s logistics department (logistics@vendora.se) before any freight is booked, so that the best price can be secured. The Supplier sends the shipment details \u2014 PO number, number of packages or pallets, dimensions and weight per unit, pick-up address and the date the goods are ready \u2014 together with its own proposed carrier and freight cost, if it has one. Vendora compares this with its own freight agreements and responds within three (3) business days, confirming either the Supplier\u2019s proposal or Vendora\u2019s own booking, with booking instructions or a shipping label where applicable. Nothing may be dispatched until Vendora has confirmed. If the Supplier ships without Vendora\u2019s confirmation, Vendora may invoice the Supplier for the difference between the actual freight cost and the routing Vendora would have confirmed, and for any additional costs that arise."]));
-  children.push(h.par("For every shipment, regardless of delivery term, the tracking number and the commercial invoice shall be uploaded in the PO portal as soon as the goods have been collected."));
-  children.push(h.par("All Products must be packed and sealed in a secure way to avoid damage, loss, and theft. The Supplier must ensure that all necessary documentation is included in each shipment. Extra costs associated with delays, faulty products, or errors in shipment will be invoiced to the Supplier; the Supplier shall not be accountable for delays caused by the shipping agent."));
-  children.push(h.par("Each shipment must include correct HS code, EU CN code, TARIC classification, non-preferential country of origin, and supporting customs documents. These must match the latest PIM data submitted to Vendora. Any discrepancy constitutes non-compliance."));
+  children.push(clauseItemsNode(h, "da.appendix.p6", [{t:"Agreed delivery term: ",b:true}, data.inco+" "+data.delplace+" ("+data.incoy+"). Vendora\u2019s standard for all deliveries is DDP or DAP to Vendora Nordic AB, Ladug\u00e5rdsv\u00e4gen 1, 234 35 Lomma: the Supplier arranges and pays for transport to the place of delivery with a carrier of its own choice, and bears the risk until the Products have been delivered there."], undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p7", [{t:"Shipments on any other term (e.g. EXW, FCA, FOB, CIF). ",b:true},"Where a shipment is not delivered DDP or DAP, the Supplier shall check with Vendora\u2019s logistics department (logistics@vendora.se) before any freight is booked, so that the best price can be secured. The Supplier sends the shipment details \u2014 PO number, number of packages or pallets, dimensions and weight per unit, pick-up address and the date the goods are ready \u2014 together with its own proposed carrier and freight cost, if it has one. Vendora compares this with its own freight agreements and responds within three (3) business days, confirming either the Supplier\u2019s proposal or Vendora\u2019s own booking, with booking instructions or a shipping label where applicable. Nothing may be dispatched until Vendora has confirmed. If the Supplier ships without Vendora\u2019s confirmation, Vendora may invoice the Supplier for the difference between the actual freight cost and the routing Vendora would have confirmed, and for any additional costs that arise."], undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p8", "For every shipment, regardless of delivery term, the tracking number and the commercial invoice shall be uploaded in the PO portal as soon as the goods have been collected.", undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p9", "All Products must be packed and sealed in a secure way to avoid damage, loss, and theft. The Supplier must ensure that all necessary documentation is included in each shipment. Extra costs associated with delays, faulty products, or errors in shipment will be invoiced to the Supplier; the Supplier shall not be accountable for delays caused by the shipping agent.", undefined));
+  children.push(clauseItemsNode(h, "da.appendix.p10", "Each shipment must include correct HS code, EU CN code, TARIC classification, non-preferential country of origin, and supporting customs documents. These must match the latest PIM data submitted to Vendora. Any discrepancy constitutes non-compliance.", undefined));
   children.push(h.h2("Non-Compliance Penalty"));
-  children.push(h.par("Non-compliant shipments: (i) returned at Supplier’s cost; or (ii) 2% of invoice value (min. EUR 200) + handling costs. Costs from incorrect customs classification, origin data, or shipment documents borne by the Supplier."));
+  children.push(clauseItemsNode(h, "da.appendix.p11", "Non-compliant shipments: (i) returned at Supplier’s cost; or (ii) 2% of invoice value (min. EUR 200) + handling costs. Costs from incorrect customs classification, origin data, or shipment documents borne by the Supplier.", undefined));
   children.push(h.note("Version 2.5 — Appendix issued by Vendora Nordic AB. May be updated on 30 days’ written notice."));
   children.push(h.pgBrk());
   // Appendix 3 contacts
@@ -24562,6 +24557,7 @@ async function buildDA(overrideData) {
 async function buildRA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readRAForm();
+  data._type='ra';
   if (!data.name) { alert("Please enter the Reseller name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
   beginLawyerDoc(data);
@@ -24597,90 +24593,90 @@ async function buildRA(overrideData) {
     h.sp(),
     // §2
     h.h1("2   Interpretation"),
-    h.par("This Agreement consists of a main agreement body and three (3) appendices. In the event of any inconsistency, the following order of precedence applies: (1) main agreement body; (2) Appendix 1; (3) Appendix 2; (4) Appendix 3; (5) any order placed under the Agreement."),
+    clauseItemsNode(h, "ra.s2.p1", "This Agreement consists of a main agreement body and three (3) appendices. In the event of any inconsistency, the following order of precedence applies: (1) main agreement body; (2) Appendix 1; (3) Appendix 2; (4) Appendix 3; (5) any order placed under the Agreement.", undefined),
     // §3
     h.h1("3   Appointment and Territory"),
-    clauseNode(h, "ra.s3.appointment", "The Supplier hereby grants to the Reseller a "+data.excl+" right to market and sell the Products within the Territory during the term of this Agreement. The Supplier has the right to amend its offered product range and/or product specifications at any time and at its sole discretion. This Agreement does not restrict the Supplier from appointing other resellers within the Territory or from selling the Products directly. Within the EU/EEA, passive sales (unsolicited orders) cannot be restricted regardless of territory."),
-    clauseNode(h, "ra.no_subreselling", cl("ra.no_subreselling"), [{t:"No sub-reselling. ",b:true}]),
-    h.par("Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products."),
-    clauseNode(h, "ra.marketplaces", cl("ra.marketplaces")),
+    clauseNode(h, "ra.s3.appointment", LawyerChanges.standardClauseText("ra", "ra.s3.appointment", data)),
+    clauseNode(h, "ra.no_subreselling", LawyerChanges.standardClauseText("ra", "ra.no_subreselling", data), [{t:"No sub-reselling. ",b:true}]),
+    clauseItemsNode(h, "ra.s3.p1", "Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products.", undefined),
+    clauseNode(h, "ra.marketplaces", LawyerChanges.standardClauseText("ra", "ra.marketplaces", data)),
     // §4
     h.h1("4   Orders and Payment"),
     h.h3("Orders"),
-    clauseNode(h, "ra.s4.orders", "Orders shall be placed through the Supplier\u2019s designated ordering channel and are subject to acceptance by the Supplier. The Supplier shall confirm or reject each order within two (2) business days of receipt; silence beyond this period constitutes acceptance."),
+    clauseNode(h, "ra.s4.orders", LawyerChanges.standardClauseText("ra", "ra.s4.orders", data)),
     ...flushAnchored(h, "ra.s4.orders"),
     h.h3("Prices"),
-    clauseNode(h, "ra.s4.prices", "Prices are as stated in the Supplier\u2019s current price list or web portal, excluding any applicable value added tax or sales tax. It is the Reseller\u2019s responsibility to ensure it uses the Supplier\u2019s current prices at all times. Current prices are made available (i) on the Supplier\u2019s website, and (ii) via a downloadable price file (XML or CSV) which the Supplier makes available for continuous retrieval. The Reseller shall not rely on any previously downloaded, cached, or historical price data. Shipping costs shall be governed by the shipping terms in Appendix 1 and Appendix 3. The Supplier reserves the right to amend Prices at any time; price changes apply to orders placed after the date the amended price list is published and shall not apply retroactively to orders already confirmed."),
+    clauseNode(h, "ra.s4.prices", LawyerChanges.standardClauseText("ra", "ra.s4.prices", data)),
     h.h3("Payment"),
-    clauseNode(h, "ra.s4.payment", "The Reseller shall pay for all ordered Products by bank transfer in "+data.curr+", within "+data.pay+" days from the invoice date. In the event of late payment, the Supplier is entitled to charge statutory interest, reminder fees, and collection costs. The Supplier also has the right to withhold further deliveries until full payment has been received."),
+    clauseNode(h, "ra.s4.payment", LawyerChanges.standardClauseText("ra", "ra.s4.payment", data)),
     ...flushAnchored(h, "ra.s4.payment"),
     h.h3("Credit Assessment and Credit Limit"),
-    clauseNode(h, "ra.s4.credit", "The Supplier shall determine, at its sole discretion, whether to extend credit to the Reseller and the credit limit applicable (\u201cCredit Limit\u201d). The Credit Limit shall be communicated to the Reseller in writing and may be adjusted at any time upon no less than seven (7) days\u2019 written notice, except where the Supplier has reasonable grounds to suspect the Reseller\u2019s insolvency, in which case the Supplier may reduce or withdraw the Credit Limit with immediate effect. Credit Limit: "+(data.credit||"as agreed in writing")+"."),
+    clauseNode(h, "ra.s4.credit", LawyerChanges.standardClauseText("ra", "ra.s4.credit", data)),
     h.h3("Title Retention"),
-    clauseNode(h, "ra.s4.title", "Title to all delivered Products shall remain vested in the Supplier until full payment of the purchase price has been received. In the event of the Reseller\u2019s insolvency, the Supplier has the right to reclaim unpaid Products without delay."),
+    clauseNode(h, "ra.s4.title", LawyerChanges.standardClauseText("ra", "ra.s4.title", data)),
     // §5
     h.h1("5   Reseller\u2019s Sales and Brand Compliance"),
-    h.par("The Reseller is recommended, but not obligated, to adhere to the Suggested Retail Price (SRP) provided by the Supplier. The Reseller is free to set its own retail prices, provided that such practices comply with all applicable competition and antitrust laws."),
-    h.par("The Reseller shall market and sell the Products in a professional manner consistent with the Supplier\u2019s brand guidelines. The Reseller shall not modify the Products, their packaging, or any labelling without the prior written consent of the Supplier."),
-    clauseNode(h, "ra.s5.warranty", "The Reseller shall not misrepresent the scope, duration, or terms of the Supplier\u2019s standard warranty to end customers. The Reseller is free to offer end customers a commercial guarantee that exceeds the Supplier\u2019s standard warranty; any such additional guarantee is the Reseller\u2019s own commercial commitment and shall be fulfilled entirely at the Reseller\u2019s cost.", [{t:"Warranty representations. ",b:true}]),
-    h.par([{t:"Marketing material approval. ",b:true},"Where marketing materials use the Supplier\u2019s trademarks, logos, or product claims, the Reseller shall submit such materials to the Supplier for approval prior to publication. The Supplier shall approve or provide comments within five (5) business days. If the Supplier does not respond within this period, the material shall be deemed approved for use in the Territory."]),
+    clauseItemsNode(h, "ra.s5.p1", "The Reseller is recommended, but not obligated, to adhere to the Suggested Retail Price (SRP) provided by the Supplier. The Reseller is free to set its own retail prices, provided that such practices comply with all applicable competition and antitrust laws.", undefined),
+    clauseItemsNode(h, "ra.s5.p2", "The Reseller shall market and sell the Products in a professional manner consistent with the Supplier\u2019s brand guidelines. The Reseller shall not modify the Products, their packaging, or any labelling without the prior written consent of the Supplier.", undefined),
+    clauseNode(h, "ra.s5.warranty", LawyerChanges.standardClauseText("ra", "ra.s5.warranty", data), [{t:"Warranty representations. ",b:true}]),
+    clauseItemsNode(h, "ra.s5.p3", [{t:"Marketing material approval. ",b:true},"Where marketing materials use the Supplier\u2019s trademarks, logos, or product claims, the Reseller shall submit such materials to the Supplier for approval prior to publication. The Supplier shall approve or provide comments within five (5) business days. If the Supplier does not respond within this period, the material shall be deemed approved for use in the Territory."], undefined),
     // §6
     h.h1("6   Compliance with Laws"),
-    clauseNode(h, "ra.s6.compliance", "Each Party shall comply with all applicable laws, regulations, business ethics, and industry standards, including: anti-bribery and anti-corruption laws; competition and antitrust laws; consumer protection and product safety laws; customs and export control laws; and sustainability and labour laws."),
-    h.par([{t:"Anti-grey market and anti-counterfeiting. ",b:true},"The Reseller shall not knowingly purchase, sell, or distribute Products sourced outside the Supplier\u2019s authorised supply chain. If the Reseller encounters or reasonably suspects the presence of grey market or counterfeit products in the Territory, the Reseller shall promptly notify the Supplier in writing and shall cooperate with the Supplier in any investigation or enforcement action at the Supplier\u2019s cost."]),
+    clauseNode(h, "ra.s6.compliance", LawyerChanges.standardClauseText("ra", "ra.s6.compliance", data)),
+    clauseItemsNode(h, "ra.s6.p1", [{t:"Anti-grey market and anti-counterfeiting. ",b:true},"The Reseller shall not knowingly purchase, sell, or distribute Products sourced outside the Supplier\u2019s authorised supply chain. If the Reseller encounters or reasonably suspects the presence of grey market or counterfeit products in the Territory, the Reseller shall promptly notify the Supplier in writing and shall cooperate with the Supplier in any investigation or enforcement action at the Supplier\u2019s cost."], undefined),
     // §7
     h.h1("7   Reporting"),
-    clauseNode(h, "ra.s7.reporting", "The Reseller shall provide the Supplier with sell-through reports on a monthly basis, no later than ten (10) calendar days after the end of each calendar month. Each Sell-Through Report shall include: (i) units sold per Product SKU during the month; (ii) current closing inventory per SKU; and (iii) any significant developments in market conditions relevant to the Products."),
-    hasMDFra ? h.par([{t:"MDF eligibility linked to reporting. ",b:true},"Receipt of accurate and timely Sell-Through Reports is a condition for the Reseller\u2019s eligibility for Market Development Funds (MDF) in the following period. If the Reseller fails to submit a Sell-Through Report within the period specified, the Supplier may withhold MDF payments for the relevant period until the report has been received and verified."]) : null,
+    clauseNode(h, "ra.s7.reporting", LawyerChanges.standardClauseText("ra", "ra.s7.reporting", data)),
+    hasMDFra ? clauseItemsNode(h, "ra.s7.p1", [{t:"MDF eligibility linked to reporting. ",b:true},"Receipt of accurate and timely Sell-Through Reports is a condition for the Reseller\u2019s eligibility for Market Development Funds (MDF) in the following period. If the Reseller fails to submit a Sell-Through Report within the period specified, the Supplier may withhold MDF payments for the relevant period until the report has been received and verified."], undefined) : null,
     // §8
     h.h1("8   Confidentiality"),
-    clauseNode(h, "ra.s8.confidentiality", "During the term of this Agreement, and for a period of three (3) years thereafter, the receiving Party undertakes not to disclose, without the disclosing Party\u2019s prior written consent, any Confidential Information regarding the disclosing Party\u2019s business, nor to use such information for any purpose other than the performance of its obligations under this Agreement."),
-    h.par("This confidentiality undertaking shall not apply to information that the receiving Party can prove it learned of in a manner other than through this Agreement, or which is or becomes public knowledge other than through a breach of this Agreement. Nor does this undertaking apply where the receiving Party is required to disclose information in accordance with any law, enactment, stock market regulation, or decision by a governmental authority or court."),
+    clauseNode(h, "ra.s8.confidentiality", LawyerChanges.standardClauseText("ra", "ra.s8.confidentiality", data)),
+    clauseItemsNode(h, "ra.s8.p1", "This confidentiality undertaking shall not apply to information that the receiving Party can prove it learned of in a manner other than through this Agreement, or which is or becomes public knowledge other than through a breach of this Agreement. Nor does this undertaking apply where the receiving Party is required to disclose information in accordance with any law, enactment, stock market regulation, or decision by a governmental authority or court.", undefined),
     // §9
     h.h1("9   GDPR and Data Protection"),
-    h.par("Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. The Parties shall enter into a Data Processing Agreement (DPA) if personal data is shared or processed by one Party on behalf of the other. Data breaches must be reported to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery."),
+    clauseItemsNode(h, "ra.s9.p1", "Both Parties agree to comply with the General Data Protection Regulation (GDPR) (EU 2016/679) and any applicable national implementing legislation. The Parties shall enter into a Data Processing Agreement (DPA) if personal data is shared or processed by one Party on behalf of the other. Data breaches must be reported to IMY (Integritetsskyddsmyndigheten) within seventy-two (72) hours of discovery.", undefined),
     // §10
     h.h1("10   Limitation of Liability"),
-    clauseNode(h, "ra.liability_indirect", cl("ra.liability_indirect")),
-    clauseNode(h, "ra.s10.cap", "The aggregate liability of either Party in any twelve (12) month period shall not exceed the total amount paid or payable by the Reseller for the Products during the preceding twelve (12) months."),
-    h.par("Nothing in this Agreement shall limit either Party\u2019s liability for: (i) death or personal injury caused by negligence; (ii) fraud or fraudulent misrepresentation; or (iii) any other liability that cannot be limited or excluded under applicable law."),
-    clauseNode(h, "ra.warranty_asis", cl("ra.warranty_asis")),
+    clauseNode(h, "ra.liability_indirect", LawyerChanges.standardClauseText("ra", "ra.liability_indirect", data)),
+    clauseNode(h, "ra.s10.cap", LawyerChanges.standardClauseText("ra", "ra.s10.cap", data)),
+    clauseItemsNode(h, "ra.s10.p1", "Nothing in this Agreement shall limit either Party\u2019s liability for: (i) death or personal injury caused by negligence; (ii) fraud or fraudulent misrepresentation; or (iii) any other liability that cannot be limited or excluded under applicable law.", undefined),
+    clauseNode(h, "ra.warranty_asis", LawyerChanges.standardClauseText("ra", "ra.warranty_asis", data)),
     h.h3("IP and Product Liability Indemnity"),
-    clauseNode(h, "ra.s10.ip", "The Supplier warrants that, to its knowledge, the sale of the Products in the Territory does not infringe any third-party intellectual property rights. If the Reseller receives a third-party IP claim relating to the Products as supplied, the Supplier shall indemnify the Reseller against finally determined liability, damages, and reasonable legal costs, provided the Reseller: (i) gives prompt written notice; (ii) makes no admission of liability without the Supplier\u2019s prior written consent; and (iii) provides reasonable cooperation at the Supplier\u2019s cost. The Supplier\u2019s indemnity does not cover claims arising from the Reseller\u2019s own modifications to the Products or warranties given by the Reseller beyond the Supplier\u2019s standard warranty."),
+    clauseNode(h, "ra.s10.ip", LawyerChanges.standardClauseText("ra", "ra.s10.ip", data)),
     // §11
     h.h1("11   Audit Rights"),
-    clauseNode(h, "ra.s11.audit", "To ensure compliance with the terms of this Agreement, the Reseller shall, upon receiving at least fourteen (14) days\u2019 prior written notice, grant the Supplier or its appointed representatives reasonable access to relevant sales reports, inventory records, and other documentation as may be reasonably required to verify compliance. Audits shall not be conducted more than once per calendar year, unless there is reasonable documented suspicion of material non-compliance. If an audit reveals material non-compliance, the Reseller shall remedy it within thirty (30) days of written notice. Failure to remedy constitutes a material breach."),
+    clauseNode(h, "ra.s11.audit", LawyerChanges.standardClauseText("ra", "ra.s11.audit", data)),
     // §12
     h.h1("12   Notices"),
-    h.par("Any notice required under this Agreement to be in writing shall be sent to the registered addresses of the Parties or as later updated in writing. Notice shall be deemed received: (i) if delivered by courier, upon delivery; (ii) if sent by registered letter, five (5) business days after posting; and (iii) if sent by email, at the time of transmission, if receipt is confirmed by the recipient Party or if the transmitting Party also sent the notice by registered letter the same day. Written confirmation showing that a notice has been delivered by courier or sent by registered letter shall constitute proof of receipt. Address changes must be communicated within fourteen (14) calendar days."),
+    clauseItemsNode(h, "ra.s12.p1", "Any notice required under this Agreement to be in writing shall be sent to the registered addresses of the Parties or as later updated in writing. Notice shall be deemed received: (i) if delivered by courier, upon delivery; (ii) if sent by registered letter, five (5) business days after posting; and (iii) if sent by email, at the time of transmission, if receipt is confirmed by the recipient Party or if the transmitting Party also sent the notice by registered letter the same day. Written confirmation showing that a notice has been delivered by courier or sent by registered letter shall constitute proof of receipt. Address changes must be communicated within fourteen (14) calendar days.", undefined),
     // §13
     h.h1("13   Term and Termination"),
-    clauseNode(h, "ra.s13.term", "This Agreement shall enter into force when signed by both Parties and shall remain in force until terminated by either Party upon the notice period stated in Appendix 1. If no notice period is specified in Appendix 1, the notice period shall be ninety (90) days."),
-    h.par("Upon termination, neither Party shall be entitled to any compensation or indemnity, except for payment of any outstanding and due invoices. Following termination, the Reseller remains obligated to adhere to the terms of this Agreement for any remaining Product inventory until sold or returned."),
+    clauseNode(h, "ra.s13.term", LawyerChanges.standardClauseText("ra", "ra.s13.term", data)),
+    clauseItemsNode(h, "ra.s13.p1", "Upon termination, neither Party shall be entitled to any compensation or indemnity, except for payment of any outstanding and due invoices. Following termination, the Reseller remains obligated to adhere to the terms of this Agreement for any remaining Product inventory until sold or returned.", undefined),
     h.h3("13B   No compensation on termination"),
-    clauseNode(h, "ra.s13b.no_compensation", "The Reseller buys and resells the Products in its own name and for its own account. The Reseller is a reseller and not a commercial agent. The Reseller has no right to severance pay, goodwill compensation, or any other termination indemnity when this Agreement ends, whether by notice, expiry, or termination for cause. This clause applies notwithstanding the Swedish Commercial Agency Act (lag (1991:351) om handelsagentur) and Directive 86/653/EEC."),
+    clauseNode(h, "ra.s13b.no_compensation", LawyerChanges.standardClauseText("ra", "ra.s13b.no_compensation", data)),
     h.h3("13C   After the agreement ends"),
-    clauseNode(h, "ra.s13c.after_end", "When this Agreement ends, for any reason, the Supplier has no obligation to buy back, repurchase, or otherwise take back the Reseller’s stock or inventory. There is no non-compete after the term of this Agreement."),
+    clauseNode(h, "ra.s13c.after_end", LawyerChanges.standardClauseText("ra", "ra.s13c.after_end", data)),
     // §14
     h.h1("14   Premature Termination"),
-    h.par("Either Party shall be entitled to terminate this Agreement with immediate effect where: (i) the other Party has committed a material breach; (ii) the other Party fails to cure a remediable breach within thirty (30) calendar days of written notice; or (iii) the other Party is declared bankrupt, commences company reorganisation, or can otherwise be deemed insolvent."),
-    h.par([{t:"Material breach by the Reseller includes, without limitation: ",b:true},"failure to pay in accordance with agreed payment terms; exceeding the Credit Limit without consent; breach of confidentiality; unauthorised sub-reselling; modification of Products without consent; misrepresentation of the Supplier\u2019s warranty to end customers; and persistent non-compliance following written notice."]),
-    h.par("Following termination due to material breach, the breaching Party shall immediately cease all activities under this Agreement. In the case of the Reseller\u2019s breach, the Reseller shall, at the Supplier\u2019s discretion, either resell all unsold Products to the Supplier at the Reseller\u2019s expense or continue to sell such Products subject to the terms of this Agreement until all inventory is depleted."),
+    clauseItemsNode(h, "ra.s14.p1", "Either Party shall be entitled to terminate this Agreement with immediate effect where: (i) the other Party has committed a material breach; (ii) the other Party fails to cure a remediable breach within thirty (30) calendar days of written notice; or (iii) the other Party is declared bankrupt, commences company reorganisation, or can otherwise be deemed insolvent.", undefined),
+    clauseItemsNode(h, "ra.s14.p2", [{t:"Material breach by the Reseller includes, without limitation: ",b:true},"failure to pay in accordance with agreed payment terms; exceeding the Credit Limit without consent; breach of confidentiality; unauthorised sub-reselling; modification of Products without consent; misrepresentation of the Supplier\u2019s warranty to end customers; and persistent non-compliance following written notice."], undefined),
+    clauseItemsNode(h, "ra.s14.p3", "Following termination due to material breach, the breaching Party shall immediately cease all activities under this Agreement. In the case of the Reseller\u2019s breach, the Reseller shall, at the Supplier\u2019s discretion, either resell all unsold Products to the Supplier at the Reseller\u2019s expense or continue to sell such Products subject to the terms of this Agreement until all inventory is depleted.", undefined),
     // §15
     h.h1("15   Force Majeure"),
-    clauseNode(h, "ra.s15.fm", "Neither Party shall be deemed in default of this Agreement to the extent that performance of obligations (excluding payment obligations) is delayed or prevented by reason of war, pandemic, strike, fire, natural disaster, civil disturbance, act or ordinance of any governmental authority, terrorism, or any other cause genuinely beyond the reasonable control of such Party and not foreseeable at the time of signing (a \u201cForce Majeure Event\u201d). In the event that either Party\u2019s performance is affected by a Force Majeure Event, such Party shall promptly notify the other Party in writing, providing details of the event and an estimate of the period during which the delay or prevention shall continue. Both Parties agree to use their best efforts to alleviate and mitigate the effects of the Force Majeure Event as promptly as possible. If the Force Majeure Event continues for more than thirty (30) calendar days, either Party may terminate upon written notice without further liability, except for obligations accrued prior to the Force Majeure Event."),
+    clauseNode(h, "ra.s15.fm", LawyerChanges.standardClauseText("ra", "ra.s15.fm", data)),
     // §16
     h.h1("16   Miscellaneous"),
-    h.par([{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."]),
-    h.par([{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Contract & Notices contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."]),
-    h.par([{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party."]),
-    h.par([{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."]),
-    clauseNode(h, "ra.antibribery", cl("ra.antibribery"), [{t:"Anti-bribery. ",b:true}]),
-    h.par([{t:"Survival. ",b:true},"Sections 8 (confidentiality), 10 (limitation of liability), 13 (term and termination), 14 (premature termination), and 17 (governing law and disputes) survive termination or expiry of this Agreement."]),
+    clauseItemsNode(h, "ra.s16.p1", [{t:"No partnership. ",b:true},"Nothing in this Agreement constitutes a partnership, joint venture, or relationship of principal and agent between the Parties."], undefined),
+    clauseItemsNode(h, "ra.s16.p2", [{t:"Entire agreement and amendments. ",b:true},"This Agreement supersedes all previous agreements on its subject matter and may only be amended in writing signed by duly authorised representatives of both Parties. Any amendment to, or updated version of, this Agreement, and any notice or other communication under it, shall be sent to the Reseller’s Contract & Notices contact set out in Appendix 1 (Reseller Contact Points) or, if none is designated, to its Main / General contact. The Reseller shall keep that address valid and actively monitored throughout the term, shall notify the Supplier without delay of any change to it, and acknowledges that communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."], undefined),
+    clauseItemsNode(h, "ra.s16.p3", [{t:"Assignment. ",b:true},"Neither Party may assign its rights and/or obligations without the prior written consent of the other Party."], undefined),
+    clauseItemsNode(h, "ra.s16.p4", [{t:"Invalidity. ",b:true},"Should any clause in this Agreement or part thereof be void or invalid, the other provisions of the Agreement shall remain in force, and the clause may be amended to the extent such invalidity materially affects the rights or obligations of either Party under this Agreement."], undefined),
+    clauseNode(h, "ra.antibribery", LawyerChanges.standardClauseText("ra", "ra.antibribery", data), [{t:"Anti-bribery. ",b:true}]),
+    clauseItemsNode(h, "ra.s16.p5", [{t:"Survival. ",b:true},"Sections 8 (confidentiality), 10 (limitation of liability), 13 (term and termination), 14 (premature termination), and 17 (governing law and disputes) survive termination or expiry of this Agreement."], undefined),
 
     // §17
     h.h1("17   Governing Law",{keepNext:true}),
-    clauseNode(h, "ra.s17.law", "This Agreement is governed by and construed in accordance with Swedish law. Disputes shall first be resolved through good-faith negotiation. If not resolved within thirty (30) days, the Parties agree to SCC mediation. If mediation fails, the dispute shall be finally settled by SCC arbitration. Seat: Malm\u00f6. Language: English.", null, {keepNext:true}),
+    clauseNode(h, "ra.s17.law", LawyerChanges.standardClauseText("ra", "ra.s17.law", data), null, {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")):"[Authorised signatory / name]"),h.LITE,h.GREY,vendoraStamp(data)),
@@ -24696,7 +24692,7 @@ async function buildRA(overrideData) {
     annexNode(h, "1B", null),
     h.sp(),
     h.h2("C   Vendora Contact Points"),
-    h.par("For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:"),
+    clauseItemsNode(h, "ra.appendix.p1", "For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:", undefined),
     h.fldTbl([
       h.fldRow("Orders (if not placed via the web portal)","orders@vendora.se"),
       h.fldRow("Invoicing & payment queries","invoice@vendora.se"),
@@ -24708,7 +24704,7 @@ async function buildRA(overrideData) {
     ]),
     h.sp(),
     h.h2("D   Reseller Contact Points"),
-    h.par("The Reseller's contact persons for the following functions:"),
+    clauseItemsNode(h, "ra.appendix.p2", "The Reseller's contact persons for the following functions:", undefined),
     h.fldTbl(resellerContactRows(h, data)),
     h.note("The Contract & Notices contact set out in Section A above is the address to which all amendments, updated versions, and notices under this Agreement are sent (see section 16). The Reseller shall keep it active and monitored at all times."),
     h.pgBrk(),
@@ -24716,8 +24712,8 @@ async function buildRA(overrideData) {
     annexNode(h, "2", "All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
     h.pgBrk(),
     h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS",h.TEAL),h.sp(),
-    h.par("The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail."),
-    h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
+    clauseItemsNode(h, "ra.appendix.p3", "The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail.", undefined),
+    clauseItemsNode(h, "ra.appendix.p4", "The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed.", undefined),
     h.sp(),
   ];
   var GTC=[["Warranty",gtcWarrantyText("12 months from invoice date. Claims via rma@vendora.se.")],["Shipping",(data.inco&&data.inco!=="EXW")?(data.inco+" "+(data.incoplace||"")).trim():"EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
@@ -24738,6 +24734,7 @@ async function buildRA(overrideData) {
 async function buildRB(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readRBForm();
+  data._type='rb';
   if (!data.name) { alert("Please enter the Reseller name."); return; }
   window._clauseOverrides = (data && data.clauseOverrides) || {};
   beginLawyerDoc(data);
@@ -24751,16 +24748,16 @@ async function buildRB(overrideData) {
     new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:35,after:200},children:[h.t("VENDORA NORDIC AB  —  "+(data.name||"[THE RESELLER]"),{bold:true,size:28,color:h.NAVY})]}),
     h.fldTbl([h.fldRow("Agreement date",dt,2400,7106),h.fldRow("Products / brands",data.products,2400,7106),h.fldRow("Territory (active sales area)",data.terr,2400,7106),h.fldRow("Shipping",data.inco+" Vendora Nordic AB, Lomma, Sweden",2400,7106),h.fldRow("Payment",data.curr+", "+data.pay+" days net",2400,7106),h.fldRow("Notice period",data.notice+" days",2400,7106)].filter(Boolean)),
     h.pgBrk(),
-    h.h1("1   Parties"),h.par("This Reseller Agreement is made between:"),h.sp(),
+    h.h1("1   Parties"),clauseItemsNode(h, "rb.s1.p1", "This Reseller Agreement is made between:", undefined),h.sp(),
     h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladugårdsvägen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:'(the “Supplier”)',i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"—")+" — "+(data.country||"—")),(data.addr?h.par(data.addr):h.sp()),h.sp(),h.par([{t:'(the “Reseller”)',i:true}])]),
     h.sp(),
-    h.h1("1   Appointment"),h.par("Vendora grants the Reseller a non-exclusive right to actively market and sell "+( data.products||"the Products")+" in "+(data.terr||"the Territory")+". Within the EU/EEA, passive sales cannot be restricted. No sub-resellers without prior written consent."),
-    h.h1("2   Orders and Payment"),clauseNode(h, "rb.s2.payment", "Orders through Vendora’s designated channel. Payment: "+data.pay+" days net in "+data.curr+". Late payment triggers statutory interest. Title remains with Vendora until full payment."),
-    h.h1("3   Compliance and Brand"),h.par("Each Party complies with all applicable laws. The Reseller shall not misrepresent Vendora’s standard warranty. Any additional warranty the Reseller offers end customers is solely the Reseller’s own commitment and cost. The Reseller shall promptly notify Vendora of any suspected counterfeit or grey market products."),
-    h.h1("4   Confidentiality"),h.par("Each Party keeps the other’s Confidential Information confidential. Obligation continues 3 years after termination."),
-    h.h1("5   Limitation of Liability"),h.par("Neither Party liable for indirect or consequential damages. Aggregate liability capped at 12 months’ purchases. Vendora warrants no IP infringement and indemnifies the Reseller for finally determined IP claims relating to the Products as supplied."),
-    h.h1("6   Term and Termination"),clauseNode(h, "rb.s6.term", "Terminable by either party on "+data.notice+" days’ written notice. Immediate termination for uncured material breach or insolvency."),
-    h.h1("7   Governing Law",{keepNext:true}),h.par("Swedish law. SCC arbitration, seat Malmö, language English.",{keepNext:true}),
+    h.h1("1   Appointment"),clauseItemsNode(h, "rb.s1.p2", "Vendora grants the Reseller a non-exclusive right to actively market and sell "+( data.products||"the Products")+" in "+(data.terr||"the Territory")+". Within the EU/EEA, passive sales cannot be restricted. No sub-resellers without prior written consent.", undefined),
+    h.h1("2   Orders and Payment"),clauseNode(h, "rb.s2.payment", LawyerChanges.standardClauseText("rb", "rb.s2.payment", data)),
+    h.h1("3   Compliance and Brand"),clauseItemsNode(h, "rb.s3.p1", "Each Party complies with all applicable laws. The Reseller shall not misrepresent Vendora’s standard warranty. Any additional warranty the Reseller offers end customers is solely the Reseller’s own commitment and cost. The Reseller shall promptly notify Vendora of any suspected counterfeit or grey market products.", undefined),
+    h.h1("4   Confidentiality"),clauseItemsNode(h, "rb.s4.p1", "Each Party keeps the other’s Confidential Information confidential. Obligation continues 3 years after termination.", undefined),
+    h.h1("5   Limitation of Liability"),clauseItemsNode(h, "rb.s5.p1", "Neither Party liable for indirect or consequential damages. Aggregate liability capped at 12 months’ purchases. Vendora warrants no IP infringement and indemnifies the Reseller for finally determined IP claims relating to the Products as supplied.", undefined),
+    h.h1("6   Term and Termination"),clauseNode(h, "rb.s6.term", LawyerChanges.standardClauseText("rb", "rb.s6.term", data)),
+    h.h1("7   Governing Law",{keepNext:true}),clauseItemsNode(h, "rb.s7.p1", "Swedish law. SCC arbitration, seat Malmö, language English.", {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
     h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY,vendoraStamp(data)),
@@ -24772,7 +24769,7 @@ async function buildRB(overrideData) {
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
     h.sp(),
     h.h2("Vendora Contact Points"),
-    h.par("For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:"),
+    clauseItemsNode(h, "rb.appendix.p1", "For matters not handled through the Supplier’s web portal, the Reseller may use the following contact points:", undefined),
     h.fldTbl([
       h.fldRow("Orders (if not placed via the web portal)","orders@vendora.se"),
       h.fldRow("Invoicing & payment queries","invoice@vendora.se"),
@@ -24784,7 +24781,7 @@ async function buildRB(overrideData) {
     ]),
     h.sp(),
     h.h2("Reseller Contact Points"),
-    h.par("The Reseller's contact persons for the following functions:"),
+    clauseItemsNode(h, "rb.appendix.p2", "The Reseller's contact persons for the following functions:", undefined),
     h.fldTbl(resellerContactRows(h, data)),
     h.note("The Contract & Notices contact set out above is the address to which all amendments to, and updated versions of, this Agreement, and any notice or other communication under it, are sent — or the Main / General contact if none is given. The Reseller shall keep that address valid and actively monitored throughout the term and notify the Supplier of any change; communications sent to it are deemed duly received. The Supplier may rely on this address for all such communications without awaiting any acknowledgement or signature; where a particular document requires signature, it shall be signed by a person authorised to bind the Reseller."),
     h.pgBrk(),
@@ -24792,8 +24789,8 @@ async function buildRB(overrideData) {
     annexNode(h, "2", "All returns require a valid RMA/RETURN number from rma@vendora.se. Valid 10 days from issue. Warranty claims by credit invoice. Stock rotation: new, unopened condition, within 6 months, replacement order required simultaneously."),
     h.pgBrk(),
     h.appHdr("APPENDIX 3 — VENDORA GENERAL TERMS",h.TEAL),h.sp(),
-    h.par("The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail."),
-    h.par("The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed."),
+    clauseItemsNode(h, "rb.appendix.p3", "The Supplier’s full General Terms and Conditions form part of this Agreement and are incorporated by reference. The current version is available at https://www.reseller.vendora.se/en/info/terms-reseller/. The summary below is provided for convenience only; in the event of any conflict between this summary and the full General Terms and Conditions, the full General Terms and Conditions shall prevail.", undefined),
+    clauseItemsNode(h, "rb.appendix.p4", "The version of the General Terms and Conditions in force at the date of signing applies to this Agreement. The Supplier may update the General Terms and Conditions from time to time; any updated version applies to orders placed after the Reseller has been notified of the update, and shall not apply retroactively to orders already confirmed.", undefined),
     h.sp(),
   ];
   var GTC=[["Warranty",gtcWarrantyText("12 months from invoice date. Claims via rma@vendora.se.")],["Shipping",(data.inco&&data.inco!=="EXW")?(data.inco+" "+(data.incoplace||"")).trim():"EXW Lomma. DHL / Schenker / UPS. Free shipping above threshold on vendora.se."],["Inspection","Discrepancies to logistics@vendora.se within 14 days. Transport damage within 7 days."],["Payment","Invoice or credit card. Queries to invoice@vendora.se within 14 days."],["Contacts","sales@vendora.se • rma@vendora.se • logistics@vendora.se • invoice@vendora.se"]];
@@ -24865,26 +24862,9 @@ function getVendoraData(prefix) {
 }
 
 function generateInviteLink(prefix) {
-  var invEmail = gv(prefix+"_inv_email");
-  if (!invEmail) { alert("Please enter the contact email first."); return; }
-  var invName  = gv(prefix+"_inv_name");
-  var d = getVendoraData(prefix);
-
-  var btns = document.querySelectorAll(".btn-invite");
-  btns.forEach(function(b){ b.disabled=true; b.textContent="Sending…"; });
-
-  // When signed in, create a linked 'invited' record first so the counterparty's submission
-  // updates this same archive row (auto-linking). Best-effort; falls back to a plain invite.
-  if (window._archiveEnabled && window._authUser) {
-    fetch("/api/invites", {method:"POST",headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ type:d._type, counterpartyName:(invName||null), counterpartyEmail:invEmail, data:d })
-    }).then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(res){ if (res && res.id){ d._aid=res.id; d._atok=res.token; } proceedInvite(d, invEmail, invName, btns); })
-      .catch(function(){ proceedInvite(d, invEmail, invName, btns); });
-  } else {
-    proceedInvite(d, invEmail, invName, btns);
-  }
+  wfInvite(prefix).catch(function(e){alert(e.message);});
 }
+
 function proceedInvite(d, invEmail, invName, btns) {
   // Permanent fallback link (hash-encoded) so it works even if the short-link server fails.
   var fallbackUrl = window.location.origin + "/#fill=" + (encodeData(d)||"");
@@ -25029,6 +25009,10 @@ function checkFillMode() {
   var encoded = hash.slice(6);
   var d = decodeData(encoded);
   if (!d) return;
+  if(d._sentVersion){
+    fetch('/api/public-invites/'+d._aid+'?token='+encodeURIComponent(d._atok)+'&version='+encodeURIComponent(d._sentVersion)).then(function(r){if(!r.ok)throw new Error('Kundlänken är ogiltig eller äldre. Kontakta Vendora.');return r.json();}).then(renderFillMode).catch(function(e){alert(e.message);});
+    return;
+  }
   renderFillMode(d);
 }
 
@@ -25267,6 +25251,13 @@ function renderFillMode(d) {
 
   // Store vendora data for later use
   window._fillData = d;
+  if(d._sentVersion){
+    var action=document.createElement('button');action.type='button';action.textContent='Ladda ned vårt anpassade avtalsutkast (.docx)';
+    action.style.cssText='padding:12px 18px;margin:12px 0';
+    action.onclick=function(){var snapshot=cloneData(d);snapshot.name=snapshot.name||'[Counterparty]';downloadAgreementData(d._type,snapshot);};
+    var shell=document.querySelector('.shell');if(shell)shell.insertBefore(action,shell.firstChild);
+  }
+
   window._fillIsDA = isDA;
 }
 
@@ -25379,7 +25370,7 @@ function showReviewMode(d) {
         + "<button class=\'cmp-btn active-keep\' id=\'keep_"+key+"\' onclick=\'resolveProposal(\""+key+"\",\"keep\")\'>Keep mine</button>"
         + "</span></div>";
       if (p.comment) ph += "<div class=\'cmp-comment\'>\u201c"+esc(p.comment)+"\u201d</div>";
-      window._negResolutions[key] = "keep"; // default: keep Vendora value
+      window._negResolutions[key] = null; // An explicit decision is required.
     });
     proposalCard.innerHTML = ph;
   }
@@ -25671,7 +25662,7 @@ function doSubmitFill() {
       // Store merged data and get short review link
       var reviewData = Object.assign({}, merged, {_review: true});
       delete reviewData._atok;   // keep _aid for linking, but never persist the capability token
-      var reviewUrl = window.location.origin + "/#review=" + (encodeData(reviewData)||"");
+      var reviewUrl = d._sentVersion ? window.location.origin+"/#workflow="+d._aid : window.location.origin + "/#review=" + (encodeData(reviewData)||"");
       // Hash-encoded URL is permanent — no server dependency, no override
 
       // If this invite was linked to an archive record, update that same row in place
@@ -25698,11 +25689,11 @@ function doSubmitFill() {
         var cpEmail = merged.sig_email || (merged.contacts && merged.contacts.mgmt && merged.contacts.mgmt.p && merged.contacts.mgmt.p.e) || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
         fetch("/api/agreements/" + d._aid + "/submit", {
           method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ token: d._atok, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
+          body: JSON.stringify({ token: d._atok, sentVersion:d._sentVersion, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
         }).then(readApi).then(function(res){
           if (!res.ok) { spin.style.display = "none"; alert(agreementErrorText(res.j, "Could not submit")); return; }
           doNotify();
-        }).catch(function(){ doNotify(); });
+        }).catch(function(){ spin.style.display="none"; alert("Kunde inte bekräfta att uppgifterna sparades. Försök igen; inga villkorsändringar godkänns automatiskt."); });
       } else {
         doNotify();
       }
@@ -26129,7 +26120,7 @@ function ovSetStatus(id, selEl){
 function ovUpload(id, input){
   if(!input.files||!input.files[0]) return;
   var file=input.files[0], m=document.getElementById("ovUp_"+id);
-  if(file.size>15*1024*1024){ m.style.color="#c0392b"; m.textContent="Max 15 MB"; input.value=""; return; }
+  if(file.size>UploadLimits.MAX_FILE_BYTES){ m.style.color="#c0392b"; m.textContent="Max 50 MB"; input.value=""; return; }
   m.style.color="var(--muted)"; m.textContent="uploading…";
   fetch("/api/agreements/"+id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name)},body:file})
     .then(function(r){ if(!r.ok) throw 0; return r.json(); })
@@ -26341,6 +26332,8 @@ function refreshEditing(id){
   if (!(window._editing && window._editing.id===id)) return;
   fetch("/api/agreements/"+id).then(function(r){ return r.json(); }).then(function(j){
     if (!j.agreement) return;
+    window._editing.revision = Number(j.agreement.workflow_revision||0);
+    if(j.agreement.workflow_state && window.wfRefresh) wfRefresh(id);
     window._editing.status = j.agreement.status;
     window._editing.signedAt = j.agreement.vendora_signed_at;
     window._editing.base = j.agreement.data || window._editing.base;
@@ -26355,7 +26348,7 @@ function sigPost(path, body){
 // Seller: preview the cover sheet, then send to the CEO.
 function requestCeoSignature(id){
   fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
-    var a=j.agreement, summary=buildCoverSummary(a.type, a.data||{});
+    var a=j.agreement, summary=a.workflow_summary||buildCoverSummary(a.type, a.data||{});
     var box=(sigOverlay(), document.getElementById("sigBox"));
     box.innerHTML = sigHeader("Send for signature", a, esc(window._signerName)+" gets this cover sheet by email and signs in the app. The agreement is locked while it waits.")
       + "<div style='margin-top:16px'>"+coverSheetHtml(summary)+"</div>"
@@ -26366,7 +26359,7 @@ function requestCeoSignature(id){
     document.getElementById("sigOverlay").style.display="block";
     document.getElementById("sigSendBtn").onclick=function(){
       var b=this, m=document.getElementById("sigMsg"); b.disabled=true; m.style.color="var(--muted)"; m.textContent="Sending…";
-      sigPost("/api/agreements/"+id+"/request-signature", {summary:summary}).then(function(x){
+      sigPost("/api/agreements/"+id+"/request-signature", {summary:summary,expectedRevision:a.workflow_revision}).then(function(x){
         m.style.color="#1e7e34";
         m.textContent = x.notified ? "Sent ✓ — "+window._signerName+" has been notified by email."
           : "Status set to “Awaiting CEO signature”, but the email could not be sent — let "+firstName(window._signerName)+" know. "+(x.mailReason||"");
@@ -26386,7 +26379,7 @@ function openSigningView(id){
 function renderSigningView(a){
   var d=a.data||{}; d._type=d._type||a.type;
   window._signRow=a; window._signData=d; window._aiMessages=window._aiMessages||[];
-  var summary=buildCoverSummary(a.type, d);
+  var summary=a.workflow_summary||buildCoverSummary(a.type, d);
   var pending = a.status==="pending_signature";
   var signedV = !!a.vendora_signed_at && (a.status==="vendora_signed"||a.status==="sent"||a.status==="signed");
   var mine = !!(window._authUser && a.created_by===window._authUser.id);
@@ -26489,17 +26482,20 @@ function archiveEdit(id){
     var a=j.agreement, data=a.data||{}, type=a.type;
     switchTab(type==="da"?0:(type==="rb"?2:1));
     hydrateForm(type, data);
-    window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at };
+    if(window._editing && window._editing.id!==a.id && window.wfReset) wfReset();
+    window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at, revision:Number(a.workflow_revision||0), workflow:!!a.workflow_state };
     window._lawyerState = data;
     window._clauseOverrides = data.clauseOverrides || {};
     var bar=document.getElementById("editBar"); bar.style.display="flex";
     document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
     document.getElementById("editBarStatus").textContent = "";
     apShowPanel(a);
+    if(a.workflow_state && window.wfRefresh) wfRefresh(a.id);
     window.scrollTo(0,0);
   }).catch(function(e){ alert("Could not open that agreement."); });
 }
 function exitEdit(){
+  if(window.wfReset) wfReset();
   window._editing=null;
   window._lawyerState=null;
   window._clauseOverrides={};
@@ -26561,11 +26557,11 @@ function apLoadFiles(){
 function apUpload(input){
   var e=window._editing; if(!e||!input.files||!input.files[0]) return;
   var file=input.files[0];
-  if(file.size>15*1024*1024){ document.getElementById("apUploadMsg").style.color="#c0392b"; document.getElementById("apUploadMsg").textContent="File too large (max 15 MB)."; input.value=""; return; }
+  if(file.size>UploadLimits.MAX_FILE_BYTES){ document.getElementById("apUploadMsg").style.color="#c0392b"; document.getElementById("apUploadMsg").textContent="File too large (max 50 MB)."; input.value=""; return; }
   var msg=document.getElementById("apUploadMsg"); msg.style.color="var(--muted)"; msg.textContent="Uploading…";
   fetch("/api/agreements/"+e.id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name)},body:file})
     .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-    .then(function(res){ msg.style.color="#1e7e34"; msg.textContent="Uploaded ✓ — status set to Signed";
+    .then(function(res){ msg.style.color="#1e7e34"; msg.textContent="Uploaded ✓ — verify the returned signature before marking the agreement fully signed";
       if(res.status){ document.getElementById("apStatus").value=res.status; e.status=res.status; }
       apLoadFiles();
     })
@@ -26606,12 +26602,13 @@ function updateArchive(editing, formData, showStatus){
   // Preserve the record's current status (don't downgrade a signed/sent record on an edit-save).
   var keepStatus = editing.status || "generated";
   return fetch("/api/agreements/"+editing.id, {method:"PUT",headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:keepStatus })
+    body: JSON.stringify({ counterpartyName:(merged.name||null), counterpartyEmail:cpEmail, data:merged, status:keepStatus, expectedRevision:editing.revision })
   }).then(readApi).then(function(res){
     if (!res.ok) throw new Error(agreementErrorText(res.j, "Save failed"));
-    editing.base = merged;
+    editing.base = res.j.data || merged;
+    if(res.j.revision!==undefined)editing.revision=res.j.revision;
     if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
-  }).catch(function(e){ if(st){ st.style.color="#c0392b"; st.textContent=(e && e.message) || "Save failed"; } });
+  }).catch(function(e){ if(st){ st.style.color="#c0392b"; st.textContent=(e && e.message) || "Save failed"; } throw e; });
 }
 function saveEditOnly(){
   var e=window._editing; if(!e) return;
@@ -26714,6 +26711,7 @@ function verifyUploadedDocument(){
 }
 function getAiContext(){
   if (window._signData) return window._signData;   // the CEO asking about an agreement awaiting signature
+  if (window._editing && window._editing.workflow) return window._editing.base;
   if (window._reviewData) return window._reviewData;
   if (window._editing && window._editing.base) return window._editing.base;
   if (window._lastBuild && window._lastBuild.data) return window._lastBuild.data;
@@ -26832,7 +26830,13 @@ function writableAgreement(){
   if (window._lawyerState && window._lawyerState._type) return window._lawyerState;
   return {};
 }
-function applyApproved(list){
+async function applyApproved(list){
+  if(window._editing && window._editing.workflow){
+    var e=window._editing;
+    var response=await fetch("/api/workflow/"+e.id+"/apply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({changes:list,expectedRevision:e.revision})});
+    var saved=await response.json();if(!response.ok)throw new Error(saved.error||"Kunde inte spara");
+    await wfRefresh(e.id);return {data:saved.data,applied:list,rejected:[],conflicts:[]};
+  }
   var locked = window._signData || (typeof editingLocked === "function" && editingLocked());
   if (locked){ alert("This agreement is locked for the CEO's signature. Return it to the seller (or withdraw the request) to change the wording."); return null; }
   var LC = window.LawyerChanges;
@@ -26938,8 +26942,8 @@ function proposalPreview(p){
   if (!LC || !LC.describeProposal) return { ok:true, oldText:p.oldText || "", newText:p.op === "delete" ? "" : (p.newText || ""), errors:[] };
   return LC.describeProposal(ctx, p);
 }
-function approveOne(entry){
-  var result = applyApproved([entry.proposal]);
+async function approveOne(entry){
+  var result;try{result = await applyApproved([entry.proposal]);}catch(e){markApplyError(entry,[e.message]);return;}
   if (!result) return;
   if (result.rejected && result.rejected.length) {
     markApplyError(entry, result.rejected[0].errors);
@@ -26951,10 +26955,10 @@ function rejectOne(entry){
   dropOpen(entry);
   entry.card.remove();
 }
-function approveAllOpen(){
+async function approveAllOpen(){
   var open = (window._openProposals || []).slice();
   if (!open.length) return;
-  var result = applyApproved(open.map(function(x){ return x.proposal; }));
+  var result;try{result = await applyApproved(open.map(function(x){ return x.proposal; }));}catch(e){open.forEach(function(x){markApplyError(x,[e.message]);});return;}
   if (!result) return;
   var bad = {};
   (result.rejected || []).forEach(function(r){ bad[r.index] = r; });
@@ -27052,15 +27056,15 @@ function renderContractReviewCards(){
     var slot=document.getElementById("cr_slot_"+t); if(!slot || slot.innerHTML) return;
     var who=crCounterpartyWord(t);
     slot.innerHTML = "<div class='card'>"
-      + "<h2>&#9878;&#65039; Review the counterparty's own contract</h2>"
-      + "<div class='desc'>Upload their paper and choose the agreement type. The Contract Lawyer compares it only with that type's Vendora template and standard positions — deal-breakers, red flags, what to negotiate, what's fine and what's missing — with wording to send back.</div>"
-      + agreementTypeSelectHtml("cr_type_"+t)
+      + "<h2>&#9878;&#65039; Steg 1 · Jämför kundavtal och anpassa vårt avtal</h2>"
+      + "<div class='desc'>Valfritt: ladda upp kundens avtal. Advokaten visar skillnader och föreslår formuleringar i VÅRT avtal. Godkända anpassningar införs före första kundutskicket.</div>"
+      + "<input type='hidden' id='cr_type_"+t+"' value='"+(t==="da"?"distribution":"reseller")+"'>"
       + "<div class='f' style='margin-bottom:10px;max-width:520px'><label>Name this review <em>(optional — it's saved under Archive &rarr; Contract reviews)</em></label><input id='cr_name_"+t+"' maxlength='120' placeholder='e.g. Komplett — their reseller terms, Oct 2026'></div>"
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
-      + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Review against our agreement &rarr;</button>"
+      + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Jämför och föreslå anpassningar &rarr;</button>"
       + "<span id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted)'></span></div>"
-      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 15 MB. A full review of a real contract takes a few minutes — you can keep working meanwhile.</div>"
+      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 50 MB. A full review of a real contract takes a few minutes — approve or retain each proposal before sending the agreement.</div>"
       + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
   });
 }
@@ -27082,7 +27086,10 @@ async function zipEntryText(buf, wantName){
       if(method===0) return new TextDecoder().decode(data);
       if(method!==8) throw new Error("Unsupported .docx compression");
       var s=new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-      return await new Response(s).text();
+      var reader=s.getReader(),chunks=[],size=0;
+      try {while(true){var chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;if(size>UploadLimits.MAX_UNCOMPRESSED_BYTES)throw new Error("The unpacked document is too large to read safely.");chunks.push(chunk.value);}}
+      finally{await reader.cancel();}
+      return await new Blob(chunks).text();
     }
     p+=46+fl+el+cl;
   }
@@ -27097,6 +27104,7 @@ function docxXmlToText(xml){
 }
 async function docxToText(buf){ return docxXmlToText(await zipEntryText(buf,"word/document.xml")); }
 async function readContractFile(file){
+  if(file.size>UploadLimits.MAX_FILE_BYTES) throw new Error("File too large (max 50 MB).");
   var name=(file.name||"").toLowerCase();
   if(name.endsWith(".pdf") || file.type==="application/pdf"){
     var b64=await new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ res(String(fr.result).split(",")[1]||""); }; fr.onerror=function(){ rej(new Error("Could not read the file")); }; fr.readAsDataURL(file); });
@@ -27116,7 +27124,7 @@ async function buildOurAgreementText(type){
   var data=readForm(type); data._type=type;
   if(!data.name) data.name = type==="da" ? "[Supplier]" : "[Reseller]";
   var src = window._lawyerState || (window._editing && window._editing.base) || {};
-  if (!src._type || src._type === type) data = lawyerCarry(data);
+  // Benchmark text is the standard, not prior concessions. The server pins its own baseline for workflow cases.
   var fn = type==="da" ? buildDA : (type==="rb" ? buildRB : buildRA);
   var r=await fn(data); if(!r) throw new Error("Could not build Vendora's agreement");
   return docxToText(await r.blob.arrayBuffer());
@@ -27130,9 +27138,10 @@ async function runContractReview(type){
   msg.style.color="#c0392b";
   if(!family || !templateType){ msg.textContent="Choose the agreement type first."; return; }
   if(!file){ msg.textContent="Choose the counterparty's contract first (PDF, DOCX or TXT)."; return; }
-  if(file.size>15*1024*1024){ msg.textContent="Max 15 MB."; return; }
+  if(file.size>UploadLimits.MAX_FILE_BYTES){ msg.textContent="Max 50 MB."; return; }
   btn.disabled=true; msg.style.color="var(--muted)"; out.innerHTML="";
   try{
+    var wf=await wfEnsure(templateType);
     msg.textContent="Reading the document…";
     var doc=await readContractFile(file);
     msg.textContent="Building Vendora's agreement for comparison…";
@@ -27147,7 +27156,7 @@ async function runContractReview(type){
       body:JSON.stringify({ type:templateType, doc:doc, ourText:ourText, agreement:agreement,
         name: nameEl ? nameEl.value.trim() : "",
         counterpartyName: (readForm(templateType).name||"").trim(),
-        agreementId: (window._editing && window._editing.id && window._editing.type===templateType) ? window._editing.id : null })});
+        agreementId: wf.id, expectedRevision:wf.revision })});
     var j=await r.json().catch(function(){ return {}; });
     if(!r.ok) throw new Error(j.error||"The review failed");
     // The review runs as a background job on the server — poll until it's done (a real contract
@@ -27169,7 +27178,7 @@ async function runContractReview(type){
     else { msg.style.color="#1e7e34"; msg.textContent="Review ready — saved under Archive → Contract reviews as “"+(j.name||file.name)+"”."; }
     if (nameEl) nameEl.value="";
     renderContractReview(type);
-    if (j.reviewId) crOpenLawyer(type, true);
+    if (j.reviewId) { await wfRefresh(wf.id); out.style.display="none"; }
   }catch(e){ msg.style.color="#c0392b"; msg.textContent=(e&&e.message)||"The review failed"; }
   finally{ btn.disabled=false; }
 }
@@ -27534,5 +27543,6 @@ initApp();
     <div class="auth-err" id="authErr"></div>
   </div>
 </div>
+<script src="/workflow-ui.js"></script>
 </body>
 </html>

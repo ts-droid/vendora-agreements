@@ -1,10 +1,11 @@
 // Structured Contract Lawyer proposals: validate, apply, consistency-check, and emit
 // tracked-change OOXML. Used by the server (AI tool output) and the browser panel.
 (function (root, factory) {
-  var api = factory();
+  var shared = typeof module === 'object' && module.exports ? require('./agreement-clauses') : root.AgreementClauses;
+  var api = factory(shared);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.LawyerChanges = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (shared) {
   var OPS = ['replace', 'insert', 'delete'];
   var KINDS = ['clause', 'annex', 'field'];
   var ANNEX_IDS = ['1A', '1B', '2', '3', '4', '5'];
@@ -24,6 +25,21 @@
     notice: { label: 'Notice period (days)', form: 'notice' },
     excl: { label: 'Exclusivity', form: 'excl' },
     credit: { label: 'Credit limit', form: 'credit' },
+    delplace: {label: 'Distribution delivery place', form: 'delplace'},
+    term: {label: 'Initial term', form: 'term'},
+    lead: {label: 'Lead time', form: 'lead'},
+    pcurr: {label: 'Price-list currency', form: 'pcurr'},
+    moq: {label: 'Minimum order', form: 'moq'},
+    mdfb: {label: 'Base MDF', form: 'mdfb'},
+    mdft: {label: 'Target MDF', form: 'mdft'},
+    mdfc: {label: 'Co-op MDF', form: 'mdfc'},
+    mdff: {label: 'MDF frequency', form: 'mdff'},
+    minact: {label: 'Minimum activity', form: 'minact'},
+    target: {label: 'Annual sales target', form: 'target'},
+    bonus: {label: 'Bonus', form: 'bonus'},
+    mdf: {label: 'MDF', form: 'mdf'},
+    products: {label: 'Products', form: 'products'},
+    special: {label: 'Special conditions', form: 'special'},
   };
   // Null prototype so constructor / toString / __proto__ are not inherited keys.
   var FIELD_ALIAS = Object.create(null);
@@ -41,6 +57,8 @@
     ['excl', 'excl'], ['exclusivity', 'excl'],
     ['credit', 'credit'], ['credit limit', 'credit'],
   ].forEach(function (pair) { FIELD_ALIAS[pair[0]] = pair[1]; });
+
+  Object.keys(FIELDS).forEach(function(id){ FIELD_ALIAS[id]=id; });
 
   var CURRENCIES = ['EUR', 'SEK', 'DKK', 'NOK', 'USD'];
   var MAX_CHANGES = 40;
@@ -131,7 +149,17 @@
     return agreement.data || agreement;
   }
   function catalog(type) {
-    return CLAUSE_CATALOG[type] || [];
+    var legacy = CLAUSE_CATALOG[type] || [];
+    if (!shared) return legacy;
+    return shared.catalog(type).map(function(c) {
+      var prior = legacy.find(function(x){ return x.id === c.id; });
+      return Object.assign({}, prior || {}, c, {text:c.render({})});
+    });
+  }
+  function standardClauseText(type, id, data) {
+    var c=clauseById(type,id);
+    if(!c) return '';
+    return c.render ? c.render(data || {}) : fill(c.text,data || {});
   }
   function clauseById(type, id) {
     var list = catalog(type);
@@ -885,7 +913,7 @@
     var ins = (data.clauseInserts || []).filter(function (c) { return c.id === id; });
     if (ins.length) return String(ins[ins.length - 1].text || '');
     var spec = clauseById(agreementTypeOf(data), id);
-    return spec ? fill(spec.text, data) : '';
+    return spec ? standardClauseText(agreementTypeOf(data), id, data) : '';
   }
   function resolvedAnnexText(data, id) {
     data = data || {};
@@ -893,6 +921,8 @@
     if (isDeleted(data, 'annex', nid)) return '';
     var ov = data.annexOverrides || {};
     if (ov[nid] != null && String(ov[nid]).trim()) return String(ov[nid]);
+    // DA Appendix 3 is a contact appendix, not the reseller's 12-month warranty.
+    if (data._type === 'da') return nid === '1A' ? fill('Invoice currency {{curr}}. Payment terms {{pay}} days net. Shipping {{inco}}.',data) : '';
     return fill(ANNEX_DEFAULTS[nid] || '', data);
   }
   function redlineFor(data, kind, id) {
@@ -1045,8 +1075,8 @@
 
   function catalogForPrompt(type, data) {
     data = data || {};
-    return catalog(type).map(function (c) {
-      var text = resolvedClauseText(Object.assign({ _type: type }, data), c.id) || fill(c.text, data);
+    return catalog(type).filter(function(c){ return (!c.when || c.when(data)) && !isDeleted(data, 'clause', c.id); }).map(function (c) {
+      var text = resolvedClauseText(Object.assign({ _type: type }, data), c.id);
       return { id: c.id, label: c.label, section: c.section, text: text };
     });
   }
@@ -1080,7 +1110,7 @@
     (extraClauses || []).forEach(function (c) {
       if (!c || !c.id) return;
       if (clauseOwnedByOtherType(c.id, typeName)) return;
-      if (byId[c.id]) byId[c.id].text = c.text || byId[c.id].text;
+      if (byId[c.id]) return; // Server catalogue is authoritative; do not overwrite it with an abbreviated client summary.
       else rows.push({ id: c.id, label: c.label || c.id, text: c.text || '' });
     });
     var clauseLines = rows.map(function (c) {
@@ -1480,6 +1510,7 @@
     PROPOSE_CHANGES_TOOL: PROPOSE_CHANGES_TOOL,
     fill: fill,
     catalog: catalog,
+    standardClauseText: standardClauseText,
     catalogForPrompt: catalogForPrompt,
     catalogBlock: catalogBlock,
     fromToolChange: fromToolChange,

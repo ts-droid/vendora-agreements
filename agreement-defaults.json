@@ -1,0 +1,27 @@
+{
+  "ra": {
+    "pay": "30",
+    "notice": "90",
+    "excl": "non-exclusive",
+    "inco": "EXW",
+    "mdfb": "",
+    "mdft": "",
+    "mdff": "Quarterly"
+  },
+  "rb": {
+    "pay": "30",
+    "notice": "30",
+    "inco": "EXW"
+  },
+  "da": {
+    "pay": "60",
+    "excl": "exclusive",
+    "inco": "DDP",
+    "term": "three (3)",
+    "lead": "7",
+    "mdfb": "",
+    "mdft": "",
+    "mdfc": "",
+    "mdff": "Quarterly"
+  }
+}
