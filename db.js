@@ -39,6 +39,14 @@ async function withReadOnly(fn) {
   }
 }
 
+// All workflow transitions hold the row lock until the snapshot and decision are committed.
+async function withTransaction(fn) {
+  if (!pool) throw new Error('Database not configured');
+  const client=await pool.connect();
+  try { await client.query('BEGIN'); const result=await fn(client); await client.query('COMMIT'); return result; }
+  catch(e){try{await client.query('ROLLBACK');}catch(_){} throw e;}
+  finally{client.release();}
+}
 async function init() {
   if (!pool) return false;
   await query(`
@@ -140,7 +148,19 @@ async function init() {
     );
   `);
   await query(`CREATE INDEX IF NOT EXISTS contract_reviews_created_idx ON contract_reviews (created_at DESC);`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS workflow_state JSONB;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS workflow_revision INTEGER NOT NULL DEFAULT 0;`);
+  await query(`CREATE TABLE IF NOT EXISTS agreement_versions (
+    agreement_id INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,data JSONB NOT NULL,workflow_state JSONB NOT NULL,
+    actor TEXT NOT NULL,action TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(agreement_id,revision)
+  );`);
+  await query(`CREATE TABLE IF NOT EXISTS agreement_submission_conflicts (
+    id SERIAL PRIMARY KEY,agreement_id INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
+    sent_version INTEGER,submission JSONB NOT NULL,reason TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );`);
   return true;
 }
 
-module.exports = { enabled, pool, query, withReadOnly, init };
+module.exports = { enabled, pool, query, withReadOnly, withTransaction, init };

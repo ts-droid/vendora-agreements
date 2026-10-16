@@ -11,6 +11,9 @@ const webhook          = require('./webhook');
 const lawyerChanges    = require('./lawyer-changes');
 const lawyerVerify     = require('./lawyer-verify');
 const documentExtract  = require('./document-extract');
+const workflowCore = require('./workflow-core');
+const uploadLimits = require('./upload-limits');
+const aiDocument = require('./ai-document');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -465,11 +468,12 @@ function sweepJobs() { const now = Date.now(); for (const [k, v] of reviewJobs) 
 
 // Start a review of an uploaded counterparty contract against Vendora's agreement. The body is JSON
 // sent as text/plain so it bypasses the global 2 MB JSON cap (a PDF arrives base64-encoded).
-app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: '25mb' }), async (req, res) => {
+app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.text({ type: 'text/plain', limit: uploadLimits.MAX_REVIEW_BODY_BYTES }), async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AI is not configured on this server' });
   let body;
   try { body = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'Malformed request' }); }
-  const { doc, ourText } = body || {};
+  const { doc } = body || {};
+  let ourText = body && body.ourText;
   const type = ai.normalizeAgreementType(body && body.type);
   if (!type) return res.status(400).json({ error: 'Choose the agreement type before reviewing.' });
   let agreement = body && body.agreement;
@@ -477,10 +481,21 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
   if (!ai.benchmarkFits(type, ourText)) return res.status(400).json({ error: 'The benchmark agreement is a different agreement type.' });
   if (type === 'da' && !isAdmin(req.user)) return res.status(403).json({ error: 'Distributor Agreements are handled by admins.' });
   if (!doc || !['pdf', 'text'].includes(doc.kind) || typeof doc.data !== 'string' || !doc.data.trim()) return res.status(400).json({ error: 'No document content' });
-  if (doc.kind === 'pdf' && doc.data.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'PDF too large (max 15 MB)' });
+  if (doc.kind === 'pdf') { try { aiDocument.pdfBytes(doc); } catch(e) { return res.status(e.status||400).json({error:e.message}); } }
   if (doc.kind === 'text' && doc.data.length > 600000) return res.status(413).json({ error: 'Document too long for a single review' });
   if (typeof ourText !== 'string' || ourText.trim().length < 200) return res.status(400).json({ error: 'Vendora\'s agreement text is missing' });
   if (ourText.length > 400000) return res.status(413).json({ error: 'Vendora agreement text too long' });
+  let wfRow=null;
+  if(body.agreementId){
+    req.params.id=String(body.agreementId);
+    const record=await db.query('SELECT * FROM agreements WHERE id=$1',[body.agreementId]);
+    if(record.rows[0]&&record.rows[0].workflow_state){
+      if(!reviewVisible(req,record.rows[0]))return res.status(404).json({error:'Not found'});
+      wfRow=record.rows[0];
+      if(wfRow.type!==type)return res.status(400).json({error:'Agreement type mismatch'});
+      ourText=wfRow.workflow_state.baselineText||workflowCore.benchmark(wfRow.workflow_state.baseline);agreement=wfRow.data;
+    }
+  }
   sweepJobs();
   for (const v of reviewJobs.values()) {
     if (v.uid === req.user.uid && v.status === 'running') return res.status(429).json({ error: 'A review is already running — wait for it to finish.' });
@@ -496,6 +511,11 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
     if (a.rows[0] && (isAdmin(req.user) || a.rows[0].created_by === req.user.uid)) agreementId = a.rows[0].id;
   }
   const jobId = crypto.randomBytes(12).toString('base64url');
+  if(wfRow){
+    req.body=body;
+    try { wfRow=await workflow.prepareReview(req,jobId); }
+    catch(e){return res.status(e.status||500).json({error:e.status?e.message:'Could not start review'});}
+  }
   const job = { uid: req.user.uid, status: 'running', started: Date.now(), finished: null, result: null, error: null };
   reviewJobs.set(jobId, job);
   res.json({ jobId });
@@ -509,6 +529,11 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
       let saved = null, saveError = null;
       try { saved = await saveReview(req, { name, type, filename, doc: { kind: doc.kind, data: doc.data }, ourText, review, counterpartyName, agreementId }); }
       catch (e) { saveError = e.message; console.error('Save review error:', e.message); }
+      if(wfRow){
+        if(!saved){await workflow.finishReview(req,jobId,null,[],true);throw new Error('Review could not be saved');}
+        if(review.refer_to_counsel) review.findings.forEach(f=>{if(f.classification==='deal_breaker'||f.classification==='red_flag')f.requires_counsel=true;});
+        await workflow.finishReview(req,jobId,saved.id,review.findings,false);
+      }
       job.result = { reviewId: saved ? saved.id : null, name, review, created_at: saved ? saved.created_at : new Date().toISOString(),
         saveError: saveError ? 'The review could not be saved to the archive.' : null };
       job.status = 'done';
@@ -517,6 +542,7 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
       console.error('AI review error:', err.message);
       job.error = (err.code === 'refusal' || err.code === 'incomplete' || err.code === 'malformed') ? err.message : 'The AI lawyer could not review the document right now.';
       job.status = 'error';
+      if(wfRow){try{await workflow.finishReview(req,jobId,null,[],true);}catch(_) {}}
     }
     job.finished = Date.now();
   })();
@@ -915,6 +941,12 @@ app.post('/api/admin/mail-test', auth.requireAuth, requireAdmin, async (req, res
   }
 });
 
+// One transactional workflow shared by initial review and customer feedback.
+const workflow = require('./workflow-api').install(app, {
+  db,auth,ai,isAdmin,isSigner,loadPlaybook,sendMailSafe,mailShell,coverHtml,btnHtml,
+  SIGNER_EMAIL,SIGNER_NAME,publishStatusChange,tokenEq
+});
+
 // ── Agreements archive (auth required) ─────────────────────────────────────────
 app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
@@ -971,10 +1003,11 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
   try {
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
-    const cur = await db.query('SELECT update_token, status, vendora_signed_at, data FROM agreements WHERE id=$1', [req.params.id]);
+    const cur = await db.query('SELECT update_token, status, vendora_signed_at, data, workflow_state FROM agreements WHERE id=$1', [req.params.id]);
     const row = cur.rows[0];
     if (!row) return res.status(404).json({ error: 'Not found' });
     if (!row.update_token || !tokenEq(row.update_token, token)) return res.status(403).json({ error: 'Invalid token' });
+    if (row.workflow_state) return workflow.wrap(workflow.submit)(req,res);
     // Only accept a submission while the row is still awaiting one. Locked (CEO signature) and
     // fully signed rows are closed, as is anything Vendora has already generated.
     if (isLocked(row) || row.status === 'signed' || !['invited', 'submitted'].includes(row.status)) {
@@ -1024,6 +1057,7 @@ app.get('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
   try {
     const row = await loadOwned(req, res); if (!row) return;
     delete row.update_token; // capability token never leaves the server once issued
+    if(row.workflow_state)row.workflow_summary=workflowCore.summary(row);
     res.json({ agreement: row });
   } catch (err) {
     console.error('Get agreement error:', err.message);
@@ -1036,6 +1070,7 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
     const { counterpartyName, counterpartyEmail, data, status } = req.body || {};
     if (!data) return res.status(400).json({ error: 'data is required' });
     const row = await loadOwned(req, res); if (!row) return;
+    if (row.workflow_state) return workflow.wrap(workflow.manualSave)(req,res);
     // Content is frozen while awaiting / carrying the CEO's signature: an unchanged save is a
     // harmless no-op (e.g. re-downloading the .docx), but any real change must withdraw first.
     if (isLocked(row)) {
@@ -1082,6 +1117,7 @@ app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, r
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     if (WORKFLOW_ONLY.includes(status)) return res.status(400).json({ error: 'Use "Send to CEO for signature" — this status is set by the signature workflow.' });
     const row = await loadOwned(req, res); if (!row) return;
+    if (row.workflow_state) return res.status(409).json({error:'Använd avtalsflödets gransknings- och signeringssteg. Status kan inte sättas manuellt.'});
     if (row.status === 'pending_signature') {
       return res.status(409).json({ error: 'Awaiting the CEO\'s signature — withdraw the request first.' });
     }
@@ -1119,7 +1155,7 @@ app.get('/api/agreements/:id/files', requireDb, auth.requireAuth, async (req, re
 // Uploading a signed document also advances the record to 'signed'.
 app.post('/api/agreements/:id/files',
   requireDb, auth.requireAuth,
-  express.raw({ type: () => true, limit: '15mb' }),
+  express.raw({ type: () => true, limit: uploadLimits.MAX_FILE_BYTES }),
   async (req, res) => {
     try {
       const buf = req.body;
@@ -1135,9 +1171,9 @@ app.post('/api/agreements/:id/files',
         [req.params.id, filename, mime, buf.length, buf, who]
       );
       // A countersigned upload means the deal is done.
-      const up = await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id]);
-      publishStatusChange(req.params.id, row.status, 'signed');
-      res.json({ file: r.rows[0], status: 'signed', status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
+      const up = row.workflow_state ? {rows:[{status_updated_at:row.status_updated_at}]} : await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id]);
+      if (!row.workflow_state) publishStatusChange(req.params.id, row.status, 'signed');
+      res.json({ file: r.rows[0], status: row.workflow_state ? row.status : 'signed', status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
     } catch (err) {
       console.error('Upload file error:', err.message);
       res.status(500).json({ error: 'Could not store file' });
@@ -1204,7 +1240,7 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
         token = crypto.randomBytes(24).toString('base64url');
         await db.query('UPDATE agreements SET update_token=$1 WHERE id=$2', [token, req.params.id]);
       }
-      const linkData = Object.assign({}, row.data || {}, { _aid: Number(req.params.id), _atok: token });
+      const linkData = Object.assign({}, row.workflow_state ? {} : row.data || {}, { _aid: Number(req.params.id), _atok: token }, row.workflow_state ? {_sentVersion:row.workflow_state.sent.version} : {});
       link = 'https://' + req.get('host') + '/#fill=' + Buffer.from(JSON.stringify(linkData), 'utf8').toString('base64');
     }
 
@@ -1307,6 +1343,7 @@ app.post('/api/agreements/:id/request-signature', requireDb, auth.requireAuth, a
   try {
     if (!SIGNER_EMAIL) return res.status(503).json({ error: 'No signer is configured on this server (set SIGNER_EMAIL).' });
     const row = await loadOwned(req, res); if (!row) return;
+    if (row.workflow_state) return workflow.wrap(workflow.requestSignature)(req,res);
     if (!SIGNABLE_FROM.includes(row.status)) {
       return res.status(409).json({ error: row.status === 'invited'
         ? 'Still waiting for the counterparty\'s details.'
@@ -1344,6 +1381,7 @@ app.post('/api/agreements/:id/sign', requireDb, auth.requireAuth, async (req, re
   try {
     if (!isSigner(req.user)) return res.status(403).json({ error: 'Only the designated signer can sign for Vendora.' });
     const row = await loadOwned(req, res); if (!row) return;
+    if (row.workflow_state) return workflow.wrap(workflow.sign)(req,res);
     const stamp = { name: SIGNER_NAME, title: 'CEO', email: req.user.email, at: new Date().toISOString() };
     const up = await db.query(
       `UPDATE agreements SET status='vendora_signed', status_updated_at=now(), updated_at=now(),
@@ -1376,6 +1414,7 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
   try {
     if (!isSigner(req.user)) return res.status(403).json({ error: 'Only the designated signer can return an agreement.' });
     const row = await loadOwned(req, res); if (!row) return;
+    if(row.workflow_state) return workflow.wrap(workflow.withdraw)(req,res);
     const note = String((req.body || {}).note || '').trim().slice(0, 2000);
     if (!note) return res.status(400).json({ error: 'Add a comment so the seller knows what to change.' });
     const up = await db.query(
@@ -1407,6 +1446,7 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
 app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const row = await loadOwned(req, res); if (!row) return;
+    if(row.workflow_state) return workflow.wrap(workflow.withdraw)(req,res);
     if (!isLocked(row)) return res.status(409).json({ error: 'Nothing to withdraw.' });
     const up = await db.query(
       `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(),
@@ -1434,6 +1474,9 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
 // ── Static routes ─────────────────────────────────────────────────────────────
 // The lawyer helper is the one script the page loads from disk. It must be registered
 // before the HTML catch-all, and it is not express.static of the project root.
+['upload-limits.js','agreement-clauses.js','workflow-ui.js'].forEach(file=>{
+  app.get('/'+file,(req,res)=>{res.set('Cache-Control','no-cache');res.type('application/javascript');res.sendFile(path.join(__dirname,file));});
+});
 app.get('/lawyer-changes.js', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.type('application/javascript');
@@ -1447,6 +1490,11 @@ app.get('/vendora-nordic.png', (req, res) => {
 });
 app.get('/i/:code', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('*',        (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+app.use(function(err,req,res,next){
+  if(err && err.type==='entity.too.large') return res.status(413).json({error:/^\/api\/(ai\/review|agreements\/[^/]+\/files)$/.test(req.path)?'File too large (max 50 MB).':'Request body too large.'});
+  next(err);
+});
 
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Vendora Agreement Generator on port ${PORT}`));
