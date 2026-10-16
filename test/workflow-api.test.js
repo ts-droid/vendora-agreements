@@ -49,6 +49,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);
     id=await page.evaluate(()=>window._editing.id);
     const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
+    assert.ok(initial.signatureProblems.includes('Minst ett försäljningsställe krävs.'),'customer must still supply an approved point of sale');
     const blocked=await api('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
     for(let n=0;n<5;n++){
       const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;
@@ -73,11 +74,11 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     r=await good('/api/workflow/'+id);assert.equal(r.state.sent.delivery,'sent');assert.deepEqual(r.state.sent.data.clauseOverrides,amendments);assert.equal(r.state.sent.data.redlines,undefined);
     let stored=(await db.query('SELECT * FROM agreements WHERE id=$1',[id])).rows[0];const sentVersion=stored.workflow_state.sent.version;const token=stored.update_token;
     // Public submission: factual completion succeeds, proposed terms and malicious internal fields do not overwrite content.
-    const submission={...r.state.sent.data,name:'Completed Customer AB',country:'Sweden',addr:'Testgatan 2',sig_name:'Counterparty Signer',sig_email:'signer@example.test',rcontacts:{notices:{e:'notice@example.test'}},_proposals:{pay:{original:'forged 999',proposed:'60',comment:'Please extend'}},clauseOverrides:{},_vendoraSignature:{name:'Forged'}};
+    const submission={...r.state.sent.data,pos_web:['customer.example.test'],pos_physical:[],name:'Completed Customer AB',country:'Sweden',addr:'Testgatan 2',sig_name:'Counterparty Signer',sig_email:'signer@example.test',rcontacts:{notices:{e:'notice@example.test'}},_proposals:{pay:{original:'forged 999',proposed:'60',comment:'Please extend'}},clauseOverrides:{},_vendoraSignature:{name:'Forged'}};
     assert.equal((await api('/api/agreements/'+id+'/submit','POST',{token:'wrong',sentVersion,data:submission},null)).status,403);
     assert.equal((await api('/api/agreements/'+id+'/submit','POST',{token,sentVersion:sentVersion-1,data:submission},null)).status,409);
     await good('/api/agreements/'+id+'/submit','POST',{token,sentVersion,data:submission},null);
-    r=await good('/api/workflow/'+id);assert.equal(r.data.name,'Completed Customer AB');assert.equal(r.data.pay,'45');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.data._vendoraSignature,undefined);assert.equal(r.data._proposals.pay.original,'45');
+    r=await good('/api/workflow/'+id);assert.equal(r.data.name,'Completed Customer AB');assert.equal(r.data.pay,'45');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.data._vendoraSignature,undefined);assert.equal(r.data._proposals.pay.original,'45');assert.deepEqual(r.data.pos_web,['customer.example.test']);
     assert.equal((await api('/api/workflow/'+id,'GET',undefined,stranger)).status,404);
     // Second round: rework the customer's request, then explicitly approve the new alternative.
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const request=r.state.items.find(i=>i.status==='pending');
@@ -98,7 +99,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     const published=await good('/api/public-agreements/'+id+'?token='+requestMail.state.signatureShare.token,'GET',undefined,null);assert.equal(published.data.pay,'50');assert.equal(published.data.redlines,undefined);assert.equal(published.data.workflow_state,undefined);
     assert.equal((await api('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:999999,expectedRevision:requestMail.revision})).status,400);
     await page.evaluate(id=>wfRefresh(id),id);
-    const finalExport=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const result=await buildRA(d);const buf=await result.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});assert.match(finalExport.xml,/50/);assert.match(finalExport.xml,/complete payment/);fs.writeFileSync('test-results/final-agreement-synthetic.docx',Buffer.from(finalExport.bytes));
+    const finalExport=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const result=await buildRA(d);const buf=await result.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});assert.match(finalExport.xml,/50/);assert.match(finalExport.xml,/complete payment/);assert.match(finalExport.xml,/customer.example.test/);fs.writeFileSync('test-results/final-agreement-synthetic.docx',Buffer.from(finalExport.bytes));
     const doc=Buffer.from(finalExport.bytes);const uploadResponse=await fetch(base+'/api/agreements/'+id+'/files',{method:'POST',headers:{Cookie:cookie(owner),'Content-Type':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','X-Filename':'synthetic-countersigned-copy.docx'},body:doc});const fileResult=await uploadResponse.json();assert.equal(uploadResponse.status,200,JSON.stringify(fileResult));assert.equal(fileResult.status,'sent');
     r=await good('/api/workflow/'+id);await good('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:fileResult.file.id,expectedRevision:r.revision});
     r=await good('/api/workflow/'+id);assert.equal(r.status,'signed');assert.equal(r.state.counterpartySignature.verification,'manual');
