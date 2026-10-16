@@ -833,6 +833,8 @@ test('buildRA tracked docx document.xml is well-formed tracked changes', { skip:
     assert.match(report.text, /<kept>/);
     assert.match(report.text, /&/);
     assert.match(report.text, /SCC arbitration/);
+    assert.match(report.text, /not a commercial agent/);
+    assert.match(report.text, /no non-compete/);
     assert.match(report.text, /A & B/);
     assert.equal(report.text.indexOf('\u0001'), -1);
     assert.equal(report.keptElements, 0);
@@ -1044,8 +1046,10 @@ test('a new reseller clause with a missing section anchor can be approved, and t
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.match(html, /view\.placement/);
   assert.match(html, /No compensation on termination/);
-  assert.match(html, /not a commercial agent/);
-  assert.match(html, /no non-compete/);
+  // Clause wording now comes from the shared browser/server source, not an
+  // inline literal in index.html. Verify the real source without duplicating it.
+  assert.match(LC.standardClauseText('ra', 'ra.s13b.no_compensation', { _type: 'ra' }), /not a commercial agent/);
+  assert.match(LC.standardClauseText('ra', 'ra.s13c.after_end', { _type: 'ra' }), /no non-compete/);
   assert.match(html, /ra\.s13b\.no_compensation/);
   assert.match(html, /ra\.s13c\.after_end/);
   assert.match(html, /Run this review again/);

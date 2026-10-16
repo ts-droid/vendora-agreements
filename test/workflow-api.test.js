@@ -61,6 +61,8 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     // Reopening uses the server state, not local approval cards.
     await page.reload({waitUntil:'domcontentloaded'});await page.evaluate(id=>wfRefresh(id),id);
     assert.equal(await page.evaluate(()=>window._editing.base.pay),'45');
+    assert.equal(await page.evaluate(()=>activeTab),1,'reopening a reseller agreement selects its visible workspace');
+    await page.waitForSelector('#wf_panel_ra [data-wf="invite"]',{visible:true});
     const exportData=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const r=await buildRA(d);const buf=await r.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});
     assert.match(exportData.xml,/complete payment/);assert.match(exportData.xml,/reclaim unpaid Products/);assert.match(exportData.xml,/45/);
     fs.writeFileSync('test-results/our-agreement-after-initial-review.docx',Buffer.from(exportData.bytes));

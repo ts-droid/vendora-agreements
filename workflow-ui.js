@@ -13,6 +13,9 @@
     if(window._editing&&window._editing.id!==row.id)reset(),current=row;
     window._editing={id:row.id,type:row.type,base:row.data,status:row.status,revision:row.revision,workflow:!!row.state,signedAt:row.signedAt};
     window._lawyerState=row.data;window._clauseOverrides=row.data.clauseOverrides||{};
+    // Opening or refreshing a saved agreement must reveal its own workspace, not
+    // leave actionable controls in the default (or previously selected) hidden tab.
+    switchTab(row.type==='da'?0:row.type==='ra'?1:2);
     hydrateForm(row.type,row.data);
     var bar=document.getElementById('editBar');if(bar)bar.style.display='flex';
     var text=document.getElementById('editBarText');if(text)text.textContent='Avtal #'+row.id+' — '+(row.data.name||'Nytt utkast')+' — version '+row.revision;
