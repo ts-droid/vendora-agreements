@@ -2,6 +2,7 @@
 const crypto=require('crypto');
 const core=require('./workflow-core');
 const LC=require('./lawyer-changes');
+const counterpartyDetails=require('./counterparty-details');
 function install(app, deps) {
   const {db,auth,isAdmin,isSigner,sendMailSafe,mailShell,coverHtml,SIGNER_EMAIL,SIGNER_NAME,publishStatusChange}=deps;
   const who=req=>req.user.name||req.user.email;
@@ -45,6 +46,12 @@ function install(app, deps) {
     const row=await lock(req,async(row,c)=>{const result=core.decide(row,req.body||{},who(req),when());
       return result.replayed?row:write(c,row,result.data,result.state,who(req),'decision:'+req.body.itemId);});res.json(view(row));
   }));
+  app.post('/api/workflow/:id/company-details',auth.requireAuth,wrap(async(req,res)=>{
+    const row=await lock(req,async(row,c)=>{
+      const result=core.decideCompanyDetails(row,req.body||{},who(req),when());
+      return result.replayed?row:write(c,row,result.data,result.state,who(req),'company-details:'+req.body.action);
+    });res.json(view(row));
+  }));
   app.post('/api/workflow/:id/apply',auth.requireAuth,wrap(async(req,res)=>{
     const row=await lock(req,async(row,c)=>{
       core.editable(row);core.checkVersion(row,req.body.expectedRevision);const s=core.copy(core.state(row));
@@ -79,7 +86,7 @@ function install(app, deps) {
       core.editable(row);const s=core.copy(core.state(row));
       if(s.sent&&s.sent.requestId===body.requestId){if(s.sent.email!==to)throw core.error('Utskicks-ID har använts för en annan mottagare.');replay=true;return row;}
       core.checkVersion(row,body.expectedRevision);
-      if(core.pending(s).length||s.reviewRunning)throw core.error('Behandla samtliga förslag före kundutskicket.');
+      if(core.pending(s).length||counterpartyDetails.pending(s).length||s.reviewRunning)throw core.error('Behandla samtliga förslag före kundutskicket.');
       if(s.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Standardversionen har ändrats. Ny versionsgranskning krävs.');
       if(LC.consistencyCheck(row.data).length)throw core.error('Avtalet innehåller motstridiga uppgifter.');
       if(s.sent&&row.status==='invited'&&s.sent.email===to&&core.digest(s.sent.data)===core.digest(core.publicData(row.data))){
@@ -171,12 +178,14 @@ function install(app, deps) {
   };
   methods.prepareReview=async(req,jobId)=>lock(req,async(row,c)=>{
     core.editable(row);core.checkVersion(row,req.body.expectedRevision);const s=core.copy(core.state(row));
-    if(core.pending(s).length||s.reviewRunning||row.status==='invited')throw core.error('Behandla befintliga förslag eller invänta kundens svar/pågående jämförelse.');
+    if(core.pending(s).length||counterpartyDetails.pending(s).length||s.reviewRunning||row.status==='invited')throw core.error('Behandla befintliga förslag eller invänta kundens svar/pågående jämförelse.');
     s.reviewRunning={jobId,at:when()};return write(c,row,row.data,s,who(req),'review-start');
   });
-  methods.finishReview=async(req,jobId,id,findings,failed)=>lock(req,async(row,c)=>{
+  methods.finishReview=async(req,jobId,id,findings,failed,companyDetails)=>lock(req,async(row,c)=>{
     const s=core.state(row);if(!s.reviewRunning||s.reviewRunning.jobId!==jobId)throw core.error('Jämförelsen tillhör en äldre avtalsversion.');
     const next=failed?{...s,reviewRunning:null}:core.recordReview(row,id,findings,when());
+    const details=!failed&&counterpartyDetails.snapshot(row.data,id,companyDetails);
+    if(details)next.companyImports=(next.companyImports||[]).concat(details);
     return write(c,row,row.data,next,who(req),failed?'review-failed':'review-complete');
   });
   methods.requestSignature=async(req,res)=>{
