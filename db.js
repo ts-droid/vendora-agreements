@@ -160,6 +160,27 @@ async function init() {
     id SERIAL PRIMARY KEY,agreement_id INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
     sent_version INTEGER,submission JSONB NOT NULL,reason TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );`);
+  // Persistent lawyer conversations and separate, immutable document versions.
+  await query(`CREATE TABLE IF NOT EXISTS lawyer_threads (
+    id TEXT PRIMARY KEY, agreement_id INTEGER REFERENCES agreements(id) ON DELETE CASCADE,
+    created_by INTEGER NOT NULL REFERENCES users(id), agreement_type TEXT NOT NULL,
+    title TEXT NOT NULL, source JSONB, messages JSONB NOT NULL DEFAULT '[]',
+    revision INTEGER NOT NULL DEFAULT 0, pending_token TEXT, pending_since TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );`);
+  await query(`CREATE INDEX IF NOT EXISTS lawyer_threads_parent_idx ON lawyer_threads(agreement_id,created_by,created_at DESC);`);
+  await query(`CREATE TABLE IF NOT EXISTS lawyer_documents (
+    id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES lawyer_threads(id) ON DELETE CASCADE,
+    agreement_id INTEGER REFERENCES agreements(id) ON DELETE CASCADE,
+    created_by INTEGER NOT NULL REFERENCES users(id), document_number TEXT NOT NULL,
+    version INTEGER NOT NULL, replaces_id TEXT REFERENCES lawyer_documents(id), source JSONB,
+    content JSONB NOT NULL, references_data JSONB NOT NULL DEFAULT '[]', content_digest TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'draft' CHECK(review_status IN ('draft','reviewed','discarded')),
+    reviewed_by INTEGER REFERENCES users(id), reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(document_number,version)
+  );`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS lawyer_document_replacement_idx ON lawyer_documents(replaces_id) WHERE replaces_id IS NOT NULL;`);
+  await query(`CREATE INDEX IF NOT EXISTS lawyer_documents_parent_idx ON lawyer_documents(agreement_id,created_at DESC);`);
   return true;
 }
 
