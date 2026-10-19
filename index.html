@@ -648,6 +648,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
   </h2>
   <div class="desc">Every agreement you generate is saved here. Negotiate with the counterparty, then send it to the CEO for signature.</div>
   <div id="archiveScope" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+  <button type="button" class="archive-btn" onclick="openLawyerWorkspace()" style="margin-top:10px">Avtalsadvokaten – nytt fristående avtal</button>
   <div style="display:flex;gap:8px;align-items:center;margin:12px 0 2px">
     <input id="importLink" placeholder="Import a past agreement: paste a review or invite link&hellip;" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px" onkeydown="if(event.key==='Enter')importFromLink()">
     <button onclick="importFromLink()" style="font-size:13px;font-weight:600;padding:8px 16px;border:none;background:var(--navy);color:#fff;border-radius:4px;cursor:pointer">Import</button>
@@ -26090,6 +26091,7 @@ function loadArchive(){
           + "<input type='file' id='ovFile_"+id+"' style='display:none' onchange='ovUpload("+id+",this)'>"
           + "<button type='button' class='archive-btn' onclick=\"document.getElementById('ovFile_"+id+"').click()\">&#8681; Upload</button>"
           + "<div id='ovUp_"+id+"' style='"+mut+";margin-top:3px'></div>"
+          + (a.lawyer_document_count ? "<button class='archive-btn' onclick='openLawyerWorkspace("+id+")'>"+a.lawyer_document_count+" bilage-/tilläggsutkast</button>" : "")
         + "</td>"
         // Reminder — send + last-sent
         + "<td style='white-space:nowrap'>"
@@ -26099,6 +26101,7 @@ function loadArchive(){
         + "<td>"+esc(a.created_by_name||"")+"</td>"
         + "<td class='actions' style='white-space:nowrap'>"
           + "<button type='button' class='archive-btn' onclick='archiveEdit("+id+")'>&#9998; Edit</button>"
+          + "<button type='button' class='archive-btn' data-lawyer-agreement='"+id+"' onclick='openLawyerWorkspace("+id+")'>&#9878; Avtalsadvokaten</button>"
           + "<button type='button' class='archive-btn' onclick='archiveDownload("+id+")'>&#8681; .docx</button>"
           + "<button type='button' class='archive-btn archive-btn-delete' onclick='archiveDelete("+id+")'>Delete</button>"
         + "</td></tr>"
@@ -26485,6 +26488,9 @@ function archiveEdit(id){
     if(window._editing && window._editing.id!==a.id && window.wfReset) wfReset();
     window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at, revision:Number(a.workflow_revision||0), workflow:!!a.workflow_state };
     window._lawyerState = data;
+    if(window._aiReview) crClearLawyerContext();
+    if(window.lwResetLegacyChat) lwResetLegacyChat(a.id);
+    syncStoredAgreementType();
     window._clauseOverrides = data.clauseOverrides || {};
     var bar=document.getElementById("editBar"); bar.style.display="flex";
     document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
@@ -26671,13 +26677,15 @@ function syncStoredAgreementType(){
   var rv = window._aiReview;
   var stored = (ctx && ctx._type) || (rv && rv.type) || "";
   var family = storedFamily(stored);
-  if (!family) return;
-  ["verifyAgreementType","aiAgreementType"].forEach(function(id){
-    var el = document.getElementById(id);
-    if (el && !el.value) el.value = family;
-  });
+  var choice=document.getElementById("aiAgreementType");
+  if(choice){ if(family) choice.value=family; choice.disabled=!!family; }
+  var verify=document.getElementById("verifyAgreementType");
+  if(verify) verify.value=family || (choice && choice.value) || "";
+  var label=document.getElementById("aiTypeContext");
+  if(label) label.textContent=family ? "Avtalstyp hämtad från valt avtal" : "Välj avtalstyp en gång för chatt och dokumentkontroll";
 }
 function verifyUploadedDocument(){
+  syncStoredAgreementType();
   var input = document.getElementById("verifyFile");
   var file = input && input.files && input.files[0];
   var status = document.getElementById("verifyStatus");
@@ -26723,6 +26731,7 @@ function toggleAiDrawer(){
   d.style.display = open?"none":"flex";
   if (!open){
     syncStoredAgreementType();
+    if(window.lwRestoreLegacyChat) lwRestoreLegacyChat();
     if (!window._aiMessages.length) renderAiMessages();
     setTimeout(function(){ var i=document.getElementById("aiInput"); if(i) i.focus(); }, 50);
   }
@@ -26980,6 +26989,10 @@ function sendAi(){
   var input=document.getElementById("aiInput");
   var text=(input.value||"").trim();
   if (!text) return;
+  syncStoredAgreementType();
+  if(window.lwSendLegacyChat && window._editing && !window._aiReview && !window._signData) {
+    lwSendLegacyChat(text); return;
+  }
   var family=familyFromSelect("aiAgreementType");
   if (!family){
     window._aiMessages.push({role:"assistant",content:"Choose the agreement type first — distribution or reseller."});
@@ -27465,6 +27478,7 @@ initApp();
     <span id="aiReviewBarText" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
     <a onclick="crClearLawyerContext()" style="cursor:pointer;text-decoration:underline;white-space:nowrap">clear</a>
   </div>
+  <div style="padding:7px 12px;border-bottom:1px solid var(--border)"><button type="button" onclick="openLawyerWorkspace(window._editing && window._editing.id)" class="archive-btn">Öppna arbetsyta: minne, bilagor och tillägg</button><span id="aiMemoryStatus" style="font-size:11px;margin-left:8px"></span></div>
   <div id="aiMessages" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
   <div id="aiConflicts" style="display:none;background:#fff3cd;border-top:1px solid #ffe69c;padding:8px 12px;font-size:12px;color:#856404"></div>
   <div id="aiUpdatedBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#eaf7ee;border-top:1px solid #cfe8d6;padding:8px 12px;font-size:12px;color:#1e7e34">
@@ -27473,8 +27487,8 @@ initApp();
   </div>
   <div id="verifyBox" class="verify-box">
     <div class="verify-title">Check a document</div>
-    <p class="verify-copy">Upload a .docx or PDF of a new or updated contract. Choose the agreement type first. The lawyer compares it with that type's template and with the approved changes saved on this agreement. Nothing is written to the agreement.</p>
-    <div class="f"><label for="verifyAgreementType">Agreement type *</label>
+    <p class="verify-copy">Upload a .docx or PDF of a new or updated contract. The agreement type is shared with the chat below. The lawyer compares it with that type's template and with the approved changes saved on this agreement. Nothing is written to the agreement.</p>
+    <div class="f" hidden style="display:none"><label for="verifyAgreementType">Agreement type (shared with chat)</label>
       <select id="verifyAgreementType" required>
         <option value="">Choose…</option>
         <option value="distribution">Distribution agreement — Vendora buys from a supplier</option>
@@ -27490,8 +27504,8 @@ initApp();
     <div id="verifyResults"></div>
   </div>
   <div style="border-top:1px solid var(--border);padding:10px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-    <label for="aiAgreementType" style="flex:1 1 100%;font-size:11px;color:var(--muted)">Agreement type *
-      <select id="aiAgreementType" required style="display:block;width:100%;margin-top:4px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+    <label for="aiAgreementType" style="flex:1 1 100%;font-size:11px;color:var(--muted)"><span id="aiTypeContext">Agreement type *</span>
+      <select id="aiAgreementType" required onchange="syncStoredAgreementType()" style="display:block;width:100%;margin-top:4px;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         <option value="">Choose…</option>
         <option value="distribution">Distribution agreement — Vendora buys</option>
         <option value="reseller">Reseller agreement — Vendora sells</option>
@@ -27544,5 +27558,6 @@ initApp();
   </div>
 </div>
 <script src="/workflow-ui.js"></script>
+<script src="/lawyer-workspace-ui.js"></script>
 </body>
 </html>

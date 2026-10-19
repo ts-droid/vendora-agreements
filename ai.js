@@ -3,6 +3,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const lawyerChanges = require('./lawyer-changes');
 const aiDocument = require('./ai-document');
+const lawyerWorkspace = require('./lawyer-workspace-core');
 
 const enabled = !!process.env.ANTHROPIC_API_KEY;
 const client = enabled ? new Anthropic() : null; // reads ANTHROPIC_API_KEY from env
@@ -346,11 +347,11 @@ async function chatPrepared(agreement, messages, opts) {
   if (!client) throw new Error('AI is not configured on this server');
   opts = opts || {};
   const review = opts.review || null;
-  const type = normalizeAgreementType(opts.agreementType) || normalizeAgreementType(review && review.type) || agreementType(agreement);
+  const type = (opts.workspace && opts.agreementType === 'general' ? 'general' : normalizeAgreementType(opts.agreementType)) || normalizeAgreementType(review && review.type) || agreementType(agreement);
   if (!type) throw typeError('Choose the agreement type before asking the lawyer.', 'type_required');
   const scoped = scopedAgreement(type, agreement);
   const system = [
-    { type: 'text', text: foundation(type), cache_control: { type: 'ephemeral' } }, // stable foundation → cached
+    { type: 'text', text: type === 'general' ? CORE + '\n\n' + HOW_TO_ADVISE + '\n\n' + SECURITY : foundation(type), cache_control: { type: 'ephemeral' } }, // stable foundation → cached
   ];
   const house = houseBlock(scopedPlaybook(opts.playbook, type));
   if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } });
@@ -363,9 +364,10 @@ async function chatPrepared(agreement, messages, opts) {
   }
   const stored = agreement && normalizeAgreementType((agreement.data || agreement)._type);
   if (stored && sameFamily(stored, type)) system.push(agreementBlock(scoped));
-  system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, scoped, scopedClauses(type, opts.clauses)) });
+  if (type !== 'general') system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, scoped, scopedClauses(type, opts.clauses)) });
+  if (opts.workspace) system.push({type:'text', text:lawyerWorkspace.prompt(opts.workspace)});
 
-  const convo = (messages || []).slice(-20).map(function (m) {
+  const convo = (opts.workspace ? (messages || []) : (messages || []).slice(-20)).map(function (m) {
     return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') };
   });
   if (review) {
@@ -373,7 +375,10 @@ async function chatPrepared(agreement, messages, opts) {
     // Consecutive user messages are merged by the API, so no synthetic assistant turn is needed.
     convo.unshift({ role: 'user', content: [documentBlock(review.doc), { type: 'text', text: 'Counterparty document attached for reference.' }] });
   }
-  const tools = [lawyerChanges.PROPOSE_CHANGES_TOOL];
+  const tools = opts.workspace
+    ? (opts.workspace.allowOriginalChanges ? [lawyerChanges.PROPOSE_CHANGES_TOOL, lawyerWorkspace.DRAFT_TOOL] : [lawyerWorkspace.DRAFT_TOOL])
+    : [lawyerChanges.PROPOSE_CHANGES_TOOL];
+  const documents = [];
   const proposals = [];
   const textParts = [];
 
@@ -392,6 +397,17 @@ async function chatPrepared(agreement, messages, opts) {
     convo.push({
       role: 'user',
       content: toolUses.map(function (t) {
+        if (t.name === lawyerWorkspace.DRAFT_TOOL.name && opts.workspace) {
+          try {
+            lawyerWorkspace.validateDraft(t.input, opts.workspace.source, opts.workspace.documents || []);
+            if (documents.length >= 4) throw new Error('At most four drafts per reply.');
+            documents.push(t.input);
+            return {type:'tool_result',tool_use_id:t.id,content:'Recorded as a SEPARATE draft for review. The original agreement is unchanged. No signature or customer delivery has occurred. Reference this draft in a later turn after its saved ID is available.'};
+          } catch (e) {
+            return {type:'tool_result',tool_use_id:t.id,is_error:true,content:e.message};
+          }
+        }
+        if (opts.workspace && !opts.workspace.allowOriginalChanges) return {type:'tool_result',tool_use_id:t.id,is_error:true,content:'The source cannot be changed. Create a separate draft.'};
         const checked = lawyerChanges.validateProposals(changesFromTool(t.input), scoped);
         checked.proposals.forEach(function (p) { proposals.push(p); });
         const note = checked.rejected.length
@@ -402,7 +418,7 @@ async function chatPrepared(agreement, messages, opts) {
       }),
     });
   }
-  return { reply: textParts.join('\n').trim() || '(no response)', proposals: proposals };
+  return { reply: textParts.join('\n').trim() || '(no response)', proposals: proposals, documents: documents };
 }
 
 // Review a counterparty's contract against Vendora's agreement. Returns the structured review.

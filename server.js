@@ -1040,7 +1040,8 @@ app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
               a.status_updated_at, a.last_reminder_at, a.created_by, a.created_by_name, a.created_at, a.updated_at,
               a.signature_requested_by_name, a.signature_requested_at, a.signature_note,
               a.vendora_signed_by, a.vendora_signed_at,
-              (SELECT COUNT(*) FROM agreement_files f WHERE f.agreement_id = a.id)::int AS file_count
+              (SELECT COUNT(*) FROM agreement_files f WHERE f.agreement_id = a.id)::int AS file_count,
+              (SELECT COUNT(*) FROM lawyer_documents ld WHERE ld.agreement_id = a.id AND ($1::boolean OR ld.created_by=$2))::int AS lawyer_document_count
        FROM agreements a
        WHERE $1::boolean OR a.created_by = $2
        ORDER BY a.updated_at DESC LIMIT 500`,
@@ -1471,10 +1472,16 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
   }
 });
 
+// A separate drafting workspace never writes into its parent agreement.
+require('./lawyer-workspace-api').install(app, {
+  db, auth, ai, isAdmin, isLocked, loadPlaybook, ownedReview,
+  limiter: rateLimit('lawyer-workspace', 60, 60 * 60 * 1000),
+});
+
 // ── Static routes ─────────────────────────────────────────────────────────────
 // The lawyer helper is the one script the page loads from disk. It must be registered
 // before the HTML catch-all, and it is not express.static of the project root.
-['upload-limits.js','agreement-clauses.js','workflow-ui.js'].forEach(file=>{
+['upload-limits.js','agreement-clauses.js','workflow-ui.js','lawyer-workspace-ui.js'].forEach(file=>{
   app.get('/'+file,(req,res)=>{res.set('Cache-Control','no-cache');res.type('application/javascript');res.sendFile(path.join(__dirname,file));});
 });
 app.get('/lawyer-changes.js', (req, res) => {
