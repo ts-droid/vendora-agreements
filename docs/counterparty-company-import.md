@@ -19,6 +19,10 @@ Supported details: legal company name, registration number, VAT/Tax ID, explicit
 - User must accept or skip a pending import before inviting, running a new comparison or requesting signature. Historical reviews without extraction remain compatible.
 - This does not automatically change email recipients, accept commercial changes or send/sign an agreement.
 
+## Word output
+
+The reseller templates previously collected VAT/Tax ID but omitted it from their generated parties tables. Both reseller exports now include a VAT/Tax ID line when supplied, as the supplier template already does. Missing VAT adds no placeholder or new line. Existing legal wording and Vendora's invoice@vendora.se remain unchanged. The end-to-end test verifies the actual exported text rather than only the saved form.
+
 ## Tests
 
 Unit tests cover all three agreement types, source attribution, malformed/ambiguous output, wrong-party prevention, field allowlists, stale targets, idempotency, non-mutation and signing guards. An AI plumbing test runs the actual review code with a stub provider and confirms one call containing the extraction schema/instruction. The existing Chrome/PostgreSQL end-to-end test is extended to upload synthetic details, approve them separately, verify persisted archive/form values and actual Word output, then complete both negotiation rounds and signing gates. AI and email are mocked; no production customer records or messages are used.
