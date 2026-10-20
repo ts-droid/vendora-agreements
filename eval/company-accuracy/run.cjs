@@ -13,8 +13,9 @@ fs.mkdirSync(outDir,{recursive:true});
 const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
 const root=path.resolve(__dirname,'../..');
 const git=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'});
+const railwayCommit=/^[a-f0-9]{40}$/i.test(process.env.RAILWAY_GIT_COMMIT_SHA||'')?process.env.RAILWAY_GIT_COMMIT_SHA:null;
 const report={schema:1,kind:'live-provider-company-extraction',startedAt:new Date().toISOString(),status:'not_started',
-  testedCommit:git.status===0?git.stdout.trim():null,suite,repeats,plannedCalls:selected.length*repeats,
+  testedCommit:railwayCommit||(git.status===0?git.stdout.trim():null),suite,repeats,plannedCalls:selected.length*repeats,
   reviewInvocations:0,requestedModel:null,resolvedModel:null,providerRequestCount:null,
   fixtureSha256:sha(fs.readFileSync(path.join(__dirname,'cases.cjs'))),
   sourceHashes:Object.fromEntries(['ai.js','counterparty-details.js','lawyer-changes.js','agreement-clauses.js'].map(p=>[p,sha(fs.readFileSync(path.join(root,p)))])),

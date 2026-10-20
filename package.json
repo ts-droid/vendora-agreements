@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/*.js",
-    "validateStoredAgreement": "node scripts/validateStoredAgreement.js"
+    "validateStoredAgreement": "node scripts/validateStoredAgreement.js",
+    "test:ai:check": "node scripts/run-ai-accuracy.cjs --check",
+    "test:ai:smoke": "node scripts/run-ai-accuracy.cjs --smoke",
+    "test:ai:all": "node scripts/run-ai-accuracy.cjs --all"
   },
   "engines": {
     "node": ">=18"

@@ -1,8 +1,6 @@
 name: Live company extraction accuracy
+# Optional alternative to the Railway command. Paid calls are never triggered by push/startup.
 on:
-  push:
-    branches: [test/live-company-accuracy]
-    paths: [.github/workflows/ai-company-accuracy.yml]
   workflow_dispatch:
     inputs:
       suite:
