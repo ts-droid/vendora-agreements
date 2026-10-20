@@ -76,8 +76,13 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     await page.screenshot({path:'test-results/company-details-approved.png',fullPage:true});
     for(let n=0;n<5;n++){
       const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;
+      // A keep-only finding never had an accept button. Wait for the actual saved
+      // decision and released UI, not the absence of that unrelated button.
+      await page.waitForFunction(({item,action})=>{const e=document.querySelector('[data-item="'+item+'"] [data-wf="'+action+'"]');return e&&!e.disabled&&!WorkflowActivity.busy();},{},{item:itemId,action});
       await page.click('[data-item="'+itemId+'"] [data-wf="'+action+'"]');
-      await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf="accept"]');},{},itemId);
+      await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf]')&&!WorkflowActivity.busy();},{},itemId);
+      const savedDecision=await good('/api/workflow/'+id);
+      assert.equal(savedDecision.state.items.find(item=>item.id===itemId).status,action==='keep'?'kept':'accepted');
     }
     let r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'45');assert.equal(r.state.decisions.length,6);assert.equal(C.digest(r.state.baseline),baseline);
     assert.match(r.data.clauseOverrides['ra.s4.title'],/reclaim unpaid Products/);
