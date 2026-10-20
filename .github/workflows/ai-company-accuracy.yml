@@ -1,0 +1,69 @@
+name: Live company extraction accuracy
+on:
+  push:
+    branches: [test/live-company-accuracy]
+    paths: [.github/workflows/ai-company-accuracy.yml]
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Synthetic cases: smoke=3, all=12. Real calls incur provider charges.'
+        type: choice
+        options: [smoke, all]
+        default: smoke
+      repeats:
+        description: 'Repeated calls per case (not independent documents)'
+        type: choice
+        options: ['1', '3']
+        default: '1'
+permissions:
+  contents: read
+concurrency:
+  group: company-accuracy-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    if: github.repository == 'ts-droid/vendora-agreements'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Test the scorer separately from the model
+        run: |
+          mkdir -p ai-eval-results
+          set -o pipefail
+          node --test test/company-accuracy-eval.test.js 2>&1 | tee ai-eval-results/scorer-tests.log
+      - name: Install locked dependencies without credentials
+        run: npm ci --ignore-scripts
+      - name: Real model evaluation (fails explicitly if credential unavailable)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          AI_EVAL_ALLOW_LIVE: '1'
+          AI_EVAL_SUITE: ${{ inputs.suite || 'smoke' }}
+          AI_EVAL_REPEATS: ${{ inputs.repeats || '1' }}
+          DATABASE_URL: ''
+          SMTP_USER: ''
+          SMTP_PASS: ''
+          GOOGLE_SERVICE_ACCOUNT_JSON: ''
+        run: node eval/company-accuracy/run.cjs
+      - name: Publish a truthful outcome, including blocked/incomplete runs
+        if: always()
+        run: |
+          node <<'JS'
+          const fs=require('node:fs');
+          const p='ai-eval-results/results.json';
+          const r=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):{status:'not_executed',metrics:null};
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'# Real AI accuracy\n\nStatus: **'+r.status+'**\n\n'+(r.metrics?'```json\n'+JSON.stringify(r.metrics,null,2)+'\n```':'No live accuracy score is available.')+'\n\nScorer tests are NOT model-accuracy measurements.\n');
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-company-accuracy
+          path: ai-eval-results/
+          retention-days: 7
