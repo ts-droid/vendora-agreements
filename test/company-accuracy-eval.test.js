@@ -1,0 +1,16 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const cases=require('../eval/company-accuracy/cases.cjs'),{grade,aggregate,norm}=require('../eval/company-accuracy/score.cjs');
+function oracle(item){return {party_name:item.expected.party||'',role:item.expected.role||'unclear',ambiguous:item.expected.ambiguous,party_evidence:item.source,source_ref:'synthetic fixture',note:'Scorer test fixture, NOT a live AI response',fields:Object.entries(item.expected.fields).map(([field,value])=>({field,value,evidence:item.source,source_ref:'synthetic fixture',confidence:'high'}))};}
+test('gold fixtures have source-backed values, unique IDs and all three agreement types',()=>{
+  assert.equal(cases.length,12);assert.equal(new Set(cases.map(x=>x.id)).size,12);assert.deepEqual([...new Set(cases.map(x=>x.type))].sort(),['da','ra','rb']);
+  for(const c of cases)for(const v of Object.values(c.expected.fields))assert.ok(norm(c.source).includes(norm(v)),c.id+' '+v);
+});
+test('scorer accepts the hand-labelled oracle for every fixture, not a measured model result',()=>{for(const c of cases)assert.equal(grade(c,oracle(c)).passed,true,c.id);});
+test('wrong values count as both a false positive and a missed expected value',()=>{const c=cases[0],r=oracle(c);r.fields.find(f=>f.field==='reg').value='WRONG-001';const g=grade(c,r);assert.equal(g.raw.fp,1);assert.equal(g.raw.fn,1);assert.equal(g.passed,false);});
+test('borrowed third-party identity is a critical error even if quoted from the document',()=>{const c=cases[5],r=oracle(c);r.fields.find(f=>f.field==='reg').value='TEST-WARE-006';const g=grade(c,r);assert.equal(g.raw.fp,1);assert.ok(g.critical.includes('wrong_or_unsupported_field_value'));assert.equal(g.afterGuard.unsafeCandidate,true);});
+test('wrong party and reversed roles cannot earn correct field credit',()=>{for(const change of [{party_name:'Another Company'},{role:'supplier'}]){const c=cases[0],g=grade(c,{...oracle(c),...change});assert.equal(g.partyCorrect,false);assert.equal(g.raw.tp,0);assert.equal(g.passed,false);}});
+test('missing fields affect recall; no-output precision is undefined, not 100 percent',()=>{const c=cases[0],r=oracle(c);r.fields=[];const m=aggregate([{grade:grade(c,r)}]);assert.equal(m.raw.precision,null);assert.equal(m.raw.recall,0);assert.equal(m.pass,false);});
+test('ambiguous cases require abstention; candidate data cannot masquerade as safe extraction',()=>{const c=cases[4],r=oracle(c);assert.equal(grade(c,r).passed,true);r.fields.push({field:'name',value:'North Test Retail AB',evidence:c.source});assert.equal(grade(c,r).passed,false);});
+test('invented source quotes and duplicates fail independently of plausible field values',()=>{const c=cases[0],r=oracle(c);r.fields[0].evidence='invented';assert.equal(grade(c,r).passed,false);r.fields[0].evidence=c.source;r.fields.push(r.fields[0]);assert.equal(grade(c,r).raw.fp,1);});
+test('null/malformed extraction and provider errors are never passing live results',()=>{const c=cases[0];assert.equal(grade(c,null).passed,false);assert.equal(aggregate([]).pass,false);const a=aggregate([{error:{}},{grade:grade(c,oracle(c))}]);assert.equal(a.errors,1);assert.equal(a.pass,false);});
