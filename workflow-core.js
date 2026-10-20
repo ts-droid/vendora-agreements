@@ -80,6 +80,30 @@ function reviewItems(row, reviewId, findings) {
     return {id:'review:'+reviewId+':'+index,source:'comparison',sourceRef:f.their_clause_ref||'',preconditions:preconditions(row.data,changes),documentRevision:Number(row.workflow_revision),reviewId,round:s.round+1,status:'pending',classification:f.classification,topic:f.topic||'Avvikelse',their:f.their_position||'',our:f.our_position||'',rationale:f.why_it_matters||'',proposed:f.proposed_wording||'',legal:f.legal_note||'',changes,preview,issue,requiresCounsel:!!f.requires_counsel,requiresCounselOnAccept:!!f.requires_counsel};
   });return items;
 }
+// A rework is still only a proposal. Do not retire the old item or modify the
+// agreement unless the complete new change group can be previewed safely.
+function reworkProposal(row, itemId, out) {
+  editable(row);
+  const s=copy(state(row));
+  if(s.reviewRunning||row.status==='invited')throw error('Invänta jämförelsen eller kundens svar.');
+  const target=s.items.find(i=>i.id===itemId&&i.status==='pending');
+  if(!target)throw error('Förslaget är inte längre öppet.');
+  const proposals=out&&out.proposals;
+  if(!Array.isArray(proposals)||!proposals.length){
+    const e=error('Advokaten föreslog ingen tillämpbar textändring. Vår lydelse är oförändrad. Behåll den eller precisera önskemålet.',422);
+    e.explanation=String(out&&out.reply||'').slice(0,12000);throw e;
+  }
+  const result=apply(row.data,proposals);
+  if(!result.displayed.some(p=>p.oldText!==p.newText))throw error('Förslaget är identiskt med vår befintliga lydelse. Välj att behålla texten.',422);
+  const next={...target,id:'alternative:'+crypto.randomUUID(),status:'pending',source:'alternative',
+    preconditions:preconditions(row.data,proposals),documentRevision:Number(row.workflow_revision),
+    changes:copy(proposals),preview:result.displayed,issue:'',rationale:String(out.reply||''),
+    proposed:result.displayed.map(p=>p.newText).join('\n\n')};
+  // A fresh alternative must not inherit a previous decision identity.
+  delete next.decidedBy;delete next.decidedAt;
+  target.status='superseded';s.items.push(next);
+  return {state:s,itemId:next.id};
+}
 function recordReview(row, reviewId, findings, at) {
   const s=copy(state(row)); if(pending(s).length)throw error('Behandla befintliga förslag innan en ny jämförelse startas.');
   s.round++;s.items.push(...reviewItems(row,reviewId,findings));s.reviewRunning=null;s.lastReview={id:reviewId,at};return s;
@@ -198,4 +222,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};
+module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};

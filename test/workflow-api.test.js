@@ -105,7 +105,10 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     assert.equal((await api('/api/workflow/'+id,'GET',undefined,stranger)).status,404);
     // Second round: rework the customer's request, then explicitly approve the new alternative.
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const request=r.state.items.find(i=>i.status==='pending');
-    await good('/api/workflow/'+id+'/rework','POST',{itemId:request.id,instruction:'Offer 50 days while retaining our protection.',expectedRevision:r.revision});
+    page.once('dialog',dialog=>dialog.accept('Offer 50 days while retaining our protection.'));
+    await page.click('[data-item="'+request.id+'"] [data-wf="rework"]');
+    await page.waitForFunction(()=>!WorkflowActivity.busy()&&document.querySelector('[data-item^="alternative:"] [data-wf="accept"]'));
+    await page.screenshot({path:'test-results/workflow-reworked-proposal.png',fullPage:true});
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const alternative=r.state.items.find(i=>i.status==='pending');assert.equal(r.data.pay,'45');
     await page.click('[data-item="'+alternative.id+'"] [data-wf="accept"]');await page.waitForFunction(()=>window._editing.base.pay==='50');
     r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'50');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.signatureProblems.length,0,JSON.stringify(r.signatureProblems));
@@ -149,6 +152,39 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         if(type==='da'){assert.match(out.xml,/invoice@vendora.se/);assert.match(out.xml,/finance@supplier.example.test/);assert.match(out.xml,/CPEORI002/);}
         fs.writeFileSync('test-results/company-import-'+type+'.docx',Buffer.from(out.bytes));
       } finally {ai.reviewContract=oldAI;}
+    });
+    await t.test('rework API preserves original on empty replies, rejects duplicate calls and returns an approvable alternative',async()=>{
+      const data=C.copy(seeds.ra);
+      const made=await good('/api/agreements','POST',{type:'ra',data,status:'draft',counterpartyName:data.name});extraIds.push(made.id);
+      let entry=await good('/api/workflow/'+made.id+'/start','POST',{});
+      const source={data:entry.data,type:'ra',status:'draft',workflow_state:entry.state,workflow_revision:entry.revision};
+      const pending=C.recordReview(source,999,[{topic:'Payment',classification:'deal_breaker',changes:[],requires_counsel:true,proposed_wording:'Counter wording to be mapped.'}],'test');
+      await db.query('UPDATE agreements SET workflow_state=$1 WHERE id=$2',[pending,made.id]);
+      const payload={itemId:'review:999:0',instruction:'Offer a safe alternative.',expectedRevision:entry.revision};
+      const endpoint='/api/workflow/'+made.id+'/rework',previousChat=ai.chat;
+      try{
+        ai.chat=async()=>({reply:'No safe change; keep our text.',proposals:[]});
+        const noChange=await api(endpoint,'POST',payload);assert.equal(noChange.status,422);assert.match(noChange.body.explanation,/No safe change/);
+        entry=await good('/api/workflow/'+made.id);assert.equal(entry.state.items[0].status,'pending');assert.equal(entry.revision,payload.expectedRevision);
+        // Wrong actor is refused before provider work.
+        assert.equal((await api(endpoint,'POST',payload,stranger)).status,404);
+        let release,entered;const started=new Promise(r=>entered=r);let aiCalls=0;
+        ai.chat=async (agreement,messages)=>{
+          aiCalls++;assert.match(messages[0].content,/Counter wording to be mapped/);entered();
+          await new Promise(r=>release=r);
+          return {reply:'45 day alternative',proposals:[{target:{kind:'field',id:'pay'},op:'replace',oldText:agreement.pay,newText:'45',label:'Payment',rationale:'test',anchor:''}]};
+        };
+        const first=api(endpoint,'POST',payload);await started;
+        let duplicate;
+        try{duplicate=await api(endpoint,'POST',payload);}finally{release();}
+        const result=await first;assert.equal(duplicate.status,409);assert.equal(aiCalls,1);
+        assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.reworkedItemId);
+        assert.equal(result.body.data.pay,data.pay);assert.equal(result.body.state.items[0].status,'superseded');
+        const alternative=result.body.state.items.find(i=>i.id===result.body.reworkedItemId);
+        assert.equal(alternative.status,'pending');assert.equal(alternative.preview[0].newText,'45');assert.equal(alternative.requiresCounsel,true);
+        const approved=await good('/api/workflow/'+made.id+'/decisions','POST',{itemId:alternative.id,action:'accept',expectedRevision:result.body.revision,requestId:'approve-real-alternative'});
+        assert.equal(approved.data.pay,'45');assert.ok(approved.signatureProblems.some(p=>p.includes('särskilt godkännande')));
+      }finally{ai.chat=previousChat;}
     });
     fs.writeFileSync('test-results/workflow-outcome.json',JSON.stringify({agreementId:id,status:r.status,revision:r.revision,decisions:r.state.decisions.length,versions:history.versions.length,mailMockCalls:mail.length,ai:'mocked',counterpartySignature:'synthetic file with manual confirmation'},null,2));
   }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));for(const deleted of [id,...extraIds].filter(Boolean))await db.query('DELETE FROM agreements WHERE id=$1',[deleted]);await db.pool.end();}
