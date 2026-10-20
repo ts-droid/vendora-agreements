@@ -4,7 +4,7 @@ window.WorkflowActivity = (function () {
   'use strict';
   var active = new Map();
   var originals = new Map();
-  var selectors = '[data-wf], [id^="cr_btn_"], [id^="cr_file_"], #editBar button, .tabs button, .tab-panel input, .tab-panel select, .tab-panel textarea';
+  var selectors = '[data-wf], [id^="cr_btn_"], [id^="cr_file_"], #editBar button, .genbar button, .tabs button, .tab-panel input, .tab-panel select, .tab-panel textarea';
   function sync() {
     document.querySelectorAll(selectors).forEach(function (button) {
       if (!active.size) return;
@@ -49,7 +49,7 @@ window.WorkflowActivity = (function () {
     };
   }
   var style = document.createElement('style');
-  style.textContent = '.wf-activity{display:flex;align-items:flex-start;gap:12px;padding:14px;margin:12px 0;background:#eef5f1;border:1px solid #b8cfc2;border-radius:10px;color:var(--navy);font-size:14px;line-height:1.5}.wf-spinner{display:inline-block;flex-shrink:0;width:22px;height:22px;border:3px solid #b8cfc2;border-top-color:var(--navy);border-radius:50%;animation:wf-spin .8s linear infinite}.wf-elapsed,.wf-wait-note{font-size:12px;margin-top:3px}.wf-feedback{white-space:pre-wrap;line-height:1.5;margin-top:8px}.wf-item:focus{outline:2px solid var(--navy);outline-offset:3px}.wf-diff details{margin-top:8px}.wf-diff pre{white-space:pre-wrap;font:inherit}.wf-text-draft{border-left:3px solid #9a6728;padding:12px;background:#fcf5e8;white-space:pre-wrap;margin:12px 0}.wf-no-change{padding:10px;background:#f3f5f3;border-radius:8px;line-height:1.5}@keyframes wf-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.wf-spinner{animation:none;border-style:dotted}}';
+  style.textContent = 'body.wf-case-open .genbar{position:static} .wf-activity{display:flex;align-items:flex-start;gap:12px;padding:14px;margin:12px 0;background:#eef5f1;border:1px solid #b8cfc2;border-radius:10px;color:var(--navy);font-size:14px;line-height:1.5}.wf-spinner{display:inline-block;flex-shrink:0;width:22px;height:22px;border:3px solid #b8cfc2;border-top-color:var(--navy);border-radius:50%;animation:wf-spin .8s linear infinite}.wf-elapsed,.wf-wait-note{font-size:12px;margin-top:3px}.wf-feedback{white-space:pre-wrap;line-height:1.5;margin-top:8px}.wf-item:focus{outline:2px solid var(--navy);outline-offset:3px}.wf-diff details{margin-top:8px}.wf-diff pre{white-space:pre-wrap;font:inherit}.wf-text-draft{border-left:3px solid #9a6728;padding:12px;background:#fcf5e8;white-space:pre-wrap;margin:12px 0}.wf-no-change{padding:10px;background:#f3f5f3;border-radius:8px;line-height:1.5}@keyframes wf-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.wf-spinner{animation:none;border-style:dotted}}';
   document.head.appendChild(style);
   return {start:start, sync:sync, busy:function () { return active.size > 0; }};
 })();
@@ -62,7 +62,7 @@ window.WorkflowActivity = (function () {
   var order={deal_breaker:0,red_flag:1,negotiate:2,missing:3,acceptable:4};
   async function api(url,method,body){var r=await fetch(url,{method:method||'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});var j=await r.json();if(!r.ok){var err=new Error(j.error||'Begäran misslyckades.');err.explanation=j.explanation||'';throw err;}return j;}
   function uid(){return crypto.randomUUID();}
-  function reset(){current=null;window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
+  function reset(){document.body.classList.remove('wf-case-open');current=null;window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
   window.wfReset=reset;
   function adopt(row){
     if(current&&current.id!==row.id)reset();current=row;
@@ -77,6 +77,9 @@ window.WorkflowActivity = (function () {
     var saveStatus=document.getElementById('editBarStatus');if(saveStatus){saveStatus.textContent='Sparad version '+row.revision;saveStatus.style.color='var(--muted)';}
     var text=document.getElementById('editBarText');if(text)text.textContent='Avtal #'+row.id+' — '+(row.data.name||'Nytt utkast')+' — version '+row.revision;
     var select=document.getElementById('aiAgreementType');if(select)select.value=row.type==='da'?'distribution':'reseller';
+    // The legacy sticky generation bar must not cover workflow decision buttons.
+    // Keep it accessible at the end of the form; the workspace has its own export actions.
+    document.body.classList.toggle('wf-case-open',!!row.state);
     render();return row;
   }
   async function refresh(id){var row=await api('/api/workflow/'+id);return adopt(row);}

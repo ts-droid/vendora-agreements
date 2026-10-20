@@ -55,7 +55,7 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
   const page=await browser.newPage();const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));page.setDefaultTimeout(10000);
   try{
     await page.setViewport({width:1200,height:1000});
-    await page.setContent('<html><head><style>body{font-family:Arial,sans-serif;background:#f2eee6;--navy:#173e32;--border:#d9dedb;--muted:#515b56;margin:30px auto;max-width:900px}.card{padding:22px;background:white;border-radius:12px;margin-top:14px}button{border:1px solid #aaa;border-radius:18px;padding:8px 12px}button:disabled{opacity:.4}</style></head><body><div id="editBar"><span id="editBarText"></span><span id="editBarStatus"></span><button id="editSaveBtn">Save</button></div><select id="aiAgreementType"><option>reseller</option></select><div id="cr_slot_ra"><div class="card"><input id="cr_type_ra" value="reseller" type="hidden"><input id="cr_name_ra"><input type="file" id="cr_file_ra"><button id="cr_btn_ra">Jämför och föreslå anpassningar</button><div id="cr_msg_ra"></div><div id="cr_out_ra"></div></div></div></body></html>');
+    await page.setContent('<html><head><style>body{font-family:Arial,sans-serif;background:#f2eee6;--navy:#173e32;--border:#d9dedb;--muted:#515b56;margin:30px auto;max-width:900px}.card{padding:22px;background:white;border-radius:12px;margin-top:14px}button{border:1px solid #aaa;border-radius:18px;padding:8px 12px}button:disabled{opacity:.4}.genbar{position:sticky;bottom:0;background:white;padding:14px;z-index:100}</style></head><body><div id="editBar"><span id="editBarText"></span><span id="editBarStatus"></span><button id="editSaveBtn">Save</button></div><select id="aiAgreementType"><option>reseller</option></select><div id="cr_slot_ra"><div class="card"><input id="cr_type_ra" value="reseller" type="hidden"><input id="cr_name_ra"><input type="file" id="cr_file_ra"><button id="cr_btn_ra">Jämför och föreslå anpassningar</button><div id="cr_msg_ra"></div><div id="cr_out_ra"></div></div></div><div class="genbar"><button>Generate</button></div></body></html>');
     const base=row();
     const view={id:base.id,type:base.type,data:base.data,status:base.status,revision:1,state:base.workflow_state,signatureProblems:['Saknad uppgift: sig_email']};
     view.state.items.push({...view.state.items[0],id:'unmapped',proposed:'Draft wording not yet mapped',requiresCounsel:false});
@@ -96,6 +96,7 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
     await page.addScriptTag({content:html.slice(html.indexOf('async function runContractReview(type){'),html.indexOf('\nfunction crBadge'))});
     await page.evaluate(()=>wfRefresh(991));
+    assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'static','legacy export bar cannot cover review actions');
     assert.equal(await page.$('[data-item="review:88:0"] [data-wf="accept"]'),null);
     assert.match(await page.$eval('[data-item="review:88:0"] [data-wf="keep"]',e=>e.textContent),/Godkänn att vår lydelse behålls/);
     assert.match(await page.$eval('[data-item="unmapped"]',e=>e.textContent),/Draft wording not yet mapped/);
@@ -158,6 +159,8 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     // Reduced-motion setting removes rotation, not visible text feedback.
     await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
     const animation=await page.evaluate(()=>{const a=WorkflowActivity.start('test',()=>document.getElementById('cr_msg_ra'),'Test');const name=getComputedStyle(document.querySelector('#cr_msg_ra .wf-spinner')).animationName;a.finish('Done');return name;});assert.equal(animation,'none');
+    await page.evaluate(()=>wfReset());
+    assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'sticky','standalone generator retains its toolbar');
     assert.deepEqual(pageErrors,[]);
   }finally{await browser.close();}
 });

@@ -49,6 +49,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     await page.click('#cr_btn_ra');
     await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);
     id=await page.evaluate(()=>window._editing.id);
+    assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'static','sticky generation toolbar must not intercept decision clicks');
     const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
     assert.ok(initial.signatureProblems.includes('Minst ett försäljningsställe krävs.'),'customer must still supply an approved point of sale');
     const blocked=await api('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
