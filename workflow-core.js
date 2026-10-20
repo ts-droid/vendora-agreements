@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const LC = require('./lawyer-changes');
 const clauses = require('./agreement-clauses');
+const counterpartyDetails = require('./counterparty-details');
 const fs = require('fs');
 const TEMPLATE_VERSION = crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./agreement-clauses'))).update(fs.readFileSync(require.resolve('./agreement-defaults.json'))).digest('hex');
 const DEFAULTS=require('./agreement-defaults.json');
@@ -101,6 +102,42 @@ function decide(row, body, actor, at) {
   if(item.field){delete (data._proposals||{})[item.field]; if(body.action==='accept')data._accepted=Array.from(new Set((data._accepted||[]).concat(item.field)));}
   return {data,state:s};
 }
+// Separate data-completion decision: never accepts the uploaded contract's terms.
+function decideCompanyDetails(row,body,actor,at) {
+  editable(row);const s=copy(state(row));
+  if(!/^[A-Za-z0-9_-]{8,100}$/.test(body.requestId||''))throw error('Besluts-ID krävs.',400);
+  if(!Array.isArray(body.fields)||body.fields.length>40||body.fields.some(k=>typeof k!=='string'))throw error('Välj giltiga fält.',400);
+  const selected=Array.from(new Set(body.fields)).sort();
+  const command=digest({importId:body.importId,action:body.action,fields:selected,confirmedParty:body.confirmedParty===true});
+  const previous=s.decisions.find(d=>d.requestId===body.requestId);
+  if(previous){if(previous.command!==command)throw error('Besluts-ID är redan använt.');return {data:row.data,state:s,replayed:true};}
+  checkVersion(row,body.expectedRevision);
+  if(s.reviewRunning||row.status==='invited')throw error('Invänta jämförelsen eller kundens svar.');
+  const group=(s.companyImports||[]).find(i=>i.id===body.importId);
+  if(!group||group.status!=='pending')throw error('Importförslaget är redan behandlat eller tillhör inte avtalet.');
+  if(!['apply','skip'].includes(body.action))throw error('Välj import eller behåll befintliga uppgifter.',400);
+  const data=copy(row.data),changes=[];
+  if(body.action==='apply'){
+    if(group.issue||body.confirmedParty!==true)throw error(group.issue||'Bekräfta att rätt juridisk avtalspart har identifierats.',400);
+    if(!selected.length)throw error('Markera minst en uppgift att föra in.',400);
+    for(const field of selected){
+      const f=group.fields.find(x=>x.field===field);
+      if(!f||f.issue||!counterpartyDetails.available(row.type).includes(field))throw error('Fältet kan inte importeras: '+field,400);
+      if(counterpartyDetails.read(data,field)!==f.previous)throw error('Uppgiften har ändrats sedan jämförelsen: '+f.label+'. Behåll befintliga uppgifter och gör en ny jämförelse.');
+      counterpartyDetails.write(data,field,f.value);changes.push({field,oldValue:f.previous,newValue:f.value});
+    }
+    for(const c of clauses.catalog(row.type))if((row.data.clauseOverrides||{})[c.id]&&c.render(row.data)!==c.render(data))throw error('Uppgifterna påverkar en redan anpassad klausul: '+c.label+'. Anpassa och granska klausulen separat.');
+    validFields(data);
+    const old=new Set(LC.consistencyCheck(row.data).map(x=>x.message));
+    const conflicts=LC.consistencyCheck(data).filter(x=>!old.has(x.message));
+    if(conflicts.length)throw error('Motstridiga uppgifter: '+conflicts.map(x=>x.message).join('; '));
+    s.counselApproval=null;
+  } else if(selected.length)throw error('Inga fält får väljas när importen avstås.',400);
+  group.status=body.action==='apply'?'applied':'skipped';group.decidedBy=actor;group.decidedAt=at;
+  group.fields.forEach(f=>{f.status=body.action==='apply'&&selected.includes(f.field)?'imported':'kept';});
+  s.decisions.push({requestId:body.requestId,command,importId:group.id,action:'company-'+body.action,actor,at,changes,revision:Number(row.workflow_revision)+1});
+  return {data,state:s};
+}
 function publicData(data) {
   const d=stripTransient(data);Object.keys(d).forEach(k=>{if(k[0]==='_'||['redlines','workflow_state','workflow_revision'].includes(k))delete d[k];});d._type=data._type;
   // Only accepted text modifications are included; never audit records, model rationale or internal alternatives.
@@ -148,6 +185,7 @@ function receive(row, submitted, sentVersion, actor, at) {
 function signatureProblems(row) {
   const s=state(row),problems=[];
   if(s.reviewRunning)problems.push('En jämförelse pågår.');
+  if(counterpartyDetails.pending(s).length)problems.push('Granska eller avstå från import av företagsuppgifter först.');
   if(pending(s).length)problems.push(pending(s).length+' ändringsförslag väntar på beslut.');
   if(s.items.some(i=>i.status==='accepted'&&i.requiresCounsel)&&(!s.counselApproval||s.counselApproval.digest!==digest(row.data)))problems.push('Dokumenterat särskilt godkännande krävs för accepterade riskvillkor.');
   for(const k of ['name','reg','country','addr','sig_name','sig_email'])if(!String(row.data[k]||'').trim()||/^\[.*\]$/.test(String(row.data[k])))problems.push('Saknad uppgift: '+k);
@@ -160,4 +198,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};
+module.exports={decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};

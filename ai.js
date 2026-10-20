@@ -3,6 +3,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const lawyerChanges = require('./lawyer-changes');
 const aiDocument = require('./ai-document');
+const counterpartyDetails = require('./counterparty-details');
 
 const enabled = !!process.env.ANTHROPIC_API_KEY;
 const client = enabled ? new Anthropic() : null; // reads ANTHROPIC_API_KEY from env
@@ -119,6 +120,7 @@ const REVIEW_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    company_details: counterpartyDetails.SCHEMA,
     document_summary: { type: 'string', description: 'Two or three sentences: what this document is, who drafted it, and its overall slant.' },
     governing_law_and_forum: { type: 'string', description: 'The governing law and dispute forum in THEIR document, and whether Vendora can accept it.' },
     overall_verdict: { type: 'string', enum: ['sign_as_is', 'negotiate', 'do_not_sign'] },
@@ -147,7 +149,7 @@ const REVIEW_SCHEMA = {
     refer_to_counsel: { type: 'boolean' },
     counsel_reason: { type: 'string' },
   },
-  required: ['document_summary', 'governing_law_and_forum', 'overall_verdict', 'overall_rationale', 'findings', 'questions_for_seller', 'refer_to_counsel', 'counsel_reason'],
+  required: ['company_details', 'document_summary', 'governing_law_and_forum', 'overall_verdict', 'overall_rationale', 'findings', 'questions_for_seller', 'refer_to_counsel', 'counsel_reason'],
 };
 
 const TYPE_NAME = { da: 'Distributor Agreement', ra: 'Reseller Agreement', rb: 'Reseller Agreement — Simplified' };
@@ -421,7 +423,7 @@ async function reviewPrepared(args) {
   ];
   const house = houseBlock(scopedPlaybook(args.playbook, type));
   if (house) system.push({ type: 'text', text: house, cache_control: { type: 'ephemeral' } });
-  system.push({ type: 'text', text: REVIEW_TASK });
+  system.push({ type: 'text', text: REVIEW_TASK + '\n\n' + counterpartyDetails.PROMPT });
   system.push({ type: 'text', text: lawyerChanges.catalogBlock(type, scopedAgreement(type, args.agreement), []) });
   system.push(benchmarkBlock(args.ourText));
   const stored = args.agreement && normalizeAgreementType((args.agreement.data || args.agreement)._type);

@@ -24589,7 +24589,7 @@ async function buildRA(overrideData) {
     // Parties
     h.h1("1   Parties"),
     h.par("This Reseller Agreement including its appendices (the \u201cAgreement\u201d) is made between:"),h.sp(),
-    h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladug\u00e5rdsv\u00e4gen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:"(the \u201cSupplier\u201d)",i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"\u2014")),h.par((data.country||"\u2014")+(data.addr?" \u2014 "+data.addr:"")),(data.sig_name?h.par(data.sig_name+(data.sig_email?" \u2014 "+data.sig_email:"")+(data.sig_phone?"  "+data.sig_phone:""),{spacing:{before:30,after:40}}):h.sp()),h.par([{t:"(the \u201cReseller\u201d)",i:true}])]),
+    h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladug\u00e5rdsv\u00e4gen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:"(the \u201cSupplier\u201d)",i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"\u2014")),h.par((data.country||"\u2014")+(data.addr?" \u2014 "+data.addr:"")),...(data.vat?[h.par("VAT / Tax ID: "+data.vat)]:[]),(data.sig_name?h.par(data.sig_name+(data.sig_email?" \u2014 "+data.sig_email:"")+(data.sig_phone?"  "+data.sig_phone:""),{spacing:{before:30,after:40}}):h.sp()),h.par([{t:"(the \u201cReseller\u201d)",i:true}])]),
     h.sp(),
     // §2
     h.h1("2   Interpretation"),
@@ -24749,7 +24749,7 @@ async function buildRB(overrideData) {
     h.fldTbl([h.fldRow("Agreement date",dt,2400,7106),h.fldRow("Products / brands",data.products,2400,7106),h.fldRow("Territory (active sales area)",data.terr,2400,7106),h.fldRow("Shipping",data.inco+" Vendora Nordic AB, Lomma, Sweden",2400,7106),h.fldRow("Payment",data.curr+", "+data.pay+" days net",2400,7106),h.fldRow("Notice period",data.notice+" days",2400,7106)].filter(Boolean)),
     h.pgBrk(),
     h.h1("1   Parties"),clauseItemsNode(h, "rb.s1.p1", "This Reseller Agreement is made between:", undefined),h.sp(),
-    h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladugårdsvägen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:'(the “Supplier”)',i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"—")+" — "+(data.country||"—")),(data.addr?h.par(data.addr):h.sp()),h.sp(),h.par([{t:'(the “Reseller”)',i:true}])]),
+    h.partiesTable(h.LITE,[h.par([{t:"VENDORA NORDIC AB",b:true,c:h.BL}]),h.par("Reg. no.: 556843-5456"),h.par("Ladugårdsvägen 1, 234 35 Lomma, Sweden"),h.sp(),h.par([{t:'(the “Supplier”)',i:true}])],h.GREY,[h.par([{t:data.name||"[Reseller]",b:true,c:h.BL}]),h.par("Reg. no.: "+(data.reg||"—")+" — "+(data.country||"—")),(data.addr?h.par(data.addr):h.sp()),...(data.vat?[h.par("VAT / Tax ID: "+data.vat)]:[]),h.sp(),h.par([{t:'(the “Reseller”)',i:true}])]),
     h.sp(),
     h.h1("1   Appointment"),clauseItemsNode(h, "rb.s1.p2", "Vendora grants the Reseller a non-exclusive right to actively market and sell "+( data.products||"the Products")+" in "+(data.terr||"the Territory")+". Within the EU/EEA, passive sales cannot be restricted. No sub-resellers without prior written consent.", undefined),
     h.h1("2   Orders and Payment"),clauseNode(h, "rb.s2.payment", LawyerChanges.standardClauseText("rb", "rb.s2.payment", data)),
@@ -27064,7 +27064,7 @@ function renderContractReviewCards(){
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Jämför och föreslå anpassningar &rarr;</button>"
       + "<span id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted)'></span></div>"
-      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 50 MB. A full review of a real contract takes a few minutes — approve or retain each proposal before sending the agreement.</div>"
+      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 50 MB. Jämförelsen föreslår även motpartens företagsuppgifter från dokumentet. Kontrollera och välj vilka uppgifter som ska föras in i vårt avtal. Godkänn eller avstå förslagen före kundutskicket.</div>"
       + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
   });
 }

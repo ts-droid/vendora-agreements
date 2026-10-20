@@ -532,7 +532,8 @@ app.post('/api/ai/review', requireDb, auth.requireAuth, reviewLimiter, express.t
       if(wfRow){
         if(!saved){await workflow.finishReview(req,jobId,null,[],true);throw new Error('Review could not be saved');}
         if(review.refer_to_counsel) review.findings.forEach(f=>{if(f.classification==='deal_breaker'||f.classification==='red_flag')f.requires_counsel=true;});
-        await workflow.finishReview(req,jobId,saved.id,review.findings,false);
+        await workflow.finishReview(req,jobId,saved.id,review.findings,false,
+          require('./counterparty-details').prepare(review.company_details,type,{kind:doc.kind,data:doc.data,filename}));
       }
       job.result = { reviewId: saved ? saved.id : null, name, review, created_at: saved ? saved.created_at : new Date().toISOString(),
         saveError: saveError ? 'The review could not be saved to the archive.' : null };

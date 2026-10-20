@@ -37,18 +37,48 @@
   function mount(type){var id='wf_panel_'+type,el=document.getElementById(id);if(!el){el=document.createElement('section');el.id=id;el.className='card';var slot=document.getElementById('cr_slot_'+type);if(slot)slot.appendChild(el);}return el;}
   function esc(s){return window.esc(s);}
   function line(label,text){return text?'<div class="wf-line"><strong>'+label+'</strong> '+esc(text)+'</div>':'';}
+  function companyImportsHtml(row){
+    var imports=row.state.companyImports||[],html='';
+    imports.forEach(function(group){
+      var pending=group.status==='pending',locked=['invited','pending_signature','vendora_signed','sent','signed'].includes(row.status)||!!row.state.reviewRunning;
+      html+='<section class="wf-company wf-check" data-company="'+esc(group.id)+'"><h3>Företagsuppgifter från det uppladdade avtalet</h3>';
+      html+=line('Identifierad motpart:',group.partyName)+line('Roll:',group.role==='supplier'?'Leverantör':group.role==='customer'?'Kund / återförsäljare':'Oklar');
+      html+=line('Källa:',group.source.filename)+line('Partshänvisning:',group.sourceRef)+line('Källcitat för avtalsparten:',group.partyEvidence)+line('Kommentar:',group.note);
+      html+='<p class="wf-note">Uppgifterna är hämtade ur dokumentet, inte verifierade mot ett bolagsregister. Endast markerade uppgifter förs in. Betalningsvillkor och Vendoras fakturaadress ändras inte.</p>';
+      if(group.issue)html+=line('Kan inte importeras:',group.issue);
+      if(!group.fields.length)html+='<p>Inga säkert identifierade företagsuppgifter finns att importera. Komplettera manuellt.</p>';
+      group.fields.forEach(function(f){
+        var same=String(f.previous).trim()===String(f.value).trim();
+        html+='<div class="wf-diff"><label>';
+        if(pending)html+='<input type="checkbox" data-company-field="'+esc(f.field)+'" '+(f.issue||group.issue||locked||same?'disabled':!f.previous.trim()&&f.confidence==='high'&&f.sourceVerified?'checked':'')+'> ';
+        html+='<strong>'+esc(f.label)+'</strong></label>';
+        html+=line('Befintligt värde:',f.previous||'—')+line('Hämtat värde:',f.value)+line('Källhänvisning:',f.sourceRef)+line('Källcitat:',f.evidence);
+        if(f.issue)html+='<p class="wf-warning">'+esc(f.issue)+'</p>';
+        else if(!f.sourceVerified||f.confidence!=='high')html+='<p class="wf-warning">Kontrollera i originalet: '+(!f.sourceVerified?'PDF-citatet är inte maskinellt textverifierat.':'AI:n har markerat uppgiften som osäker.')+'</p>';
+        if(pending&&f.previous.trim()&&!same)html+='<p class="wf-warning">Ett befintligt värde skiljer sig. Markera endast för en avsiktlig ersättning.</p>';
+        if(!pending)html+='<p class="wf-note">'+(f.status==='imported'?'Infört och sparat':'Befintlig uppgift behålls')+'</p>';
+        html+='</div>';
+      });
+      if(pending){
+        html+='<label><input type="checkbox" data-company-confirm '+(group.issue||locked?'disabled':'')+'> Jag har kontrollerat att uppgifterna avser rätt juridisk avtalspart.</label>';
+        html+='<div class="wf-actions"><button data-wf="company-apply" '+(group.issue||locked?'disabled':'')+'>För in markerade uppgifter i vårt avtal</button><button data-wf="company-skip" '+(locked?'disabled':'')+'>Behåll befintliga uppgifter / avstå import</button></div>';
+      } else if(group.decidedBy)html+='<p class="wf-note">Beslut sparat av '+esc(group.decidedBy)+'</p>';
+      html+='</section>';
+    });return html;
+  }
   function render(){if(!current||!current.state)return;var row=current,el=mount(row.type),s=row.state;if(!el)return;
-    var pending=s.items.filter(i=>i.status==='pending'),stage=row.status==='pending_signature'?4:['vendora_signed','sent','signed'].indexOf(row.status)>=0?5:row.status==='submitted'?3:row.status==='invited'?2:1;
+    var pending=s.items.filter(i=>i.status==='pending'),companyPending=(s.companyImports||[]).some(i=>i.status==='pending'),stage=row.status==='pending_signature'?4:['vendora_signed','sent','signed'].indexOf(row.status)>=0?5:row.status==='submitted'?3:row.status==='invited'?2:1;
     var steps=['1. Jämför och anpassa','2. Kundens komplettering','3. Granska återkoppling','4. Internt godkännande','5. Underskrift'];
     var html='<div class="wf-progress">'+steps.map((x,i)=>'<span'+(stage===i+1?' aria-current="step"':'')+'>'+x+'</span>').join('')+'</div>';
     html+='<h2>Vårt avtal · version '+row.revision+'</h2><p>Godkända anpassningar ändrar endast detta avtal. Standardmallen och kundens original lämnas orörda.</p>';
     if(s.reviewRunning)html+='<p role="status">Jämförelsen pågår. Inga ändringar har godkänts ännu.</p>';
     html+='<div class="wf-actions"><button data-wf="download">Ladda ned vårt avtal</button><button data-wf="redline">Word med ändringsmarkeringar</button>';
-    if(!['pending_signature','vendora_signed','sent','signed'].includes(row.status))html+='<button data-wf="invite" '+(pending.length?'disabled':'')+'>Skicka till kunden för granskning</button><button data-wf="signature" '+(row.signatureProblems.length||row.status==='invited'?'disabled':'')+'>Skicka för godkännande / underskrift</button>';
+    if(!['pending_signature','vendora_signed','sent','signed'].includes(row.status))html+='<button data-wf="invite" '+(pending.length||companyPending?'disabled':'')+'>Skicka till kunden för granskning</button><button data-wf="signature" '+(row.signatureProblems.length||row.status==='invited'?'disabled':'')+'>Skicka för godkännande / underskrift</button>';
     if(row.status==='invited')html+='<button data-wf="withdraw">Återkalla kundlänken för omarbetning</button>';
     if(row.status==='pending_signature')html+='<button data-wf="signview">Öppna intern signering</button>';
     if(row.status==='vendora_signed'||row.status==='sent')html+='<button data-wf="signview">Visa godkänd version</button><button data-wf="counterparty">Skicka för motpartens underskrift</button><button data-wf="confirm">Registrera returnerat, underskrivet avtal</button>';
     html+='</div><div id="wf_message" role="status" aria-live="polite"></div>';
+    html+=companyImportsHtml(row);
     if(row.signatureProblems.length)html+='<details class="wf-check"><summary>Kvar före slutgodkännande ('+row.signatureProblems.length+')</summary><p>'+row.signatureProblems.map(esc).join('<br>')+'</p>'+(window._isAdmin?'<button data-wf="counsel">Dokumentera särskilt godkännande</button>':'')+'</details>';
     if(s.sent)html+='<p class="wf-note">Senast utskickad version: '+s.sent.version+' · E-post: '+esc(s.sent.delivery==='sent'?'skickad':s.sent.delivery==='failed'?'kunde inte skickas':'inte bekräftad')+'. Kundens villkorsförslag ändrar inte avtalet automatiskt.</p>';
     html+='<h3>'+pending.length+' förslag väntar på beslut</h3>';
@@ -66,7 +96,16 @@
     el.innerHTML=html;
     el.querySelectorAll('[data-wf]').forEach(function(btn){btn.onclick=async function(){if(busy)return;busy=true;btn.disabled=true;var action=btn.dataset.wf,article=btn.closest('[data-item]'),id=article&&article.dataset.item;
       try{
-        if(action==='accept'||action==='keep')adopt(await api('/api/workflow/'+row.id+'/decisions','POST',{itemId:id,action:action,expectedRevision:current.revision,requestId:uid()}));
+        if(action==='company-apply'||action==='company-skip'){
+          var groupEl=btn.closest('[data-company]'),fields=action==='company-apply'?Array.from(groupEl.querySelectorAll('[data-company-field]:checked')).map(x=>x.dataset.companyField):[];
+          var confirmed=!!groupEl.querySelector('[data-company-confirm]:checked'),importId=groupEl.dataset.company;
+          if(action==='company-apply'&&(!confirmed||!fields.length))throw new Error('Bekräfta rätt avtalspart och markera de uppgifter som ska föras in.');
+          // Save visible manual edits first; stale extraction targets then fail safely on the server.
+          await window.wfEnsure(row.type);
+          adopt(await api('/api/workflow/'+row.id+'/company-details','POST',{importId:importId,action:action==='company-apply'?'apply':'skip',fields:fields,confirmedParty:confirmed,expectedRevision:current.revision,requestId:uid()}));
+          message(action==='company-apply'?'Markerade företagsuppgifter är införda och sparade i vårt avtal.':'Befintliga företagsuppgifter behålls.');
+        }
+        else if(action==='accept'||action==='keep')adopt(await api('/api/workflow/'+row.id+'/decisions','POST',{itemId:id,action:action,expectedRevision:current.revision,requestId:uid()}));
         else if(action==='rework'){var note=prompt('Vad ska advokaten tillmötesgå eller förtydliga?');if(note){message('Advokaten bearbetar förslaget. Inget godkänns automatiskt.');adopt(await api('/api/workflow/'+row.id+'/rework','POST',{itemId:id,instruction:note,expectedRevision:current.revision}));}}
         else if(action==='download'||action==='redline'){var data=JSON.parse(JSON.stringify(current.data));data._trackChanges=action==='redline';await downloadAgreementData(current.type,data);}
         else if(action==='invite')await invite(row.type);
