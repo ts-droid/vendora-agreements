@@ -28,7 +28,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
   const signer=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('signer@vendora.se','Test signer',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
   const stranger=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('other@vendora.se','Other',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;
-  const cookie=u=>auth.COOKIE+'='+auth.signToken(u);let browser;let id;const extraIds=[];
+  const cookie=u=>auth.COOKIE+'='+auth.signToken(u);let browser;let page;let id;const extraIds=[];
   async function api(p,method='GET',body,user=owner,rawHeaders){
     const headers={...(user?{Cookie:cookie(user)}:{}),...(body?{'Content-Type':'application/json'}:{}),...rawHeaders};
     const r=await fetch(base+p,{method,headers,body:body?typeof body==='string'?body:JSON.stringify(body):undefined});let j;try{j=await r.json();}catch(_){j={};}return {status:r.status,body:j};
@@ -37,7 +37,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
   try {
     // Real frontend upload -> saved review -> direct approval cards.
     const puppeteer=require('puppeteer-core');browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
-    const page=await browser.newPage();page.setDefaultTimeout(30000);const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+    page=await browser.newPage();page.setDefaultTimeout(30000);const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
     await page.setCookie({name:auth.COOKIE,value:auth.signToken(owner),url:base});
     await page.goto(base,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>window.wfEnsure&&window.LawyerChanges);
@@ -75,7 +75,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     const archive=(await db.query('SELECT counterparty_name FROM agreements WHERE id=$1',[id])).rows[0];assert.equal(archive.counterparty_name,'Extracted Customer AB');
     await page.screenshot({path:'test-results/company-details-approved.png',fullPage:true});
     for(let n=0;n<5;n++){
-      const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;
+      const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;console.log('Decision step',n,action,itemId);
       // A keep-only finding never had an accept button. Wait for the actual saved
       // decision and released UI, not the absence of that unrelated button.
       await page.waitForFunction(({item,action})=>{const e=document.querySelector('[data-item="'+item+'"] [data-wf="'+action+'"]');return e&&!e.disabled&&!WorkflowActivity.busy();},{},{item:itemId,action});
@@ -192,5 +192,12 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
       }finally{ai.chat=previousChat;}
     });
     fs.writeFileSync('test-results/workflow-outcome.json',JSON.stringify({agreementId:id,status:r.status,revision:r.revision,decisions:r.state.decisions.length,versions:history.versions.length,mailMockCalls:mail.length,ai:'mocked',counterpartySignature:'synthetic file with manual confirmation'},null,2));
+  }catch(error){
+    // Record real browser/server state instead of guessing at a timed-out control.
+    if(page){
+      try{fs.writeFileSync('test-results/workflow-failure-ui.json',JSON.stringify(await page.evaluate(()=>({editing:window._editing,busy:window.WorkflowActivity?.busy(),cards:Array.from(document.querySelectorAll('.wf-item')).map(e=>({id:e.dataset.item,text:e.innerText,buttons:Array.from(e.querySelectorAll('button')).map(b=>({action:b.dataset.wf,disabled:b.disabled}))})),messages:Array.from(document.querySelectorAll('.wf-feedback')).map(e=>e.textContent)})),null,2));await page.screenshot({path:'test-results/workflow-failure.png',fullPage:true});}catch(_){}
+    }
+    if(id){try{fs.writeFileSync('test-results/workflow-failure-server.json',JSON.stringify(await good('/api/workflow/'+id),null,2));}catch(_){}}
+    throw error;
   }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));for(const deleted of [id,...extraIds].filter(Boolean))await db.query('DELETE FROM agreements WHERE id=$1',[deleted]);await db.pool.end();}
 });
