@@ -54,6 +54,101 @@ window.WorkflowActivity = (function () {
   return {start:start, sync:sync, busy:function () { return active.size > 0; }};
 })();
 
+/* Hard-no decisions always explain the original risk before any approval request. */
+window.WorkflowHardNoDialog = (function () {
+  'use strict';
+  var dismiss = null;
+  function ask(row, item) {
+    if (dismiss) return Promise.resolve(null);
+    var info = item.hardNoReview || {}, prior = info.original || item;
+    var canApprove = info.baselineAvailable === true && !!info.token && !item.issue && Array.isArray(item.preview) && item.preview.length > 0 && (item.changes || []).length > 0;
+    var opener = document.activeElement, dialog = document.createElement('dialog');
+    dialog.className = 'wf-risk-dialog'; dialog.setAttribute('aria-labelledby', 'wf-risk-title');
+    dialog.setAttribute('aria-describedby', 'wf-risk-intro');
+    function add(tag, text, parent, className) {
+      var element = document.createElement(tag); element.textContent = text;
+      if (className) element.className = className;
+      (parent || dialog).appendChild(element); return element;
+    }
+    function block(title, text, parent) {
+      var section = add('section', '', parent, 'wf-risk-block');
+      add('h3', title, section); add('p', text || 'Ingen förklaring sparad. Begär en omarbetning innan du fattar beslut.', section); return section;
+    }
+    add('h2', 'Hard no – granska risken och vårt alternativ').id = 'wf-risk-title';
+    add('p', item.topic || 'Avvikelse', null, 'wf-risk-topic');
+    add('p', 'Hard no gäller motpartens ursprungliga villkor. Ett nytt formuleringsförslag är inte automatiskt säkert eller godkänt. Granska vad som avviker från vår grund.', null, 'wf-risk-intro').id = 'wf-risk-intro';
+    block(row.type === 'da' ? 'Leverantörens ursprungliga villkor' : 'Kundens ursprungliga villkor', prior.their);
+    block('Varför detta inte rekommenderas', [prior.rationale, prior.legal].filter(Boolean).join('\n\n'));
+    block('Vår position – granskningens sammanfattning', prior.our);
+    var standard = add('details', '', null, 'wf-risk-standard');
+    add('summary', 'Visa ärendets låsta Vendora-standard', standard);
+    (info.baselineTargets || []).forEach(function (target) { block(target.label + ' · ' + target.id, target.text, standard); });
+    add('pre', info.baselineText || 'Standardunderlaget saknas. Begär kontroll av ärendet.', standard);
+    if (canApprove) {
+      add('h3', 'Det aktuella alternativet – inte infört');
+      item.preview.forEach(function (change) {
+        var box = add('section', '', null, 'wf-risk-diff');
+        add('h4', change.label || change.target.id, box);
+        block('Nuvarande lydelse i vårt avtal', change.oldText || 'Tomt fält', box);
+        block('Ny lydelse som kan godkännas', change.newText || 'Texten tas bort', box);
+      });
+      if (item.rationale !== prior.rationale) block('Advokatens bedömning av alternativet', item.rationale);
+    } else if (item.proposed) block('Textutkast – ännu inte en verifierad ändring', item.proposed);
+    add('p', 'Att behålla vår lydelse lämnar det aktuella avtalet oförändrat; tidigare anpassningar återställs inte automatiskt till standard. En ny AI-formulering måste godkännas separat.', null, 'wf-note');
+    var label = add('label', 'Önskemål till advokaten (valfritt att precisera)'); label.htmlFor = 'wf-risk-instruction';
+    var instruction = add('textarea', 'Utgå från vår låsta standard. Försök möta motpartens bakomliggande behov med minsta nödvändiga ändring utan att ge upp vårt grundskydd. Redovisa kvarvarande risker. Om det inte går, rekommendera att vår lydelse behålls.');
+    instruction.id = 'wf-risk-instruction'; instruction.maxLength = 2000; instruction.rows = 4;
+    var actions = add('div', '', null, 'wf-risk-actions');
+    var rework = add('button', 'Ta fram förslag närmare vår standard', actions, 'wf-risk-primary'); rework.dataset.riskAction = 'rework';
+    var keep = add('button', 'Behåll vår lydelse', actions); keep.dataset.riskAction = 'keep';
+    var close = add('button', 'Avbryt', actions); close.dataset.riskAction = 'cancel';
+    var approve = null, checkbox = null, reason = null;
+    if (canApprove) {
+      var exceptional = add('details', '', null, 'wf-risk-exception');
+      add('summary', 'Granska och godkänn det aktuella alternativet i stället', exceptional);
+      add('p', info.requiresCounsel ? 'Dokumenterat särskilt godkännande krävs fortfarande före underskrift. Detta beslut ersätter inte den kontrollen.' : 'Du godkänner endast den exakta nya lydelsen ovan. Det är inte en underskrift eller motpartens acceptans. Befintliga signeringskontroller gäller fortfarande.', exceptional);
+      var checkLabel = add('label', '', exceptional, 'wf-risk-confirm');
+      checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = 'wf-risk-confirm'; checkLabel.appendChild(checkbox);
+      checkLabel.appendChild(document.createTextNode(' Jag har granskat risken, vår standard och den föreslagna lydelsen.'));
+      var reasonLabel = add('label', 'Motivering till att detta alternativ kan accepteras (minst 10 tecken)', exceptional); reasonLabel.htmlFor = 'wf-risk-reason';
+      reason = add('textarea', '', exceptional); reason.id = 'wf-risk-reason'; reason.maxLength = 2000; reason.rows = 2;
+      approve = add('button', 'Godkänn den visade formuleringen', exceptional); approve.dataset.riskAction = 'accept'; approve.disabled = true;
+      function validate() { approve.disabled = !checkbox.checked || reason.value.trim().length < 10; }
+      checkbox.onchange = validate; reason.oninput = validate;
+    }
+    dialog.querySelectorAll('button').forEach(function (b) { b.type = 'button'; });
+    document.body.appendChild(dialog);
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(choice) {
+        if (done) return; done = true; dismiss = null;
+        if (dialog.open) dialog.close(); dialog.remove();
+        if (opener && opener.isConnected) opener.focus({preventScroll:true});
+        resolve(choice);
+      }
+      dismiss = function () { finish(null); };
+      dialog.addEventListener('cancel', function (event) { event.preventDefault(); finish(null); });
+      close.onclick = function () { finish(null); };
+      keep.onclick = function () { finish({action:'keep'}); };
+      rework.onclick = function () {
+        if (!instruction.value.trim()) { instruction.setCustomValidity('Beskriv önskad anpassning.'); instruction.reportValidity(); return; }
+        finish({action:'rework', instruction:instruction.value.trim(), mode:'standard_alignment'});
+      };
+      instruction.oninput = function () { instruction.setCustomValidity(''); };
+      if (approve) approve.onclick = function () {
+        if (approve.disabled || !checkbox.checked || reason.value.trim().length < 10) return;
+        finish({action:'accept', hardNoAcknowledgement:info.token, note:reason.value.trim()});
+      };
+      try { dialog.showModal(); var heading=dialog.querySelector('h2'); heading.tabIndex=-1; heading.focus({preventScroll:true}); dialog.scrollTop=0; }
+      catch (_) { finish(null); }
+    });
+  }
+  var style = document.createElement('style');
+  style.textContent = '.wf-risk-dialog{box-sizing:border-box;width:min(860px,calc(100vw - 32px));max-height:calc(100vh - 48px);padding:28px;border:1px solid var(--border,#ccc);border-radius:16px;background:var(--card,#fffdfa);color:var(--text,#242424);overflow:auto}.wf-risk-dialog::backdrop{background:rgba(12,30,24,.56)}.wf-risk-dialog h2{font-size:23px;margin:0 0 8px}.wf-risk-dialog h3{font-size:15px;margin:0 0 6px}.wf-risk-dialog p{white-space:pre-wrap;line-height:1.55;margin:6px 0}.wf-risk-topic{font-weight:700}.wf-risk-intro{background:#fff0d9;border-left:4px solid #9d5523;padding:12px}.wf-risk-block{margin:16px 0}.wf-risk-standard,.wf-risk-exception{padding:12px;border:1px solid #d6d7d2;border-radius:8px;margin:16px 0}.wf-risk-dialog summary{cursor:pointer;font-weight:600}.wf-risk-standard pre{font:inherit;font-size:13px;white-space:pre-wrap;max-height:250px;overflow:auto}.wf-risk-diff{padding:12px;background:#f1f5f2;border-radius:8px}.wf-risk-dialog label{display:block;margin:14px 0 6px;font-size:14px}.wf-risk-dialog textarea{box-sizing:border-box;width:100%;font:inherit;font-size:14px;padding:10px;border:1px solid #b7bcb7;border-radius:8px;resize:vertical}.wf-risk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.wf-risk-dialog button{padding:10px 14px;border:1px solid #abb5ad;border-radius:20px;cursor:pointer;background:#fffdfa;color:#173b2f}.wf-risk-dialog .wf-risk-primary{background:#173b2f;color:white}.wf-risk-dialog button:disabled{opacity:.45;cursor:not-allowed}.wf-risk-confirm input{width:auto;margin-right:8px}.wf-risk-dialog :focus-visible{outline:3px solid #45826e;outline-offset:2px}@media(max-width:600px){.wf-risk-dialog{padding:18px}.wf-risk-actions button{width:100%}}';
+  document.head.appendChild(style);
+  return {ask:ask, dismiss:function () { if (dismiss) dismiss(); }};
+})();
+
 /* Vendora-first workspace. Decisions are acknowledged only after a committed server response. */
 (function(){
   'use strict';
@@ -62,7 +157,7 @@ window.WorkflowActivity = (function () {
   var order={deal_breaker:0,red_flag:1,negotiate:2,missing:3,acceptable:4};
   async function api(url,method,body){var r=await fetch(url,{method:method||'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});var j=await r.json();if(!r.ok){var err=new Error(j.error||'Begäran misslyckades.');err.explanation=j.explanation||'';throw err;}return j;}
   function uid(){return crypto.randomUUID();}
-  function reset(){document.body.classList.remove('wf-case-open');current=null;window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
+  function reset(){WorkflowHardNoDialog.dismiss();document.body.classList.remove('wf-case-open');current=null;window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
   window.wfReset=reset;
   function adopt(row){
     if(current&&current.id!==row.id)reset();current=row;
@@ -158,8 +253,8 @@ window.WorkflowActivity = (function () {
         if(item.issue)html+='<p class="wf-warning">Förslaget kan inte införas: '+esc(item.issue)+'</p>';
         if(hasChanges&&!hasPreview&&!item.issue)html+='<p class="wf-warning">Förslaget saknar en verifierad förhandsvisning. Bearbeta det innan godkännande.</p>';
         html+='<div class="wf-actions">';
-        if(canApply)html+='<button data-wf="accept" '+(locked?'disabled':'')+'>Godkänn '+(item.source==='customer'?'kundens förslag':'föreslagen formulering')+'</button>';
-        html+='<button data-wf="keep" '+(locked?'disabled':'')+'>'+(hasChanges?'Avslå / behåll vår lydelse':'Godkänn att vår lydelse behålls')+'</button><button data-wf="rework" '+(locked?'disabled':'')+'>'+(!hasChanges?(item.proposed?'Skapa tillämpbart ändringsförslag':'Ta fram alternativ formulering'):item.issue?'Bearbeta och rätta förslaget':'Bearbeta med avtalsadvokaten')+'</button></div>';
+        if(canApply)html+='<button data-wf="accept" '+(locked?'disabled':'')+'>'+(item.classification==='deal_breaker'?'Granska risk och godkänn':'Godkänn '+(item.source==='customer'?'kundens förslag':'föreslagen formulering'))+'</button>';
+        html+='<button data-wf="keep" '+(locked?'disabled':'')+'>'+(hasChanges?'Avslå / behåll vår lydelse':'Godkänn att vår lydelse behålls')+'</button><button data-wf="rework" '+(locked?'disabled':'')+'>'+(item.classification==='deal_breaker'?'Förklaring / anpassa mot vår standard':!hasChanges?(item.proposed?'Skapa tillämpbart ändringsförslag':'Ta fram alternativ formulering'):item.issue?'Bearbeta och rätta förslaget':'Bearbeta med avtalsadvokaten')+'</button></div>';
       }
       else html+='<p class="wf-note">'+esc(item.status==='accepted'?'Godkänt och sparat':item.status==='kept'?'Vår lydelse behålls':'Ersatt av ett nytt förslag')+(item.decidedBy?' · '+esc(item.decidedBy):'')+'</p>';
       html+='<div class="wf-item-feedback wf-feedback" role="status" aria-live="polite"></div></article>';
@@ -170,6 +265,14 @@ window.WorkflowActivity = (function () {
       var feedback=null,newItemId=null,wasDisabled=btn.disabled;
       function localHost(){var panel=document.getElementById('wf_panel_'+row.type);return id&&panel?Array.from(panel.querySelectorAll('[data-item]')).find(x=>x.dataset.item===id)?.querySelector('.wf-item-feedback'):panel&&panel.querySelector('#wf_message');}
       try{
+        var riskChoice=null, selectedItem=current&&current.state.items.find(function (item) { return item.id===id; });
+        if(selectedItem&&selectedItem.classification==='deal_breaker'&&['accept','rework'].includes(action)){
+          var displayedRevision=current.revision,displayedId=current.id;
+          riskChoice=await WorkflowHardNoDialog.ask(current,selectedItem);
+          if(!riskChoice)return;
+          if(!current||current.id!==displayedId||current.revision!==displayedRevision)throw new Error('Avtalet har ändrats medan riskdialogen var öppen. Granska den senaste versionen på nytt.');
+          action=riskChoice.action;
+        }
         if(['accept','keep','company-apply','company-skip'].includes(action))feedback=WorkflowActivity.start('workflow:'+row.id,localHost,'Bearbetar och sparar…');
         else if(action!=='rework')btn.disabled=true;
         if(action==='company-apply'||action==='company-skip'){
@@ -181,14 +284,14 @@ window.WorkflowActivity = (function () {
           adopt(await api('/api/workflow/'+row.id+'/company-details','POST',{importId:importId,action:action==='company-apply'?'apply':'skip',fields:fields,confirmedParty:confirmed,expectedRevision:current.revision,requestId:uid()}));
           message(action==='company-apply'?'Markerade företagsuppgifter är införda och sparade i vårt avtal.':'Befintliga företagsuppgifter behålls.');
         }
-        else if(action==='accept'||action==='keep')adopt(await api('/api/workflow/'+row.id+'/decisions','POST',{itemId:id,action:action,expectedRevision:current.revision,requestId:uid()}));
+        else if(action==='accept'||action==='keep')adopt(await api('/api/workflow/'+row.id+'/decisions','POST',{itemId:id,action:action,expectedRevision:current.revision,requestId:uid(),...(riskChoice&&action==='accept'?{hardNoAcknowledgement:riskChoice.hardNoAcknowledgement,note:riskChoice.note}:{})}));
         else if(action==='rework'){
-          var note=prompt('Vad ska advokaten tillmötesgå eller förtydliga?', 'Föreslå en konkret formulering i vårt avtal som möter motpartens behov utan att ge upp vårt grundskydd.');
+          var note=riskChoice?riskChoice.instruction:prompt('Vad ska advokaten tillmötesgå eller förtydliga?', 'Föreslå en konkret formulering i vårt avtal som möter motpartens behov utan att ge upp vårt grundskydd.');
           if(note&&note.trim()){
             feedback=WorkflowActivity.start('workflow:'+row.id,localHost,'Sparar underlaget för omarbetningen…');
             await window.wfEnsure(row.type);
             feedback.stage('Avtalsadvokaten tar fram ett nytt formuleringsförslag…');
-            var changed=await api('/api/workflow/'+row.id+'/rework','POST',{itemId:id,instruction:note.trim(),expectedRevision:current.revision});
+            var changed=await api('/api/workflow/'+row.id+'/rework','POST',{itemId:id,instruction:note.trim(),expectedRevision:current.revision,...(riskChoice?{mode:'standard_alignment'}:{})});
             newItemId=changed.reworkedItemId;
             if(current&&current.id===row.id)adopt(changed);
             feedback.finish('Nytt förslag är sparat. Granska den nya lydelsen och godkänn den separat.');feedback=null;

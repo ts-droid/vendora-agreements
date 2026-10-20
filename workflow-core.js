@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const LC = require('./lawyer-changes');
 const clauses = require('./agreement-clauses');
 const counterpartyDetails = require('./counterparty-details');
+const hardNo = require('./workflow-hard-no');
 const fs = require('fs');
 const TEMPLATE_VERSION = crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./agreement-clauses'))).update(fs.readFileSync(require.resolve('./agreement-defaults.json'))).digest('hex');
 const DEFAULTS=require('./agreement-defaults.json');
@@ -100,7 +101,8 @@ function reworkProposal(row, itemId, out) {
     changes:copy(proposals),preview:result.displayed,issue:'',rationale:String(out.reply||''),
     proposed:result.displayed.map(p=>p.newText).join('\n\n')};
   // A fresh alternative must not inherit a previous decision identity.
-  delete next.decidedBy;delete next.decidedAt;
+  delete next.decidedBy;delete next.decidedAt;delete next.hardNoReview;
+  if(hardNo.isHardNo(target))next.riskOrigin=copy(hardNo.origin(target));
   target.status='superseded';s.items.push(next);
   return {state:s,itemId:next.id};
 }
@@ -112,17 +114,19 @@ function decide(row, body, actor, at) {
   editable(row);const s=copy(state(row));
   if(!/^[A-Za-z0-9_-]{8,100}$/.test(body.requestId||''))throw error('Besluts-ID krävs.',400);
   const repeat=s.decisions.find(d=>d.requestId===body.requestId);
-  const command=digest({itemId:body.itemId,action:body.action,note:body.note||''});
+  const command=digest({itemId:body.itemId,action:body.action,note:body.note||'',...(body.hardNoAcknowledgement?{hardNoAcknowledgement:body.hardNoAcknowledgement}:{})});
   if(repeat){if(repeat.command!==command)throw error('Besluts-ID har redan använts för ett annat beslut.');return {data:row.data,state:s,replayed:true};}
   checkVersion(row,body.expectedRevision);
   const item=s.items.find(i=>i.id===body.itemId);if(!item||item.status!=='pending')throw error('Förslaget är redan behandlat eller tillhör inte avtalet.');
   if(!['accept','keep'].includes(body.action))throw error('Välj godkänn eller behåll vår lydelse.',400);
+  if(s.reviewRunning||row.status==='invited')throw error('Invänta jämförelsen eller kundens svar.');
+  const riskAcknowledgement=hardNo.acknowledgement(row,item,body);
   let data=copy(row.data);
   if(body.action==='accept'){checkTargets(data,item);data=apply(data,item.changes).data;}
   item.status=body.action==='accept'?'accepted':'kept';
   item.decidedBy=actor;item.decidedAt=at;
   if(body.action==='keep')item.requiresCounsel=false; // Retaining our text is not accepting their risky clause.
-  s.decisions.push({requestId:body.requestId,command,itemId:item.id,action:body.action,actor,at,note:String(body.note||'').slice(0,2000),revision:Number(row.workflow_revision)+1});
+  s.decisions.push({requestId:body.requestId,command,itemId:item.id,action:body.action,actor,at,note:String(body.note||'').slice(0,2000),...(riskAcknowledgement?{hardNoAcknowledgement:riskAcknowledgement.token}:{}),revision:Number(row.workflow_revision)+1});
   if(item.field){delete (data._proposals||{})[item.field]; if(body.action==='accept')data._accepted=Array.from(new Set((data._accepted||[]).concat(item.field)));}
   return {data,state:s};
 }

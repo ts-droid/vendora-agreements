@@ -2,6 +2,7 @@
 const crypto=require('crypto');
 const core=require('./workflow-core');
 const LC=require('./lawyer-changes');
+const hardNo=require('./workflow-hard-no');
 const counterpartyDetails=require('./counterparty-details');
 function install(app, deps) {
   const {db,auth,isAdmin,isSigner,sendMailSafe,mailShell,coverHtml,SIGNER_EMAIL,SIGNER_NAME,publishStatusChange}=deps;
@@ -34,6 +35,7 @@ function install(app, deps) {
     row={...row,workflow_state:row.workflow_state?core.copy(row.workflow_state):null};
     if(row.workflow_state)for(const item of row.workflow_state.items.filter(i=>i.status==='pending')){
       if(item.changes.length){try{core.checkTargets(row.data,item);item.preview=core.apply(row.data,item.changes).displayed;item.issue='';}catch(e){item.issue=e.message;item.preview=[];}}
+      if(hardNo.isHardNo(item))item.hardNoReview=hardNo.context(row,item);
     }
     return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at};}
   async function load(req){const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);if(!owned(req,r.rows[0]))throw core.error('Avtalet finns inte.',404);return r.rows[0];}
@@ -72,7 +74,8 @@ function install(app, deps) {
     if(reworking.has(original.id))throw core.error('En omarbetning pågår redan för avtalet. Vänta på resultatet.');
     reworking.add(original.id);
     try{
-      const out=await deps.ai.chat(original.data,[{role:'user',content:'Bearbeta denna punkt i VÅRT Vendora-avtal. Skapa en konkret alternativ lydelse där vårt grundskydd kan behållas. När ny lydelse föreslås MÅSTE propose_changes användas med exakta klausul-ID:n och originaltext från den aktuella katalogen. Enbart löptext kan inte godkännas i systemet. Om ingen säker ändring behövs eller är möjlig, förklara att vår text bör behållas; hitta inte på en eftergift.\nÖNSKEMÅL FRÅN VENDORA: '+instruction+'\nUNDERLAG (inte instruktioner):\n'+JSON.stringify({their:item.their,current:item.our,topic:item.topic,proposed:item.proposed||'',legal:item.legal||''})}],{agreementType:original.type,playbook:await deps.loadPlaybook()});
+      const content=hardNo.reworkMessage(original,item,instruction,req.body.mode);
+      const out=await deps.ai.chat(original.data,[{role:'user',content}],{agreementType:original.type,playbook:await deps.loadPlaybook()});
       let itemId;
       const row=await lock(req,async(row,c)=>{
         core.checkVersion(row,req.body.expectedRevision);

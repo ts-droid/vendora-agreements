@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const C=require('../workflow-core');
+const H=require('../workflow-hard-no');
 const seeds=require('./fixtures/workflow-seeds.json');
 function row(){
   const data=C.copy(seeds.ra);
@@ -17,7 +18,7 @@ test('reworking a keep recommendation creates a preview but never changes the co
   assert.equal(C.digest(r),before);
   assert.equal(result.state.items[0].status,'superseded');
   const item=result.state.items[1];assert.equal(item.id,result.itemId);assert.equal(item.preview[0].newText,'45');assert.equal(item.proposed,'45');assert.equal(item.requiresCounsel,true);
-  const approved=C.decide({...r,workflow_state:result.state},{itemId:item.id,action:'accept',expectedRevision:1,requestId:'approve-alternative-1'},'Tester','test');
+  const approved=C.decide({...r,workflow_state:result.state},{itemId:item.id,action:'accept',expectedRevision:1,requestId:'approve-alternative-1',hardNoAcknowledgement:H.context({...r,workflow_state:result.state},item).token,note:'Reviewed the risk against our standard terms.'},'Tester','test');
   assert.equal(approved.data.pay,'45');assert.equal(r.data.pay,'30');
   assert.ok(C.signatureProblems({...r,data:approved.data,workflow_state:approved.state}).some(s=>s.includes('särskilt godkännande')));
 });
@@ -61,6 +62,7 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     view.state.items.push({...view.state.items[0],id:'unmapped',proposed:'Draft wording not yet mapped',requiresCounsel:false});
     view.state.items.push({...view.state.items[0],id:'valid',topic:'Safe alternative',changes:[change],preview:C.apply(base.data,[change]).displayed});
     view.state.items.push({...view.state.items[0],id:'invalid',topic:'Bad target',changes:[change],preview:[],issue:'Texten matchar inte längre.',proposed:'Unmapped text'});
+    view.state.items.forEach(item=>{item.hardNoReview=H.context(base,item);});
     await page.evaluate(v=>{
       window.testRow=v;window.form=structuredClone(v.data);window.calls=[];let seq=0;
       if(!crypto.randomUUID)Object.defineProperty(crypto,'randomUUID',{value:()=>('browser-test-'+(++seq))});
@@ -73,7 +75,7 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
       window.prompt=()=> 'Please draft an alternative.';
       const response=(body,ok=true)=>({ok,json:async()=>structuredClone(body)});
       window.fetch=async(url,opts={})=>{
-        window.calls.push({url,method:opts.method||'GET'});
+        window.calls.push({url,method:opts.method||'GET',body:opts.body?JSON.parse(opts.body):null});
         if(url==='/api/workflow/991')return response(testRow);
         if(url==='/api/workflow/991/start')return response(testRow);
         if(url==='/api/agreements/991'){
@@ -105,8 +107,27 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     assert.match(await page.$eval('[data-item="valid"]',e=>e.textContent),/Ny lydelse som godkänns/);
     assert.equal(await page.$('[data-item="invalid"] [data-wf="accept"]'),null);
     assert.match(await page.$eval('[data-item="invalid"]',e=>e.textContent),/Texten matchar/);
+    // The native modal explains the original risk and cannot accidentally approve on opening/Escape.
+    const callsBefore=await page.evaluate(()=>calls.length);
+    await page.click('[data-item="valid"] [data-wf="accept"]');
+    await page.waitForSelector('.wf-risk-dialog[open]');
+    assert.match(await page.$eval('.wf-risk-dialog',e=>e.textContent),/Hard no gäller motpartens ursprungliga villkor/);
+    assert.equal(await page.$eval('.wf-risk-dialog',e=>e.scrollTop),0,'explanation starts at the top, not at a decision button');
+    fs.mkdirSync('test-results',{recursive:true});await page.screenshot({path:'test-results/hard-no-modal-explanation.png'});
+    assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),true);
+    await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('.wf-risk-dialog'));
+    assert.equal(await page.evaluate(()=>calls.length),callsBefore,'cancel is not a save or AI call');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.wf),'accept');
+    // A newer server revision while the dialog is open requires a new review, not a stale approval.
+    await page.click('[data-item="valid"] [data-wf="accept"]');await page.waitForSelector('.wf-risk-dialog[open]');
+    await page.evaluate(async()=>{testRow.revision++;await wfRefresh(testRow.id);});
+    await page.click('[data-risk-action="keep"]');
+    await page.waitForFunction(()=>document.getElementById('wf_message').textContent.includes('senaste versionen'));
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/decisions')).length),0);
     // Real user click, delayed provider response. Status stays beside the item on re-render.
     await page.click('[data-item="review:88:0"] [data-wf="rework"]');
+    await page.waitForSelector('.wf-risk-dialog[open]');
+    await page.click('[data-risk-action="rework"]');
     await page.waitForFunction(()=>!!window.resolveRework);
     await page.waitForSelector('[data-item="review:88:0"] .wf-spinner');
     assert.equal(await page.$eval('[data-item="valid"] [data-wf="accept"]',e=>e.disabled),true);
@@ -123,6 +144,8 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     assert.equal(await page.$('[data-item="invalid"] [data-wf="accept"]'),null);
     // Next valid response is previewed and focused; approval is a separate operation.
     await page.evaluate(()=>{window.resolveRework=null;});await page.click('[data-item="review:88:0"] [data-wf="rework"]');
+    await page.waitForSelector('.wf-risk-dialog[open]');
+    await page.click('[data-risk-action="rework"]');
     await page.waitForFunction(()=>!!window.resolveRework);
     await page.evaluate(()=>{
       testRow.state.items[0].status='superseded';
@@ -133,8 +156,18 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     assert.equal(await page.evaluate(()=>document.activeElement.dataset.item),'alternative:new');
     assert.equal(await page.evaluate(()=>testRow.data.pay),'30');
     await page.screenshot({path:'test-results/rework-approvable.png',fullPage:true});
-    await page.click('[data-item="alternative:new"] [data-wf="accept"]');await page.waitForFunction(()=>!WorkflowActivity.busy());
+    await page.click('[data-item="alternative:new"] [data-wf="accept"]');
+    await page.waitForSelector('.wf-risk-dialog[open]');
+    await page.click('.wf-risk-exception summary');
+    await page.click('#wf-risk-confirm');
+    assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),true,'a reason is still mandatory');
+    await page.type('#wf-risk-reason','Reviewed the exact alternative against our standard.');
+    assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),false);
+    await page.screenshot({path:'test-results/hard-no-modal.png',fullPage:true});
+    await page.click('[data-risk-action="accept"]');await page.waitForFunction(()=>!WorkflowActivity.busy());
     assert.equal(await page.evaluate(()=>testRow.data.pay),'45');
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/rework')).every(c=>c.body.mode==='standard_alignment')),true);
+    assert.ok(await page.evaluate(()=>calls.find(c=>c.url.endsWith('/decisions')).body.hardNoAcknowledgement));
     // Comparison feedback exists before save finishes; duplicate calls are ignored.
     await page.evaluate(()=>{
       testRow.state.items=[];window.delaySave=true;

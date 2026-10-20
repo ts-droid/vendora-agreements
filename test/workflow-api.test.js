@@ -81,6 +81,14 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
       // decision and released UI, not the absence of that unrelated button.
       await page.waitForFunction(({item,action})=>{const e=document.querySelector('[data-item="'+item+'"] [data-wf="'+action+'"]');return e&&!e.disabled&&!WorkflowActivity.busy();},{},{item:itemId,action});
       await page.click('[data-item="'+itemId+'"] [data-wf="'+action+'"]');
+      if(n===0){
+        await page.waitForSelector('.wf-risk-dialog[open]');
+        assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),true);
+        await page.click('.wf-risk-exception summary');await page.click('#wf-risk-confirm');
+        await page.type('#wf-risk-reason','Reviewed the alternative against our standard and mandate.');
+        await page.screenshot({path:'test-results/workflow-hard-no-modal.png',fullPage:true});
+        await page.click('[data-risk-action="accept"]');
+      }
       await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf]')&&!WorkflowActivity.busy();},{},itemId);
       const savedDecision=await good('/api/workflow/'+id);
       assert.equal(savedDecision.state.items.find(item=>item.id===itemId).status,action==='keep'?'kept':'accepted');
@@ -176,7 +184,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         assert.equal((await api(endpoint,'POST',payload,stranger)).status,404);
         let release,entered;const started=new Promise(r=>entered=r);let aiCalls=0;
         ai.chat=async (agreement,messages)=>{
-          aiCalls++;assert.match(messages[0].content,/Counter wording to be mapped/);entered();
+          aiCalls++;assert.match(messages[0].content,/Counter wording to be mapped/);assert.match(messages[0].content,/STANDARDANPASSNING/);assert.ok(messages[0].content.includes('"baselineData"'));entered();
           await new Promise(r=>release=r);
           return {reply:'45 day alternative',proposals:[{target:{kind:'field',id:'pay'},op:'replace',oldText:agreement.pay,newText:'45',label:'Payment',rationale:'test',anchor:''}]};
         };
@@ -188,7 +196,11 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         assert.equal(result.body.data.pay,data.pay);assert.equal(result.body.state.items[0].status,'superseded');
         const alternative=result.body.state.items.find(i=>i.id===result.body.reworkedItemId);
         assert.equal(alternative.status,'pending');assert.equal(alternative.preview[0].newText,'45');assert.equal(alternative.requiresCounsel,true);
-        const approved=await good('/api/workflow/'+made.id+'/decisions','POST',{itemId:alternative.id,action:'accept',expectedRevision:result.body.revision,requestId:'approve-real-alternative'});
+        const decision={itemId:alternative.id,action:'accept',expectedRevision:result.body.revision,requestId:'approve-real-alternative'};
+        assert.equal((await api('/api/workflow/'+made.id+'/decisions','POST',decision)).status,400,'Hard no requires explicit review even via the API');
+        assert.equal((await api('/api/workflow/'+made.id+'/decisions','POST',{...decision,hardNoAcknowledgement:'forged',note:'An adequate reason does not replace the correct version.'})).status,400);
+        const approved=await good('/api/workflow/'+made.id+'/decisions','POST',{...decision,hardNoAcknowledgement:alternative.hardNoReview.token,note:'Reviewed the exact risk and alternative against our standard.'});
+        assert.equal(approved.state.decisions.at(-1).hardNoAcknowledgement,alternative.hardNoReview.token);
         assert.equal(approved.data.pay,'45');assert.ok(approved.signatureProblems.some(p=>p.includes('särskilt godkännande')));
       }finally{ai.chat=previousChat;}
     });
