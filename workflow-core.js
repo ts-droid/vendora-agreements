@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const LC = require('./lawyer-changes');
 const clauses = require('./agreement-clauses');
 const counterpartyDetails = require('./counterparty-details');
+const hardNo = require('./workflow-hard-no');
 const fs = require('fs');
 const TEMPLATE_VERSION = crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./agreement-clauses'))).update(fs.readFileSync(require.resolve('./agreement-defaults.json'))).digest('hex');
 const DEFAULTS=require('./agreement-defaults.json');
@@ -80,6 +81,31 @@ function reviewItems(row, reviewId, findings) {
     return {id:'review:'+reviewId+':'+index,source:'comparison',sourceRef:f.their_clause_ref||'',preconditions:preconditions(row.data,changes),documentRevision:Number(row.workflow_revision),reviewId,round:s.round+1,status:'pending',classification:f.classification,topic:f.topic||'Avvikelse',their:f.their_position||'',our:f.our_position||'',rationale:f.why_it_matters||'',proposed:f.proposed_wording||'',legal:f.legal_note||'',changes,preview,issue,requiresCounsel:!!f.requires_counsel,requiresCounselOnAccept:!!f.requires_counsel};
   });return items;
 }
+// A rework is still only a proposal. Do not retire the old item or modify the
+// agreement unless the complete new change group can be previewed safely.
+function reworkProposal(row, itemId, out) {
+  editable(row);
+  const s=copy(state(row));
+  if(s.reviewRunning||row.status==='invited')throw error('Invänta jämförelsen eller kundens svar.');
+  const target=s.items.find(i=>i.id===itemId&&i.status==='pending');
+  if(!target)throw error('Förslaget är inte längre öppet.');
+  const proposals=out&&out.proposals;
+  if(!Array.isArray(proposals)||!proposals.length){
+    const e=error('Advokaten föreslog ingen tillämpbar textändring. Vår lydelse är oförändrad. Behåll den eller precisera önskemålet.',422);
+    e.explanation=String(out&&out.reply||'').slice(0,12000);throw e;
+  }
+  const result=apply(row.data,proposals);
+  if(!result.displayed.some(p=>p.oldText!==p.newText))throw error('Förslaget är identiskt med vår befintliga lydelse. Välj att behålla texten.',422);
+  const next={...target,id:'alternative:'+crypto.randomUUID(),status:'pending',source:'alternative',
+    preconditions:preconditions(row.data,proposals),documentRevision:Number(row.workflow_revision),
+    changes:copy(proposals),preview:result.displayed,issue:'',rationale:String(out.reply||''),
+    proposed:result.displayed.map(p=>p.newText).join('\n\n')};
+  // A fresh alternative must not inherit a previous decision identity.
+  delete next.decidedBy;delete next.decidedAt;delete next.hardNoReview;
+  if(hardNo.isHardNo(target))next.riskOrigin=copy(hardNo.origin(target));
+  target.status='superseded';s.items.push(next);
+  return {state:s,itemId:next.id};
+}
 function recordReview(row, reviewId, findings, at) {
   const s=copy(state(row)); if(pending(s).length)throw error('Behandla befintliga förslag innan en ny jämförelse startas.');
   s.round++;s.items.push(...reviewItems(row,reviewId,findings));s.reviewRunning=null;s.lastReview={id:reviewId,at};return s;
@@ -88,17 +114,19 @@ function decide(row, body, actor, at) {
   editable(row);const s=copy(state(row));
   if(!/^[A-Za-z0-9_-]{8,100}$/.test(body.requestId||''))throw error('Besluts-ID krävs.',400);
   const repeat=s.decisions.find(d=>d.requestId===body.requestId);
-  const command=digest({itemId:body.itemId,action:body.action,note:body.note||''});
+  const command=digest({itemId:body.itemId,action:body.action,note:body.note||'',...(body.hardNoAcknowledgement?{hardNoAcknowledgement:body.hardNoAcknowledgement}:{})});
   if(repeat){if(repeat.command!==command)throw error('Besluts-ID har redan använts för ett annat beslut.');return {data:row.data,state:s,replayed:true};}
   checkVersion(row,body.expectedRevision);
   const item=s.items.find(i=>i.id===body.itemId);if(!item||item.status!=='pending')throw error('Förslaget är redan behandlat eller tillhör inte avtalet.');
   if(!['accept','keep'].includes(body.action))throw error('Välj godkänn eller behåll vår lydelse.',400);
+  if(s.reviewRunning||row.status==='invited')throw error('Invänta jämförelsen eller kundens svar.');
+  const riskAcknowledgement=hardNo.acknowledgement(row,item,body);
   let data=copy(row.data);
   if(body.action==='accept'){checkTargets(data,item);data=apply(data,item.changes).data;}
   item.status=body.action==='accept'?'accepted':'kept';
   item.decidedBy=actor;item.decidedAt=at;
   if(body.action==='keep')item.requiresCounsel=false; // Retaining our text is not accepting their risky clause.
-  s.decisions.push({requestId:body.requestId,command,itemId:item.id,action:body.action,actor,at,note:String(body.note||'').slice(0,2000),revision:Number(row.workflow_revision)+1});
+  s.decisions.push({requestId:body.requestId,command,itemId:item.id,action:body.action,actor,at,note:String(body.note||'').slice(0,2000),...(riskAcknowledgement?{hardNoAcknowledgement:riskAcknowledgement.token}:{}),revision:Number(row.workflow_revision)+1});
   if(item.field){delete (data._proposals||{})[item.field]; if(body.action==='accept')data._accepted=Array.from(new Set((data._accepted||[]).concat(item.field)));}
   return {data,state:s};
 }
@@ -198,4 +226,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};
+module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};

@@ -28,7 +28,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
   const signer=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('signer@vendora.se','Test signer',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
   const stranger=(await db.query("INSERT INTO users(email,name,onboarded_at) VALUES('other@vendora.se','Other',now()) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING *")).rows[0];
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;
-  const cookie=u=>auth.COOKIE+'='+auth.signToken(u);let browser;let id;const extraIds=[];
+  const cookie=u=>auth.COOKIE+'='+auth.signToken(u);let browser;let page;let id;const extraIds=[];
   async function api(p,method='GET',body,user=owner,rawHeaders){
     const headers={...(user?{Cookie:cookie(user)}:{}),...(body?{'Content-Type':'application/json'}:{}),...rawHeaders};
     const r=await fetch(base+p,{method,headers,body:body?typeof body==='string'?body:JSON.stringify(body):undefined});let j;try{j=await r.json();}catch(_){j={};}return {status:r.status,body:j};
@@ -37,7 +37,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
   try {
     // Real frontend upload -> saved review -> direct approval cards.
     const puppeteer=require('puppeteer-core');browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
-    const page=await browser.newPage();page.setDefaultTimeout(30000);const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+    page=await browser.newPage();page.setDefaultTimeout(30000);const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
     await page.setCookie({name:auth.COOKIE,value:auth.signToken(owner),url:base});
     await page.goto(base,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>window.wfEnsure&&window.LawyerChanges);
@@ -49,6 +49,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     await page.click('#cr_btn_ra');
     await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);
     id=await page.evaluate(()=>window._editing.id);
+    assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'static','sticky generation toolbar must not intercept decision clicks');
     const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
     assert.ok(initial.signatureProblems.includes('Minst ett försäljningsställe krävs.'),'customer must still supply an approved point of sale');
     const blocked=await api('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
@@ -75,9 +76,22 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     const archive=(await db.query('SELECT counterparty_name FROM agreements WHERE id=$1',[id])).rows[0];assert.equal(archive.counterparty_name,'Extracted Customer AB');
     await page.screenshot({path:'test-results/company-details-approved.png',fullPage:true});
     for(let n=0;n<5;n++){
-      const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;
+      const action=[2,3].includes(n)?'keep':'accept';const itemId=initial.state.items[n].id;console.log('Decision step',n,action,itemId);
+      // A keep-only finding never had an accept button. Wait for the actual saved
+      // decision and released UI, not the absence of that unrelated button.
+      await page.waitForFunction(({item,action})=>{const e=document.querySelector('[data-item="'+item+'"] [data-wf="'+action+'"]');return e&&!e.disabled&&!WorkflowActivity.busy();},{},{item:itemId,action});
       await page.click('[data-item="'+itemId+'"] [data-wf="'+action+'"]');
-      await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf="accept"]');},{},itemId);
+      if(n===0){
+        await page.waitForSelector('.wf-risk-dialog[open]');
+        assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),true);
+        await page.click('.wf-risk-exception summary');await page.click('#wf-risk-confirm');
+        await page.type('#wf-risk-reason','Reviewed the alternative against our standard and mandate.');
+        await page.screenshot({path:'test-results/workflow-hard-no-modal.png',fullPage:true});
+        await page.click('[data-risk-action="accept"]');
+      }
+      await page.waitForFunction(item=>{const e=document.querySelector('[data-item="'+item+'"]');return e&&!e.querySelector('[data-wf]')&&!WorkflowActivity.busy();},{},itemId);
+      const savedDecision=await good('/api/workflow/'+id);
+      assert.equal(savedDecision.state.items.find(item=>item.id===itemId).status,action==='keep'?'kept':'accepted');
     }
     let r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'45');assert.equal(r.state.decisions.length,6);assert.equal(C.digest(r.state.baseline),baseline);
     assert.match(r.data.clauseOverrides['ra.s4.title'],/reclaim unpaid Products/);
@@ -105,7 +119,10 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     assert.equal((await api('/api/workflow/'+id,'GET',undefined,stranger)).status,404);
     // Second round: rework the customer's request, then explicitly approve the new alternative.
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const request=r.state.items.find(i=>i.status==='pending');
-    await good('/api/workflow/'+id+'/rework','POST',{itemId:request.id,instruction:'Offer 50 days while retaining our protection.',expectedRevision:r.revision});
+    page.once('dialog',dialog=>dialog.accept('Offer 50 days while retaining our protection.'));
+    await page.click('[data-item="'+request.id+'"] [data-wf="rework"]');
+    await page.waitForFunction(()=>!WorkflowActivity.busy()&&document.querySelector('[data-item^="alternative:"] [data-wf="accept"]'));
+    await page.screenshot({path:'test-results/workflow-reworked-proposal.png',fullPage:true});
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const alternative=r.state.items.find(i=>i.status==='pending');assert.equal(r.data.pay,'45');
     await page.click('[data-item="'+alternative.id+'"] [data-wf="accept"]');await page.waitForFunction(()=>window._editing.base.pay==='50');
     r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'50');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.signatureProblems.length,0,JSON.stringify(r.signatureProblems));
@@ -150,6 +167,50 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         fs.writeFileSync('test-results/company-import-'+type+'.docx',Buffer.from(out.bytes));
       } finally {ai.reviewContract=oldAI;}
     });
+    await t.test('rework API preserves original on empty replies, rejects duplicate calls and returns an approvable alternative',async()=>{
+      const data=C.copy(seeds.ra);
+      const made=await good('/api/agreements','POST',{type:'ra',data,status:'draft',counterpartyName:data.name});extraIds.push(made.id);
+      let entry=await good('/api/workflow/'+made.id+'/start','POST',{});
+      const source={data:entry.data,type:'ra',status:'draft',workflow_state:entry.state,workflow_revision:entry.revision};
+      const pending=C.recordReview(source,999,[{topic:'Payment',classification:'deal_breaker',changes:[],requires_counsel:true,proposed_wording:'Counter wording to be mapped.'}],'test');
+      await db.query('UPDATE agreements SET workflow_state=$1 WHERE id=$2',[pending,made.id]);
+      const payload={itemId:'review:999:0',instruction:'Offer a safe alternative.',expectedRevision:entry.revision};
+      const endpoint='/api/workflow/'+made.id+'/rework',previousChat=ai.chat;
+      try{
+        ai.chat=async()=>({reply:'No safe change; keep our text.',proposals:[]});
+        const noChange=await api(endpoint,'POST',payload);assert.equal(noChange.status,422);assert.match(noChange.body.explanation,/No safe change/);
+        entry=await good('/api/workflow/'+made.id);assert.equal(entry.state.items[0].status,'pending');assert.equal(entry.revision,payload.expectedRevision);
+        // Wrong actor is refused before provider work.
+        assert.equal((await api(endpoint,'POST',payload,stranger)).status,404);
+        let release,entered;const started=new Promise(r=>entered=r);let aiCalls=0;
+        ai.chat=async (agreement,messages)=>{
+          aiCalls++;assert.match(messages[0].content,/Counter wording to be mapped/);assert.match(messages[0].content,/STANDARDANPASSNING/);assert.ok(messages[0].content.includes('"baselineData"'));entered();
+          await new Promise(r=>release=r);
+          return {reply:'45 day alternative',proposals:[{target:{kind:'field',id:'pay'},op:'replace',oldText:agreement.pay,newText:'45',label:'Payment',rationale:'test',anchor:''}]};
+        };
+        const first=api(endpoint,'POST',payload);await started;
+        let duplicate;
+        try{duplicate=await api(endpoint,'POST',payload);}finally{release();}
+        const result=await first;assert.equal(duplicate.status,409);assert.equal(aiCalls,1);
+        assert.equal(result.status,200,JSON.stringify(result.body));assert.ok(result.body.reworkedItemId);
+        assert.equal(result.body.data.pay,data.pay);assert.equal(result.body.state.items[0].status,'superseded');
+        const alternative=result.body.state.items.find(i=>i.id===result.body.reworkedItemId);
+        assert.equal(alternative.status,'pending');assert.equal(alternative.preview[0].newText,'45');assert.equal(alternative.requiresCounsel,true);
+        const decision={itemId:alternative.id,action:'accept',expectedRevision:result.body.revision,requestId:'approve-real-alternative'};
+        assert.equal((await api('/api/workflow/'+made.id+'/decisions','POST',decision)).status,400,'Hard no requires explicit review even via the API');
+        assert.equal((await api('/api/workflow/'+made.id+'/decisions','POST',{...decision,hardNoAcknowledgement:'forged',note:'An adequate reason does not replace the correct version.'})).status,400);
+        const approved=await good('/api/workflow/'+made.id+'/decisions','POST',{...decision,hardNoAcknowledgement:alternative.hardNoReview.token,note:'Reviewed the exact risk and alternative against our standard.'});
+        assert.equal(approved.state.decisions.at(-1).hardNoAcknowledgement,alternative.hardNoReview.token);
+        assert.equal(approved.data.pay,'45');assert.ok(approved.signatureProblems.some(p=>p.includes('särskilt godkännande')));
+      }finally{ai.chat=previousChat;}
+    });
     fs.writeFileSync('test-results/workflow-outcome.json',JSON.stringify({agreementId:id,status:r.status,revision:r.revision,decisions:r.state.decisions.length,versions:history.versions.length,mailMockCalls:mail.length,ai:'mocked',counterpartySignature:'synthetic file with manual confirmation'},null,2));
+  }catch(error){
+    // Record real browser/server state instead of guessing at a timed-out control.
+    if(page){
+      try{fs.writeFileSync('test-results/workflow-failure-ui.json',JSON.stringify(await page.evaluate(()=>({editing:window._editing,busy:window.WorkflowActivity?.busy(),cards:Array.from(document.querySelectorAll('.wf-item')).map(e=>({id:e.dataset.item,text:e.innerText,buttons:Array.from(e.querySelectorAll('button')).map(b=>({action:b.dataset.wf,disabled:b.disabled}))})),messages:Array.from(document.querySelectorAll('.wf-feedback')).map(e=>e.textContent)})),null,2));await page.screenshot({path:'test-results/workflow-failure.png',fullPage:true});}catch(_){}
+    }
+    if(id){try{fs.writeFileSync('test-results/workflow-failure-server.json',JSON.stringify(await good('/api/workflow/'+id),null,2));}catch(_){}}
+    throw error;
   }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));for(const deleted of [id,...extraIds].filter(Boolean))await db.query('DELETE FROM agreements WHERE id=$1',[deleted]);await db.pool.end();}
 });

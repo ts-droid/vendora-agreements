@@ -26613,8 +26613,9 @@ function updateArchive(editing, formData, showStatus){
 function saveEditOnly(){
   var e=window._editing; if(!e) return;
   var formData = readForm(e.type);
-  if (!formData.name){ var st=document.getElementById("editBarStatus"); st.style.color="#c0392b"; st.textContent="Enter the "+(e.type==="da"?"Supplier":"Reseller")+" name first"; return; }
-  updateArchive(e, formData, true);
+  if (!formData.name && !e.workflow){ var st=document.getElementById("editBarStatus"); st.style.color="#c0392b"; st.textContent="Enter the "+(e.type==="da"?"Supplier":"Reseller")+" name first"; return; }
+  if(window.WorkflowActivity&&WorkflowActivity.busy())return;
+  updateArchive(e, formData, true).catch(function(){});
 }
 function archiveDownload(id){
   fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw new Error("not found"); return r.json(); }).then(function(j){
@@ -27063,7 +27064,7 @@ function renderContractReviewCards(){
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Jämför och föreslå anpassningar &rarr;</button>"
-      + "<span id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted)'></span></div>"
+      + "<div id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted);flex-basis:100%' role='status' aria-live='polite'></div></div>"
       + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 50 MB. Jämförelsen föreslår även motpartens företagsuppgifter från dokumentet. Kontrollera och välj vilka uppgifter som ska föras in i vårt avtal. Godkänn eller avstå förslagen före kundutskicket.</div>"
       + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
   });
@@ -27131,56 +27132,74 @@ async function buildOurAgreementText(type){
 }
 
 async function runContractReview(type){
+  // A second click (including one after a re-render) must not start another paid request.
+  if(WorkflowActivity.busy())return;
   var inp=document.getElementById("cr_file_"+type), msg=document.getElementById("cr_msg_"+type), btn=document.getElementById("cr_btn_"+type), out=document.getElementById("cr_out_"+type);
   var file=inp.files && inp.files[0];
   var family=familyFromSelect("cr_type_"+type);
   var templateType=templateTypeFor(family, type);
   msg.style.color="#c0392b";
   if(!family || !templateType){ msg.textContent="Choose the agreement type first."; return; }
-  if(!file){ msg.textContent="Choose the counterparty's contract first (PDF, DOCX or TXT)."; return; }
+  if(!file){ msg.textContent="Välj motpartens avtal först (PDF, DOCX eller TXT)."; return; }
   if(file.size>UploadLimits.MAX_FILE_BYTES){ msg.textContent="Max 50 MB."; return; }
-  btn.disabled=true; msg.style.color="var(--muted)"; out.innerHTML="";
+  var feedback=WorkflowActivity.start('comparison:'+type,function(){return document.getElementById('cr_msg_'+type);},'Sparar avtalsutkastet…');
+  if(!feedback)return;
+  var oldLabel=btn.textContent,wf=null,jobId=null,nameEl=document.getElementById('cr_name_'+type);
+  btn.textContent='Granskning pågår…';msg.style.color='var(--muted)';out.innerHTML='';out.style.display='block';
   try{
     var wf=await wfEnsure(templateType);
-    msg.textContent="Reading the document…";
+    feedback.stage('Läser dokumentet…');
+    // Let the spinner paint before potentially expensive local document parsing.
+    await new Promise(function(resolve){requestAnimationFrame(function(){requestAnimationFrame(resolve);});});
     var doc=await readContractFile(file);
-    msg.textContent="Building Vendora's agreement for comparison…";
+    feedback.stage('Förbereder vårt avtal för jämförelse…');
     var ourText=await buildOurAgreementText(templateType);
-    msg.textContent="Sending to the Contract Lawyer…";
-    var nameEl=document.getElementById("cr_name_"+type);
+    feedback.stage('Överför underlaget till avtalsadvokaten…');
     var ctx=getAiContext();
-    var agreement = (ctx && ctx._type === templateType) ? ctx : { _type: templateType };
-    var drawerType=document.getElementById("aiAgreementType");
-    if (drawerType) drawerType.value = family;
-    var r=await fetch("/api/ai/review",{method:"POST",headers:{"Content-Type":"text/plain"},
-      body:JSON.stringify({ type:templateType, doc:doc, ourText:ourText, agreement:agreement,
-        name: nameEl ? nameEl.value.trim() : "",
-        counterpartyName: (readForm(templateType).name||"").trim(),
-        agreementId: wf.id, expectedRevision:wf.revision })});
-    var j=await r.json().catch(function(){ return {}; });
-    if(!r.ok) throw new Error(j.error||"The review failed");
-    // The review runs as a background job on the server — poll until it's done (a real contract
-    // takes a few minutes), showing elapsed time so the wait is visibly alive.
-    var t0=Date.now();
+    var agreement=(ctx&&ctx._type===templateType)?ctx:{_type:templateType};
+    var drawerType=document.getElementById('aiAgreementType');if(drawerType)drawerType.value=family;
+    var r=await fetch('/api/ai/review',{method:'POST',headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({type:templateType,doc:doc,ourText:ourText,agreement:agreement,
+        name:nameEl?nameEl.value.trim():'',counterpartyName:(readForm(templateType).name||'').trim(),
+        agreementId:wf.id,expectedRevision:wf.revision})});
+    var j=await r.json().catch(function(){return {};});
+    if(!r.ok)throw new Error(j.error||'Granskningen kunde inte startas.');
+    jobId=j.jobId;
+    if(!jobId)throw new Error('Servern returnerade inget gransknings-ID.');
+    feedback.stage('Avtalsadvokaten granskar villkor och företagsuppgifter…');
+    // Reflect the persisted running state immediately; do not display 0 proposals as a result.
+    await wfRefresh(wf.id);
+    var t0=Date.now(),networkErrors=0;
     while(true){
-      await new Promise(function(res){ setTimeout(res, 3000); });
-      var s=await fetch("/api/ai/review/"+encodeURIComponent(j.jobId)).then(function(x){ return x.json().then(function(y){ return {ok:x.ok, y:y}; }); }).catch(function(){ return {ok:false, y:{}}; });
-      if(!s.ok) throw new Error(s.y.error||"Lost contact with the review");
-      if(s.y.status==="done"){ j=s.y; break; }
-      if(s.y.status==="error") throw new Error(s.y.error||"The review failed");
-      var sec=Math.round((Date.now()-t0)/1000);
-      msg.textContent="The Contract Lawyer is reviewing… "+Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0")+" — a real contract takes a few minutes.";
-      if(sec>20*60) throw new Error("The review is taking too long — please try again.");
+      await new Promise(function(resolve){setTimeout(resolve,3000);});
+      var result;
+      try{
+        var poll=await fetch('/api/ai/review/'+encodeURIComponent(jobId));
+        result=await poll.json();
+        if(!poll.ok)throw new Error(result.error||'Status kunde inte hämtas.');
+        networkErrors=0;
+      }catch(error){
+        if(++networkErrors>=3)throw new Error('Kontakten med granskningen bröts. Den kan fortfarande pågå på servern. Öppna avtalet i arkivet och kontrollera status innan du startar en ny granskning.');
+        feedback.stage('Väntar på kontakt med servern – försöker hämta status igen…');continue;
+      }
+      if(result.status==='done'){j=result;break;}
+      if(result.status==='error')throw new Error(result.error||'AI-granskningen misslyckades.');
+      feedback.stage('Avtalsadvokaten granskar villkor och företagsuppgifter…');
+      if(Date.now()-t0>20*60*1000)throw new Error('Granskningen tar längre tid än väntat. Kontrollera ärendet i arkivet innan du startar en ny granskning.');
     }
+    feedback.stage('Hämtar och visar de sparade förslagen…');
     window._crResults=window._crResults||{};
-    window._crResults[type]={ id:j.reviewId, name:j.name, filename:file.name, type:templateType, review:j.review, when:new Date(j.created_at||Date.now()), saveError:j.saveError||null };
-    if (j.saveError){ msg.style.color="#c0392b"; msg.textContent="Review ready, but it could not be saved to the archive — download the memo now."; }
-    else { msg.style.color="#1e7e34"; msg.textContent="Review ready — saved under Archive → Contract reviews as “"+(j.name||file.name)+"”."; }
-    if (nameEl) nameEl.value="";
+    window._crResults[type]={id:j.reviewId,name:j.name,filename:file.name,type:templateType,review:j.review,when:new Date(j.created_at||Date.now()),saveError:j.saveError||null};
     renderContractReview(type);
-    if (j.reviewId) { await wfRefresh(wf.id); out.style.display="none"; }
-  }catch(e){ msg.style.color="#c0392b"; msg.textContent=(e&&e.message)||"The review failed"; }
-  finally{ btn.disabled=false; }
+    if(j.reviewId){await wfRefresh(wf.id);out.style.display='none';}
+    if(nameEl)nameEl.value='';
+    feedback.finish(j.saveError?'Granskningen är klar men kunde inte sparas. Ladda ned granskningsrapporten.':'Granskningen är klar och sparad. Kontrollera företagsuppgifterna och ta ställning till punkterna nedan.',!!j.saveError);
+  }catch(e){
+    if(wf){try{await wfRefresh(wf.id);}catch(_){} }
+    feedback.finish((e&&e.message)||'Granskningen misslyckades.',true);
+  }finally{
+    btn.textContent=oldLabel;
+  }
 }
 
 function crBadge(cls){ var m=CR_CLASS[cls]||{label:cls,bg:"#eef1f5",fg:"#555"}; return "<span style='display:inline-block;background:"+m.bg+";color:"+m.fg+";font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;white-space:nowrap'>"+esc(m.label)+"</span>"; }

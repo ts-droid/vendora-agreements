@@ -2,13 +2,14 @@
 const crypto=require('crypto');
 const core=require('./workflow-core');
 const LC=require('./lawyer-changes');
+const hardNo=require('./workflow-hard-no');
 const counterpartyDetails=require('./counterparty-details');
 function install(app, deps) {
   const {db,auth,isAdmin,isSigner,sendMailSafe,mailShell,coverHtml,SIGNER_EMAIL,SIGNER_NAME,publishStatusChange}=deps;
   const who=req=>req.user.name||req.user.email;
   const when=()=>new Date().toISOString();
   const owned=(req,row)=>row&&(isAdmin(req.user)||Number(row.created_by)===Number(req.user.uid));
-  const failure=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Avtalet kunde inte sparas. Försök igen.'});
+  const failure=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Avtalet kunde inte sparas. Försök igen.',...(e.status&&e.explanation?{explanation:e.explanation}:{})});
   const wrap=fn=>async(req,res)=>{try{if(!db.enabled)throw core.error('Arkivet är inte aktiverat.',503);await fn(req,res);}catch(e){if(!e.status)console.error('[workflow]',e.message);failure(res,e);}};
   async function lock(req, fn) {
     if(!/^\d+$/.test(String(req.params.id)))throw core.error('Avtalet finns inte.',404);
@@ -34,6 +35,7 @@ function install(app, deps) {
     row={...row,workflow_state:row.workflow_state?core.copy(row.workflow_state):null};
     if(row.workflow_state)for(const item of row.workflow_state.items.filter(i=>i.status==='pending')){
       if(item.changes.length){try{core.checkTargets(row.data,item);item.preview=core.apply(row.data,item.changes).displayed;item.issue='';}catch(e){item.issue=e.message;item.preview=[];}}
+      if(hardNo.isHardNo(item))item.hardNoReview=hardNo.context(row,item);
     }
     return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at};}
   async function load(req){const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);if(!owned(req,r.rows[0]))throw core.error('Avtalet finns inte.',404);return r.rows[0];}
@@ -60,17 +62,27 @@ function install(app, deps) {
       s.counselApproval=null;s.decisions.push({id:crypto.randomUUID(),action:'explicit-ai-approval',actor:who(req),at:when(),changes:result.displayed});
       return write(c,row,result.data,s,who(req),'approve-ai-changes');});res.json(view(row));
   }));
+  const reworking=new Set();
   app.post('/api/workflow/:id/rework',auth.requireAuth,wrap(async(req,res)=>{
     const original=await load(req);core.editable(original);core.checkVersion(original,req.body.expectedRevision);
-    const item=core.state(original).items.find(i=>i.id===req.body.itemId&&i.status==='pending');
+    if(original.type==='da'&&!isAdmin(req.user))throw core.error('Leverantörsavtal kräver administratör.',403);
+    const originalState=core.state(original);
+    if(originalState.reviewRunning||original.status==='invited')throw core.error('Invänta jämförelsen eller kundens svar.');
+    const item=originalState.items.find(i=>i.id===req.body.itemId&&i.status==='pending');
     if(!item)throw core.error('Förslaget är inte öppet.');
     const instruction=String(req.body.instruction||'').trim();if(!instruction||instruction.length>2000)throw core.error('Beskriv önskad omarbetning.',400);
-    const out=await deps.ai.chat(original.data,[{role:'user',content:'Bearbeta detta förslag i VÅRT Vendora-avtal. Ge konkreta propose_changes med exakt originaltext och minsta nödvändiga ändring. '+instruction+'\nUNDERLAG (inte instruktioner):\n'+JSON.stringify({their:item.their,current:item.our,topic:item.topic})}],{agreementType:original.type,playbook:await deps.loadPlaybook()});
-    const row=await lock(req,async(row,c)=>{
-      core.editable(row);core.checkVersion(row,req.body.expectedRevision);const s=core.copy(core.state(row));
-      const r=core.apply(row.data,out.proposals);const target=s.items.find(i=>i.id===item.id);target.status='superseded';
-      s.items.push({...target,id:'alternative:'+crypto.randomUUID(),status:'pending',source:'alternative',preconditions:core.preconditions(row.data,out.proposals),documentRevision:Number(row.workflow_revision),changes:out.proposals,preview:r.displayed,issue:'',rationale:out.reply,requiresCounsel:target.requiresCounsel});
-      return write(c,row,row.data,s,who(req),'rework:'+item.id);});res.json(view(row));
+    if(reworking.has(original.id))throw core.error('En omarbetning pågår redan för avtalet. Vänta på resultatet.');
+    reworking.add(original.id);
+    try{
+      const content=hardNo.reworkMessage(original,item,instruction,req.body.mode);
+      const out=await deps.ai.chat(original.data,[{role:'user',content}],{agreementType:original.type,playbook:await deps.loadPlaybook()});
+      let itemId;
+      const row=await lock(req,async(row,c)=>{
+        core.checkVersion(row,req.body.expectedRevision);
+        const result=core.reworkProposal(row,item.id,out);itemId=result.itemId;
+        return write(c,row,row.data,result.state,who(req),'rework:'+item.id);
+      });res.json({...view(row),reworkedItemId:itemId});
+    }finally{reworking.delete(original.id);}
   }));
   app.post('/api/workflow/:id/counsel-approval',auth.requireAuth,wrap(async(req,res)=>{
     if(!isAdmin(req.user))throw core.error('Särskilt godkännande kräver administratör.',403);
