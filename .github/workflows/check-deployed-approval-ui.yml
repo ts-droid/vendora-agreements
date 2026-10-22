@@ -1,0 +1,55 @@
+name: Check deployed agreement UI
+on:
+  push:
+    branches: [diagnostics/approval-ui-version]
+    paths: [.github/workflows/check-deployed-approval-ui.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.repository == 'ts-droid/vendora-agreements'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read public JavaScript only, without authentication or customer data
+        run: |
+          python3 - <<'PY'
+          import datetime, hashlib, json, os, pathlib, time
+          import urllib.request, urllib.error
+          expected = '0d01e56e59b62d1f629fef3880a8e9fe30b997c4'
+          origin = 'https://vendora-agreements-production.up.railway.app'
+          report = {'checkedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'expectedCommit': 'b64d2bc63045893e3c1fcd874306a24a0fae8fa9', 'expectedUiBlob': expected, 'readOnly': True, 'customerDataRead': False}
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect())
+          try:
+              request = urllib.request.Request(origin + '/workflow-ui.js?release_probe=' + str(int(time.time())), headers={'Cache-Control': 'no-cache', 'Accept': 'application/javascript'})
+              with opener.open(request, timeout=25) as response:
+                  data = response.read(524289)
+                  report.update({'httpStatus': response.status, 'contentType': response.headers.get('Content-Type'), 'bytes': len(data), 'cacheControl': response.headers.get('Cache-Control'), 'etag': response.headers.get('ETag'), 'lastModified': response.headers.get('Last-Modified')})
+              if len(data) > 524288:
+                  report['status'] = 'unexpected_size'
+              elif 'javascript' not in str(report['contentType']).lower():
+                  report['status'] = 'not_public_javascript'
+              else:
+                  blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+                  text = data.decode('utf-8')
+                  report.update({'actualUiBlob': blob, 'sha256': hashlib.sha256(data).hexdigest(), 'status': 'matches_expected_release' if blob == expected else 'different_ui_release', 'hasHardNoDialog': 'window.WorkflowHardNoDialog' in text, 'hasStandardAlignmentButton': 'Förklaring / anpassa mot vår standard' in text, 'hasExplicitKeepButton': 'Godkänn att vår lydelse behålls' in text, 'hasOldPendingLabel': 'förslag väntar på beslut' in text})
+          except urllib.error.HTTPError as e:
+              report.update({'status': 'http_error_or_auth_required', 'httpStatus': e.code})
+          except Exception as e:
+              report.update({'status': 'network_error', 'errorType': type(e).__name__})
+          pathlib.Path('diagnostics').mkdir(exist_ok=True)
+          output = json.dumps(report, indent=2, ensure_ascii=False)
+          pathlib.Path('diagnostics/deployed-ui.json').write_text(output)
+          print(output)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('# Public agreement UI diagnostic\n\n```json\n' + output + '\n```\n\nRead-only unauthenticated GET. No production writes, AI calls, secrets or contract records. This is a deployment observation, not an application test.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployed-ui-diagnostic
+          path: diagnostics/deployed-ui.json
+          retention-days: 3
