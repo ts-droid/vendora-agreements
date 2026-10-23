@@ -1,0 +1,41 @@
+name: Synchronise review test readiness
+on:
+  push:
+    branches: [fix/rework-original-and-decision]
+    paths: [.github/workflows/sync-rework-test-readiness.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.repository == 'ts-droid/vendora-agreements' && github.ref == 'refs/heads/fix/rework-original-and-decision'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/rework-original-and-decision
+          fetch-depth: 0
+      - name: Apply reviewed readiness assertion only
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('branch','--show-current') == 'fix/rework-original-and-decision'
+          subprocess.run(['git','merge-base','--is-ancestor','f7416d0fa60e55f2ee9003c4aeb6e7d788684dc8','HEAD'],check=True)
+          path=pathlib.Path('test/workflow-api.test.js')
+          text=path.read_text()
+          old="    await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);"
+          new="    // The fast stub can finish before the review poll/refresh cleanup releases the controls.\n    await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5&&!WorkflowActivity.busy());"
+          assert text.count(old)==1
+          path.write_text(text.replace(old,new))
+          subprocess.run(['git','add','test/workflow-api.test.js'],check=True)
+          subprocess.run(['git','rm','.github/workflows/sync-rework-test-readiness.yml'],check=True)
+          assert git('write-tree')=='d5e4d14b8f8b0bb2ded2b26bfa512c32a350e50d'
+          PY
+      - name: Commit feature branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test: await completed review before clicking company import'
+          git push origin HEAD:refs/heads/fix/rework-original-and-decision
