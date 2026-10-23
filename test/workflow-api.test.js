@@ -47,7 +47,8 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     fs.mkdirSync('test-results',{recursive:true});const inputPath=path.resolve('test-results/customer-input.txt');fs.writeFileSync(inputPath,companyFixture('ra').doc.data);
     const upload=await page.$('#cr_file_ra');await upload.uploadFile(inputPath);
     await page.click('#cr_btn_ra');
-    await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5);
+    // The fast stub can finish before the review poll/refresh cleanup releases the controls.
+    await page.waitForFunction(()=>document.querySelectorAll('#wf_panel_ra .wf-item').length===5&&!WorkflowActivity.busy());
     id=await page.evaluate(()=>window._editing.id);
     assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'static','sticky generation toolbar must not intercept decision clicks');
     const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
