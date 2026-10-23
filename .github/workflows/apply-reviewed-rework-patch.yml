@@ -1,0 +1,42 @@
+name: Apply reviewed rework patch
+on:
+  push:
+    branches: [fix/rework-original-and-decision]
+    paths: [.github/workflows/apply-reviewed-rework-patch.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'ts-droid/vendora-agreements' && github.ref == 'refs/heads/fix/rework-original-and-decision'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/rework-original-and-decision
+          fetch-depth: 0
+      - name: Verify and apply exact reviewed changes
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('branch', '--show-current') == 'fix/rework-original-and-decision'
+          base = '3245aece583f4ee85a11c3c5766f69d51b6385f9'
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
+          patch = pathlib.Path('.maintenance/rework-choice.patch')
+          assert hashlib.sha256(patch.read_bytes()).hexdigest() == '0bf645fbff8242eea829e8df3d8d651c89e01a61d0b2f87bcb54caa88a7b3922'
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'rm', '.maintenance/rework-choice.patch', '.github/workflows/apply-reviewed-rework-patch.yml'], check=True)
+          expected = {'ai.js','workflow-api.js','workflow-ui.js','workflow-rework.js','test/workflow-api.test.js','test/workflow-rework.test.js','test/review-feedback.test.js'}
+          assert set(git('diff', '--cached', '--name-only', base).splitlines()) == expected
+          assert git('write-tree') == '654850e6d40dd6e10921847c6128f9aa8d022d2a'
+          assert not git('diff', '--name-only')
+          PY
+      - name: Commit feature branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: validate original wording before returning reworks and ask before applying'
+          git push origin HEAD:refs/heads/fix/rework-original-and-decision
