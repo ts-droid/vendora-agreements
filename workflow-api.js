@@ -75,7 +75,7 @@ function install(app, deps) {
     reworking.add(original.id);
     try{
       const content=hardNo.reworkMessage(original,item,instruction,req.body.mode);
-      const out=await deps.ai.chat(original.data,[{role:'user',content}],{agreementType:original.type,playbook:await deps.loadPlaybook()});
+      const out=await deps.ai.chat(original.data,[{role:'user',content}],{agreementType:original.type,playbook:await deps.loadPlaybook(),workflowRework:true});
       let itemId;
       const row=await lock(req,async(row,c)=>{
         core.checkVersion(row,req.body.expectedRevision);
