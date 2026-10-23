@@ -122,6 +122,13 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     page.once('dialog',dialog=>dialog.accept('Offer 50 days while retaining our protection.'));
     await page.click('[data-item="'+request.id+'"] [data-wf="rework"]');
     await page.waitForFunction(()=>!WorkflowActivity.busy()&&document.querySelector('[data-item^="alternative:"] [data-wf="accept"]'));
+    await page.waitForSelector('.wf-risk-dialog[data-rework-choice="true"][open]');
+    assert.match(await page.$eval('.wf-risk-dialog',e=>e.textContent),/Ny formulering/);
+    assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),false);
+    await page.screenshot({path:'test-results/workflow-rework-choice.png',fullPage:true});
+    // Deferring persists the candidate but does not change the agreement.
+    await page.click('[data-risk-action="cancel"]');
+    await page.waitForFunction(()=>!document.querySelector('.wf-risk-dialog'));
     await page.screenshot({path:'test-results/workflow-reworked-proposal.png',fullPage:true});
     await page.evaluate(id=>wfRefresh(id),id);r=await good('/api/workflow/'+id);const alternative=r.state.items.find(i=>i.status==='pending');assert.equal(r.data.pay,'45');
     await page.click('[data-item="'+alternative.id+'"] [data-wf="accept"]');await page.waitForFunction(()=>window._editing.base.pay==='50');
@@ -183,7 +190,8 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         // Wrong actor is refused before provider work.
         assert.equal((await api(endpoint,'POST',payload,stranger)).status,404);
         let release,entered;const started=new Promise(r=>entered=r);let aiCalls=0;
-        ai.chat=async (agreement,messages)=>{
+        ai.chat=async (agreement,messages,opts)=>{
+          assert.equal(opts.workflowRework,true,'endpoint uses strict workflow tool validation');
           aiCalls++;assert.match(messages[0].content,/Counter wording to be mapped/);assert.match(messages[0].content,/STANDARDANPASSNING/);assert.ok(messages[0].content.includes('"baselineData"'));entered();
           await new Promise(r=>release=r);
           return {reply:'45 day alternative',proposals:[{target:{kind:'field',id:'pay'},op:'replace',oldText:agreement.pay,newText:'45',label:'Payment',rationale:'test',anchor:''}]};
@@ -203,6 +211,26 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
         assert.equal(approved.state.decisions.at(-1).hardNoAcknowledgement,alternative.hardNoReview.token);
         assert.equal(approved.data.pay,'45');assert.ok(approved.signatureProblems.some(p=>p.includes('särskilt godkännande')));
       }finally{ai.chat=previousChat;}
+    });
+    await t.test('keeping the original after rework is a persisted decision, not a reset or implicit adoption',async()=>{
+      const data=C.copy(seeds.ra);data.pay='60';
+      const made=await good('/api/agreements','POST',{type:'ra',data,status:'draft',counterpartyName:data.name});extraIds.push(made.id);
+      let entry=await good('/api/workflow/'+made.id+'/start','POST',{});
+      const source={id:made.id,data:entry.data,type:'ra',status:'draft',workflow_state:entry.state,workflow_revision:entry.revision};
+      const pending=C.recordReview(source,1001,[{topic:'Payment',classification:'deal_breaker',changes:[],requires_counsel:true}],'test');
+      await db.query('UPDATE agreements SET workflow_state=$1 WHERE id=$2',[pending,made.id]);
+      const unchanged=C.digest(entry.data),standard=C.digest(entry.state.baseline),prior=ai.chat;
+      try {
+        ai.chat=async (agreement,messages,opts)=>{assert.equal(opts.workflowRework,true);return {reply:'Pending narrower alternative',proposals:[{target_kind:'field',target_id:'pay',op:'replace',old_text:agreement.pay,new_text:'50',label:'Payment',rationale:'Synthetic',anchor:''}]};};
+        entry=await good('/api/workflow/'+made.id+'/rework','POST',{itemId:'review:1001:0',instruction:'Preserve our protection',expectedRevision:entry.revision});
+        assert.equal(C.digest(entry.data),unchanged);
+        const decision={itemId:entry.reworkedItemId,action:'keep',requestId:'keep-rework-api-test',expectedRevision:entry.revision};
+        entry=await good('/api/workflow/'+made.id+'/decisions','POST',decision);
+        const reopened=await good('/api/workflow/'+made.id);
+        assert.equal(C.digest(reopened.data),unchanged);assert.equal(reopened.data.pay,'60');assert.equal(C.digest(reopened.state.baseline),standard);
+        assert.equal(reopened.state.items.at(-1).status,'kept');assert.equal(reopened.state.decisions.at(-1).action,'keep');
+        const replay=await good('/api/workflow/'+made.id+'/decisions','POST',decision);assert.equal(replay.revision,entry.revision);
+      } finally { ai.chat=prior; }
     });
     fs.writeFileSync('test-results/workflow-outcome.json',JSON.stringify({agreementId:id,status:r.status,revision:r.revision,decisions:r.state.decisions.length,versions:history.versions.length,mailMockCalls:mail.length,ai:'mocked',counterpartySignature:'synthetic file with manual confirmation'},null,2));
   }catch(error){

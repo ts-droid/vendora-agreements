@@ -58,12 +58,13 @@ window.WorkflowActivity = (function () {
 window.WorkflowHardNoDialog = (function () {
   'use strict';
   var dismiss = null;
-  function ask(row, item) {
+  function ask(row, item, options) {
+    var afterRework = !!(options && options.afterRework), risky = item.classification === 'deal_breaker';
     if (dismiss) return Promise.resolve(null);
     var info = item.hardNoReview || {}, prior = info.original || item;
-    var canApprove = info.baselineAvailable === true && !!info.token && !item.issue && Array.isArray(item.preview) && item.preview.length > 0 && (item.changes || []).length > 0;
+    var canApprove = (!risky || (info.baselineAvailable === true && !!info.token)) && !item.issue && Array.isArray(item.preview) && item.preview.length > 0 && (item.changes || []).length > 0;
     var opener = document.activeElement, dialog = document.createElement('dialog');
-    dialog.className = 'wf-risk-dialog'; dialog.setAttribute('aria-labelledby', 'wf-risk-title');
+    dialog.className = 'wf-risk-dialog'; if (afterRework) dialog.dataset.reworkChoice = 'true'; dialog.setAttribute('aria-labelledby', 'wf-risk-title');
     dialog.setAttribute('aria-describedby', 'wf-risk-intro');
     function add(tag, text, parent, className) {
       var element = document.createElement(tag); element.textContent = text;
@@ -74,9 +75,11 @@ window.WorkflowHardNoDialog = (function () {
       var section = add('section', '', parent, 'wf-risk-block');
       add('h3', title, section); add('p', text || 'Ingen förklaring sparad. Begär en omarbetning innan du fattar beslut.', section); return section;
     }
-    add('h2', 'Hard no – granska risken och vårt alternativ').id = 'wf-risk-title';
+    add('h2', afterRework ? 'Ny formulering – inför eller behåll originalet' : 'Hard no – granska risken och vårt alternativ').id = 'wf-risk-title';
     add('p', item.topic || 'Avvikelse', null, 'wf-risk-topic');
-    add('p', 'Hard no gäller motpartens ursprungliga villkor. Ett nytt formuleringsförslag är inte automatiskt säkert eller godkänt. Granska vad som avviker från vår grund.', null, 'wf-risk-intro').id = 'wf-risk-intro';
+    if (afterRework) add('p', 'Det nya förslaget är sparat men har INTE införts. Jämför med vår befintliga lydelse och välj uttryckligen vad som ska användas.', null, 'wf-risk-intro').id = 'wf-risk-intro';
+    if (risky) {
+    add('p', 'Hard no gäller motpartens ursprungliga villkor. Ett nytt formuleringsförslag är inte automatiskt säkert eller godkänt. Granska vad som avviker från vår grund.', null, 'wf-risk-intro').id = afterRework ? 'wf-original-risk-intro' : 'wf-risk-intro';
     block(row.type === 'da' ? 'Leverantörens ursprungliga villkor' : 'Kundens ursprungliga villkor', prior.their);
     block('Varför detta inte rekommenderas', [prior.rationale, prior.legal].filter(Boolean).join('\n\n'));
     block('Vår position – granskningens sammanfattning', prior.our);
@@ -84,6 +87,7 @@ window.WorkflowHardNoDialog = (function () {
     add('summary', 'Visa ärendets låsta Vendora-standard', standard);
     (info.baselineTargets || []).forEach(function (target) { block(target.label + ' · ' + target.id, target.text, standard); });
     add('pre', info.baselineText || 'Standardunderlaget saknas. Begär kontroll av ärendet.', standard);
+    }
     if (canApprove) {
       add('h3', 'Det aktuella alternativet – inte infört');
       item.preview.forEach(function (change) {
@@ -95,26 +99,31 @@ window.WorkflowHardNoDialog = (function () {
       if (item.rationale !== prior.rationale) block('Advokatens bedömning av alternativet', item.rationale);
     } else if (item.proposed) block('Textutkast – ännu inte en verifierad ändring', item.proposed);
     add('p', 'Att behålla vår lydelse lämnar det aktuella avtalet oförändrat; tidigare anpassningar återställs inte automatiskt till standard. En ny AI-formulering måste godkännas separat.', null, 'wf-note');
-    var label = add('label', 'Önskemål till advokaten (valfritt att precisera)'); label.htmlFor = 'wf-risk-instruction';
-    var instruction = add('textarea', 'Utgå från vår låsta standard. Försök möta motpartens bakomliggande behov med minsta nödvändiga ändring utan att ge upp vårt grundskydd. Redovisa kvarvarande risker. Om det inte går, rekommendera att vår lydelse behålls.');
-    instruction.id = 'wf-risk-instruction'; instruction.maxLength = 2000; instruction.rows = 4;
-    var actions = add('div', '', null, 'wf-risk-actions');
-    var rework = add('button', 'Ta fram förslag närmare vår standard', actions, 'wf-risk-primary'); rework.dataset.riskAction = 'rework';
-    var keep = add('button', 'Behåll vår lydelse', actions); keep.dataset.riskAction = 'keep';
-    var close = add('button', 'Avbryt', actions); close.dataset.riskAction = 'cancel';
+    var instruction = null;
+    if (!afterRework) {
+      var label = add('label', 'Önskemål till advokaten (valfritt att precisera)'); label.htmlFor = 'wf-risk-instruction';
+      instruction = add('textarea', 'Utgå från vår låsta standard. Försök möta motpartens bakomliggande behov med minsta nödvändiga ändring utan att ge upp vårt grundskydd. Redovisa kvarvarande risker. Om det inte går, rekommendera att vår lydelse behålls.');
+      instruction.id = 'wf-risk-instruction'; instruction.maxLength = 2000; instruction.rows = 4;
+    }
+    var actions = add('div', '', null, 'wf-risk-actions'), rework = null;
+    if (!afterRework) { rework = add('button', 'Ta fram förslag närmare vår standard', actions, 'wf-risk-primary'); rework.dataset.riskAction = 'rework'; }
+    var keep = add('button', afterRework ? 'Behåll originalet – vår befintliga lydelse' : 'Behåll vår lydelse', actions); keep.dataset.riskAction = 'keep';
+    var close = add('button', afterRework ? 'Ta ställning senare' : 'Avbryt', actions); close.dataset.riskAction = 'cancel';
     var approve = null, checkbox = null, reason = null;
     if (canApprove) {
-      var exceptional = add('details', '', null, 'wf-risk-exception');
-      add('summary', 'Granska och godkänn det aktuella alternativet i stället', exceptional);
+      var exceptional = add(afterRework ? 'section' : 'details', '', null, 'wf-risk-exception');
+      add(afterRework ? 'h3' : 'summary', afterRework ? 'Inför det nya förslaget i vårt avtal' : 'Granska och godkänn det aktuella alternativet i stället', exceptional);
       add('p', info.requiresCounsel ? 'Dokumenterat särskilt godkännande krävs fortfarande före underskrift. Detta beslut ersätter inte den kontrollen.' : 'Du godkänner endast den exakta nya lydelsen ovan. Det är inte en underskrift eller motpartens acceptans. Befintliga signeringskontroller gäller fortfarande.', exceptional);
-      var checkLabel = add('label', '', exceptional, 'wf-risk-confirm');
-      checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = 'wf-risk-confirm'; checkLabel.appendChild(checkbox);
-      checkLabel.appendChild(document.createTextNode(' Jag har granskat risken, vår standard och den föreslagna lydelsen.'));
-      var reasonLabel = add('label', 'Motivering till att detta alternativ kan accepteras (minst 10 tecken)', exceptional); reasonLabel.htmlFor = 'wf-risk-reason';
-      reason = add('textarea', '', exceptional); reason.id = 'wf-risk-reason'; reason.maxLength = 2000; reason.rows = 2;
-      approve = add('button', 'Godkänn den visade formuleringen', exceptional); approve.dataset.riskAction = 'accept'; approve.disabled = true;
-      function validate() { approve.disabled = !checkbox.checked || reason.value.trim().length < 10; }
-      checkbox.onchange = validate; reason.oninput = validate;
+      if (risky) {
+        var checkLabel = add('label', '', exceptional, 'wf-risk-confirm');
+        checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = 'wf-risk-confirm'; checkLabel.appendChild(checkbox);
+        checkLabel.appendChild(document.createTextNode(' Jag har granskat risken, vår standard och den föreslagna lydelsen.'));
+        var reasonLabel = add('label', 'Motivering till att detta alternativ kan accepteras (minst 10 tecken)', exceptional); reasonLabel.htmlFor = 'wf-risk-reason';
+        reason = add('textarea', '', exceptional); reason.id = 'wf-risk-reason'; reason.maxLength = 2000; reason.rows = 2;
+      }
+      approve = add('button', afterRework ? 'Inför det nya förslaget' : 'Godkänn den visade formuleringen', exceptional, 'wf-risk-primary'); approve.dataset.riskAction = 'accept'; approve.disabled = risky;
+      function validate() { approve.disabled = risky && (!checkbox.checked || reason.value.trim().length < 10); }
+      if (risky) { checkbox.onchange = validate; reason.oninput = validate; }
     }
     dialog.querySelectorAll('button').forEach(function (b) { b.type = 'button'; });
     document.body.appendChild(dialog);
@@ -130,14 +139,14 @@ window.WorkflowHardNoDialog = (function () {
       dialog.addEventListener('cancel', function (event) { event.preventDefault(); finish(null); });
       close.onclick = function () { finish(null); };
       keep.onclick = function () { finish({action:'keep'}); };
-      rework.onclick = function () {
+      if (rework) rework.onclick = function () {
         if (!instruction.value.trim()) { instruction.setCustomValidity('Beskriv önskad anpassning.'); instruction.reportValidity(); return; }
         finish({action:'rework', instruction:instruction.value.trim(), mode:'standard_alignment'});
       };
-      instruction.oninput = function () { instruction.setCustomValidity(''); };
+      if (instruction) instruction.oninput = function () { instruction.setCustomValidity(''); };
       if (approve) approve.onclick = function () {
-        if (approve.disabled || !checkbox.checked || reason.value.trim().length < 10) return;
-        finish({action:'accept', hardNoAcknowledgement:info.token, note:reason.value.trim()});
+        if (approve.disabled || (risky && (!checkbox.checked || reason.value.trim().length < 10))) return;
+        finish({action:'accept', ...(risky ? {hardNoAcknowledgement:info.token, note:reason.value.trim()} : {})});
       };
       try { dialog.showModal(); var heading=dialog.querySelector('h2'); heading.tabIndex=-1; heading.focus({preventScroll:true}); dialog.scrollTop=0; }
       catch (_) { finish(null); }
@@ -297,6 +306,22 @@ window.WorkflowHardNoDialog = (function () {
             feedback.finish('Nytt förslag är sparat. Granska den nya lydelsen och godkänn den separat.');feedback=null;
             var target=Array.from(el.querySelectorAll('[data-item]')).find(x=>x.dataset.item===newItemId);
             if(target){target.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});target.focus({preventScroll:true});}
+            // Generation never means consent. Ask immediately, using the saved
+            // preview/version; closing leaves the new alternative pending.
+            if (current && current.id === row.id) {
+              var offered = current.state.items.find(x=>x.id===newItemId), offeredRevision = current.revision;
+              if (offered) {
+                var choice = await WorkflowHardNoDialog.ask(current, offered, {afterRework:true});
+                if (choice) {
+                  if (!current || current.id!==row.id || current.revision!==offeredRevision) throw new Error('Avtalet har ändrats medan förslaget visades. Granska den senaste versionen på nytt.');
+                  id = newItemId;
+                  feedback = WorkflowActivity.start('workflow:'+row.id,localHost,'Sparar ditt val…');
+                  var decided = await api('/api/workflow/'+row.id+'/decisions','POST',{itemId:newItemId,action:choice.action,expectedRevision:offeredRevision,requestId:uid(),...(choice.hardNoAcknowledgement?{hardNoAcknowledgement:choice.hardNoAcknowledgement,note:choice.note}:{})});
+                  if (current && current.id===row.id) adopt(decided);
+                  actionMessage = choice.action==='accept' ? 'Den nya formuleringen är införd och sparad.' : 'Originalet behålls. Det nya förslaget har inte införts.';
+                }
+              }
+            }
           }
         }
         else if(action==='download'||action==='redline'){var data=JSON.parse(JSON.stringify(current.data));data._trackChanges=action==='redline';await downloadAgreementData(current.type,data);}

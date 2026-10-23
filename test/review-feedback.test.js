@@ -84,7 +84,7 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
         }
         if(url==='/api/workflow/991/rework')return new Promise(resolve=>window.resolveRework=(body,ok=true)=>resolve(response(body,ok)));
         if(url==='/api/workflow/991/decisions'){
-          const b=JSON.parse(opts.body);const item=testRow.state.items.find(i=>i.id===b.itemId);item.status=b.action==='accept'?'accepted':'kept';if(b.action==='accept')testRow.data.pay='45';testRow.revision++;return response(testRow);
+          const b=JSON.parse(opts.body);const item=testRow.state.items.find(i=>i.id===b.itemId);item.status=b.action==='accept'?'accepted':'kept';if(b.action==='accept')testRow.data.pay=item.preview[0].newText;testRow.revision++;return response(testRow);
         }
         if(url==='/api/ai/review'){testRow.state.reviewRunning={jobId:'job'};return response({jobId:'job'});}
         if(url==='/api/ai/review/job'){
@@ -153,8 +153,16 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
       resolveRework({...testRow,reworkedItemId:next.id});
     });
     await page.waitForFunction(()=>!WorkflowActivity.busy());
+    await page.waitForSelector('.wf-risk-dialog[data-rework-choice="true"][open]');
+    assert.match(await page.$eval('.wf-risk-dialog',e=>e.textContent),/Ny formulering – inför eller behåll originalet/);
+    assert.equal(await page.evaluate(()=>testRow.data.pay),'30','creating a proposal is not consent');
+    assert.match(await page.$eval('[data-risk-action="keep"]',e=>e.textContent),/Behåll originalet/);
+    assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),true,'Hard no acknowledgement still required');
+    await page.screenshot({path:'test-results/rework-choice.png',fullPage:true});
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(()=>!document.querySelector('.wf-risk-dialog'));
     assert.equal(await page.evaluate(()=>document.activeElement.dataset.item),'alternative:new');
-    assert.equal(await page.evaluate(()=>testRow.data.pay),'30');
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/decisions')).length),0,'later/Escape is not a decision');
     await page.screenshot({path:'test-results/rework-approvable.png',fullPage:true});
     await page.click('[data-item="alternative:new"] [data-wf="accept"]');
     await page.waitForSelector('.wf-risk-dialog[open]');
@@ -168,6 +176,33 @@ test('browser: visible progress, local rework errors, explicit keep decisions an
     assert.equal(await page.evaluate(()=>testRow.data.pay),'45');
     assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/rework')).every(c=>c.body.mode==='standard_alignment')),true);
     assert.ok(await page.evaluate(()=>calls.find(c=>c.url.endsWith('/decisions')).body.hardNoAcknowledgement));
+    // The automatic decision dialog supports ordinary alternatives too. Keeping
+    // means retaining the CURRENT negotiated value (45), not resetting to 30.
+    for (const action of ['cancel','keep','accept']) {
+      const sourceId='choice-source-'+action, alternativeId='choice-alternative-'+action;
+      await page.evaluate(async id=>{
+        resolveRework=null;
+        testRow.state.items.push({id,status:'pending',topic:'Ordinary alternative',classification:'negotiate',changes:[],preview:[],rationale:'Synthetic',our:'Current text',their:'Request'});
+        await wfRefresh(991);
+      },sourceId);
+      const before=await page.evaluate(()=>({value:testRow.data.pay,decisions:calls.filter(c=>c.url.endsWith('/decisions')).length}));
+      await page.click('[data-item="'+sourceId+'"] [data-wf="rework"]');
+      await page.waitForFunction(()=>!!resolveRework);
+      await page.evaluate(({sourceId,alternativeId})=>{
+        testRow.state.items.find(i=>i.id===sourceId).status='superseded';
+        const next={id:alternativeId,source:'alternative',status:'pending',classification:'negotiate',topic:'Ordinary alternative',rationale:'Synthetic',changes:[{target_kind:'field',target_id:'pay',op:'replace',old_text:testRow.data.pay,new_text:'55'}],preview:[{target:{kind:'field',id:'pay'},oldText:testRow.data.pay,newText:'55',label:'Payment'}]};
+        testRow.state.items.push(next);testRow.revision++;resolveRework({...testRow,reworkedItemId:next.id});
+      },{sourceId,alternativeId});
+      await page.waitForSelector('[data-rework-choice="true"][open]');
+      assert.equal(await page.evaluate(()=>testRow.data.pay),before.value);
+      assert.equal(await page.$eval('[data-risk-action="accept"]',e=>e.disabled),false);
+      assert.equal(await page.$('#wf-risk-confirm'),null,'ordinary proposals do not fabricate a Hard no');
+      await page.click('[data-risk-action="'+action+'"]');
+      await page.waitForFunction(()=>!document.querySelector('.wf-risk-dialog')&&!WorkflowActivity.busy());
+      assert.equal(await page.evaluate(()=>testRow.data.pay),action==='accept'?'55':before.value);
+      assert.equal(await page.evaluate(id=>testRow.state.items.find(i=>i.id===id).status,alternativeId),action==='accept'?'accepted':action==='keep'?'kept':'pending');
+      assert.equal(await page.evaluate(()=>calls.filter(c=>c.url.endsWith('/decisions')).length),before.decisions+(action==='cancel'?0:1));
+    }
     // Comparison feedback exists before save finishes; duplicate calls are ignored.
     await page.evaluate(()=>{
       testRow.state.items=[];window.delaySave=true;

@@ -376,7 +376,9 @@ async function chatPrepared(agreement, messages, opts) {
     // Consecutive user messages are merged by the API, so no synthetic assistant turn is needed.
     convo.unshift({ role: 'user', content: [documentBlock(review.doc), { type: 'text', text: 'Counterparty document attached for reference.' }] });
   }
-  const tools = [lawyerChanges.PROPOSE_CHANGES_TOOL];
+  const workflowRework = opts.workflowRework === true ? require('./workflow-rework') : null;
+  const tools = [workflowRework ? workflowRework.tool() : lawyerChanges.PROPOSE_CHANGES_TOOL];
+  let proposalError = '';
   const proposals = [];
   const textParts = [];
 
@@ -387,7 +389,13 @@ async function chatPrepared(agreement, messages, opts) {
       thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
       system, messages: convo, tools,
     });
-    if (resp.stop_reason === 'refusal') { textParts.push('I can\'t help with that request.'); break; }
+    if (resp.stop_reason === 'refusal') {
+      if (workflowRework) { proposals.length = 0; proposalError = 'Advokaten avböjde omarbetningen. Originalet är oförändrat.'; }
+      textParts.push('I can\'t help with that request.'); break;
+    }
+    if (workflowRework && resp.stop_reason === 'max_tokens') {
+      proposals.length = 0; proposalError = 'AI-svaret blev ofullständigt. Ingen del av förslaget har införts.'; break;
+    }
     (resp.content || []).forEach(function (b) { if (b.type === 'text' && b.text.trim()) textParts.push(b.text.trim()); });
     const toolUses = (resp.content || []).filter(function (b) { return b.type === 'tool_use'; });
     if (!toolUses.length || resp.stop_reason !== 'tool_use') break;
@@ -395,6 +403,15 @@ async function chatPrepared(agreement, messages, opts) {
     convo.push({
       role: 'user',
       content: toolUses.map(function (t) {
+        if (workflowRework) {
+          const checked = t.name === 'propose_changes'
+            ? workflowRework.validate(changesFromTool(t.input), scoped)
+            : {ok:false, proposals:[], error:'Okänt ändringsverktyg.', feedback:'Use propose_changes with the complete intended change group.'};
+          // Each attempt is atomic. No valid subset survives a failed repair.
+          proposals.splice(0, proposals.length, ...checked.proposals);
+          proposalError = checked.error;
+          return {type:'tool_result', tool_use_id:t.id, content:checked.feedback, is_error:!checked.ok};
+        }
         const checked = lawyerChanges.validateProposals(changesFromTool(t.input), scoped);
         checked.proposals.forEach(function (p) { proposals.push(p); });
         const note = checked.rejected.length
@@ -405,7 +422,7 @@ async function chatPrepared(agreement, messages, opts) {
       }),
     });
   }
-  return { reply: textParts.join('\n').trim() || '(no response)', proposals: proposals };
+  return { reply: [proposalError, textParts.join('\n').trim()].filter(Boolean).join('\n\n') || '(no response)', proposals: proposals };
 }
 
 // Review a counterparty's contract against Vendora's agreement. Returns the structured review.
