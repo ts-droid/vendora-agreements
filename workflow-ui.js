@@ -350,7 +350,31 @@ window.WorkflowHardNoDialog = (function () {
     var result=await api('/api/workflow/'+row.id+'/invite','POST',{email:email,expectedRevision:row.revision,requestId:uid()});adopt(result);
     message(result.sent?'Avtalet med godkända anpassningar har skickats till kunden.':'E-posten kunde inte skickas. Avtalsversionen är sparad; länken nedan kan skickas manuellt.',!result.sent);
     if(!result.sent){var a=document.createElement('a');a.href=result.inviteUrl;a.textContent='Öppna kundens granskningslänk';a.target='_blank';a.rel='noopener';document.getElementById('wf_message').appendChild(document.createElement('br'));document.getElementById('wf_message').appendChild(a);}
+    // A sent invite is confirmed explicitly; closing the confirmation returns to the app's start
+    // page so the next agreement begins from a clean form. The sent agreement stays in the archive.
+    if(result.sent){await inviteSentDialog(email,result.data&&result.data.name);window.wfGoToStart();}
   }
+  // Confirmation shown after a customer invite has been sent. Resolves when the person closes it
+  // (button, Escape or a click outside the dialog); the caller decides what happens next.
+  function inviteSentDialog(email,counterparty){
+    var dialog=document.createElement('dialog');dialog.className='wf-risk-dialog wf-sent-dialog';dialog.setAttribute('aria-labelledby','wf-sent-title');
+    var mark=document.createElement('div');mark.className='wf-sent-mark';mark.setAttribute('aria-hidden','true');mark.textContent='\u2709';dialog.appendChild(mark);
+    var title=document.createElement('h2');title.id='wf-sent-title';title.textContent='Inbjudan har skickats';dialog.appendChild(title);
+    var text=document.createElement('p');text.appendChild(document.createTextNode('Inbjudan har nu gått iväg till '));var to=document.createElement('strong');to.textContent=email;text.appendChild(to);text.appendChild(document.createTextNode('. Kunden får en länk för att granska avtalet och komplettera sina företagsuppgifter.'));dialog.appendChild(text);
+    var note=document.createElement('p');note.className='wf-note';note.textContent=(counterparty?'Avtalet med '+counterparty:'Avtalet')+' ligger nu som Inbjuden i arkivet. Du får ett mejl när kunden har svarat.';dialog.appendChild(note);
+    var actions=document.createElement('div');actions.className='wf-risk-actions';var ok=document.createElement('button');ok.type='button';ok.className='wf-risk-primary';ok.setAttribute('data-sent-close','');ok.textContent='Till startsidan';actions.appendChild(ok);dialog.appendChild(actions);
+    document.body.appendChild(dialog);
+    return new Promise(function(resolve){
+      var done=false;function finish(){if(done)return;done=true;if(dialog.open)dialog.close();dialog.remove();resolve();}
+      dialog.addEventListener('cancel',function(e){e.preventDefault();finish();});
+      dialog.addEventListener('click',function(e){var r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)finish();});
+      ok.onclick=finish;
+      dialog.showModal();ok.focus();
+    });
+  }
+  // The start page is what the app shows right after sign-in: a reload without any #workflow= hash.
+  function goToStart(){history.replaceState(null,'',location.pathname+location.search);location.reload();}
+  window.wfGoToStart=goToStart;
   window.wfInvite=invite;
   window.wfDecisionRefresh=function(){if(window._editing&&window._editing.workflow)return refresh(window._editing.id);return Promise.resolve();};
   // Start straight from a saved archive record, including links sent after customer submission.
@@ -363,4 +387,5 @@ window.WorkflowHardNoDialog = (function () {
     }catch(e){alert(e.message);}}
   window.addEventListener('hashchange',openHash);window.addEventListener('hashchange',copyView);openHash();copyView();
   var style=document.createElement('style');style.textContent='.wf-progress{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.wf-progress span{padding:8px 12px;border:1px solid var(--border);border-radius:20px;font-size:12px}.wf-progress [aria-current]{background:var(--navy);color:#fff}.wf-item{border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:14px}.wf-item-title{display:flex;gap:15px;justify-content:space-between}.wf-item-title span{font-size:12px;font-weight:600}.wf-line{margin-top:10px;white-space:pre-wrap;line-height:1.5}.wf-diff{padding:12px;margin:12px 0;background:#f7f8fa;white-space:pre-wrap;line-height:1.6}.wf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.wf-actions button{padding:8px 13px;cursor:pointer}.wf-actions button:disabled{opacity:.45;cursor:not-allowed}.wf-note{font-size:12px;line-height:1.5;color:var(--muted);margin-top:12px}.wf-warning{color:#964514;font-size:13px;margin:12px 0}.wf-check{margin:14px 0;padding:12px;background:#f8f0df}';document.head.appendChild(style);
+  var sentStyle=document.createElement('style');sentStyle.textContent='.wf-sent-dialog{width:min(520px,calc(100vw - 32px));text-align:center}.wf-sent-dialog .wf-sent-mark{font-size:40px;line-height:1;margin-bottom:10px}.wf-sent-dialog .wf-risk-actions{justify-content:center}';document.head.appendChild(sentStyle);
 })();
