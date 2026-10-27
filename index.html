@@ -139,6 +139,16 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .invite-card{background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:18px;box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
 .invite-card h3{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:4px}
 .invite-card p{font-size:14px;color:var(--muted);margin-bottom:14px;line-height:1.5}
+/* Where an agreement is in the flow — shown wherever an agreement is opened. */
+.stage-strip{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.stage-strip span{font-size:11px;padding:4px 10px;border:1px solid var(--line);border-radius:20px;color:var(--muted);background:#fff;white-space:nowrap}
+.stage-strip span.done{color:#1f6b45;border-color:#b7dfc3;background:#e6f2ea}
+.stage-strip span.now{background:var(--pine);color:#f6f3ec;border-color:var(--pine);font-weight:600}
+.stage-next{font-size:12px;color:var(--ink);line-height:1.5;margin-bottom:12px}
+.review-banner .stage-next{color:#d5e6dc}
+.review-banner .stage-strip span{background:rgba(255,255,255,.1);color:#e8f0eb;border-color:rgba(255,255,255,.3)}
+.review-banner .stage-strip span.done{background:rgba(183,223,195,.25);color:#d9f0e2;border-color:rgba(183,223,195,.5)}
+.review-banner .stage-strip span.now{background:#f6f3ec;color:var(--pine);border-color:#f6f3ec}
 .modal-overlay{position:fixed;inset:0;background:rgba(22,54,45,.45);z-index:1000;display:none;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
 .modal{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:28px 32px;max-width:560px;width:90%;position:relative}
@@ -271,6 +281,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 
 <!-- Archive record management (status, signed-file uploads, reminders) — shown while editing a saved record -->
 <div id="archivePanel" style="display:none;background:#fff;border:1px solid var(--border);border-radius:6px;padding:16px 18px;margin-bottom:16px">
+  <div id="apStage"></div>
   <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
     <div style="min-width:180px">
       <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Status</label>
@@ -278,7 +289,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
       <span id="apStatusMsg" style="font-size:11px;margin-left:8px"></span>
     </div>
     <div style="min-width:200px;max-width:260px">
-      <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">CEO signature</label>
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Signature</label>
       <div id="apSig" style="font-size:12px"></div>
     </div>
     <div style="flex:1;min-width:260px">
@@ -25276,7 +25287,9 @@ function showReviewMode(d) {
   var banner = document.createElement("div");
   banner.className = "review-banner";
   banner.innerHTML = "<h2>✅ " + esc(d.name||"Supplier") + " has submitted their details</h2>"
-    + "<p>Review and <strong>adjust</strong> any of the submitted details below, consult the Contract Lawyer for wording changes, then generate the final agreement.</p>"
+    + "<div style='margin:10px 0 4px'>" + stageStripHtml({status:"submitted", counterparty_name:d.name}) + "</div>"
+    + "<p>Review and <strong>adjust</strong> any of the submitted details below, consult the Contract Lawyer for wording changes, then save or approve &amp; send for signature.</p>"
+    + (d._aid ? "<a onclick='reviewBackToArchive()' style='font-size:12px;cursor:pointer;text-decoration:underline;margin-right:14px'>&larr; Back to the archive</a>" : "")
     + "<button onclick='toggleAiDrawer()' style='margin-top:6px;background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer'>&#9878;&#65039; Discuss with the Contract Lawyer</button>";
 
   // Editable fields — bound to _reviewData so any adjustment flows straight into generation.
@@ -25393,6 +25406,11 @@ function showReviewMode(d) {
   initReviewSigning();
 }
 
+// The review page replaces the app's chrome, so going back is a reload onto the archive tab.
+function reviewBackToArchive(){
+  if (window._reviewDirty && !confirm("You have unsaved changes. Leave without saving?")) return;
+  history.replaceState(null, "", window.location.pathname+"#archive"); window.location.reload();
+}
 /* Bind edits in the review screen back to the submitted data object. */
 function rvSet(key, val){ if (window._reviewData) { window._reviewData[key] = val; reviewMarkDirty(); } }
 function reviewMarkDirty(){
@@ -25833,6 +25851,7 @@ function onLoggedIn(user){
        : window._isAdmin ? " <span style='font-size:10px;background:var(--navy);color:#fff;border-radius:8px;padding:1px 7px'>admin</span>" : "")
     + " &middot; <a style='color:var(--blue2);cursor:pointer;text-decoration:underline' onclick='doLogout()'>Log out</a>";
   document.getElementById("archiveTabBtn").style.display="inline-block";
+  if (window.location.hash==="#archive"){ switchTab(3); history.replaceState(null, "", window.location.pathname+window.location.search); }
   if (window._aiEnabled) showAiButton();
   if (window._aiEnabled) renderContractReviewCards();
   // Distributor Agreements are admin-only (sellers work with resellers): hide the tab and start sellers
@@ -26070,6 +26089,31 @@ function statusOptions(sel){
 }
 function fmtWhen(s){ return s ? String(s).slice(0,16).replace("T"," ") : ""; }
 function firstName(n){ return String(n||"CEO").split(" ")[0]; }
+
+// Where an agreement stands in the flow, and what happens next. Shown as a strip wherever an
+// agreement is opened: the archive panel, the review page and the signing view.
+var STAGE_STEPS = ["Created","Customer details","Review & adjust","Counterparty signs","Vendora signs","Fully signed"];
+function stageInfo(a){
+  var s=a.status||"draft", cp=a.counterparty_name||(a.data&&a.data.name)||"the counterparty", ceo=window._signerName||"the CEO";
+  var idx={draft:0,imported:0,invited:1,submitted:2,generated:2,sent:3,pending_signature:4,vendora_signed:4,signed:5}[s]; if (idx==null) idx=0;
+  var next;
+  if (s==="draft") next="Fill in the terms, then send the fill-in link to the customer — or approve & send for signature if you already have their details.";
+  else if (s==="imported") next="Imported from a link. Check the details, then approve & send for signature.";
+  else if (s==="invited") next="Waiting for "+cp+" to fill in their details and respond to the terms. Send a reminder if it takes long.";
+  else if (s==="submitted") next=cp+" has submitted their details. Decide on each proposal (Accept / Keep mine), save, then approve & send for signature.";
+  else if (s==="generated") next="Ready to go: approve & send for signature when you are happy with the terms.";
+  else if (s==="sent") next="Waiting for "+(a.counterparty_email||cp)+" to sign"+(a.signature_sent_at?" (sent "+fmtWhen(a.signature_sent_at)+")":"")+". They have the signing link; send a reminder if it takes long.";
+  else if (s==="pending_signature") next=(a.counterparty_signed_by||cp)+" signed for "+cp+(a.counterparty_signed_at?" on "+fmtWhen(a.counterparty_signed_at):"")+". Waiting for "+ceo+" to countersign.";
+  else if (s==="vendora_signed") next="Signed by Vendora"+(a.vendora_signed_at?" on "+fmtWhen(a.vendora_signed_at):"")+" (earlier flow). Upload the countersigned copy when it arrives.";
+  else next="Fully signed"+(a.vendora_signed_at?" on "+fmtWhen(a.vendora_signed_at):"")+". Download the signed agreement; "+cp+" has a download link too.";
+  return {index:idx, steps:STAGE_STEPS, next:next, status:s};
+}
+function stageStripHtml(a){
+  var st=stageInfo(a);
+  return "<div class='stage-strip' aria-label='Where this agreement is in the flow'>"
+    + st.steps.map(function(label,i){ var cls=i<st.index?"done":i===st.index?"now":""; return "<span class='"+cls+"'>"+(i<st.index?"&#10004; ":"")+(i+1)+" · "+esc(label)+"</span>"; }).join("")
+    + "</div><div class='stage-next'>"+esc(st.next)+"</div>";
+}
 
 // The signature line under a row's status: where it stands in the signing flow + the next action.
 function sigLine(a){
@@ -26450,7 +26494,7 @@ function renderSigningView(a){
   if (a.signature_requested_by_name) meta.push("Approved &amp; sent by "+esc(a.signature_requested_by_name)+(a.signature_requested_at?" · "+esc(fmtWhen(a.signature_requested_at)):""));
   if (!meta.length && a.created_by_name) meta.push("Created by "+esc(a.created_by_name));
   var kicker = sent?"Awaiting counterparty signature":pending?"Counterparty signed — signature requested":done?"Fully signed":((STATUS_META[a.status]||{}).label||"Agreement");
-  var html = sigHeader(kicker, a, meta.join(" &nbsp;·&nbsp; "));
+  var html = sigHeader(kicker, a, meta.join(" &nbsp;·&nbsp; "))+"<div style='margin-top:14px'>"+stageStripHtml(a)+"</div>";
   function note(bg,border,fg,inner){ return "<div style='background:"+bg+";border:1px solid "+border+";color:"+fg+";border-radius:6px;padding:10px 14px;margin-top:14px;font-size:13px'>"+inner+"</div>"; }
   if (sent) html += note("#e7f1f6","#b9d3e0","#245c73","&#9993;&#65039; Signing link sent to <strong>"+esc(a.counterparty_email||"")+"</strong>"+(a.signature_sent_at?" on "+esc(fmtWhen(a.signature_sent_at)):"")+". "+esc(cp)+" downloads, signs and uploads the signed copy; it then comes to "+esc(signer)+" for countersignature. The content is locked meanwhile.");
   var cs = d._counterpartySignature && d._counterpartySignature.at ? d._counterpartySignature : null;
@@ -26581,12 +26625,23 @@ function importFromLink(){
 }
 
 window._editing = null;
+// Opening an agreement from the archive lands on its next open step: the review page for
+// submitted details, the signing view while a signature is pending or done, otherwise the form.
 function archiveEdit(id){
   fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
     var a=j.agreement, data=a.data||{}, type=a.type;
+    // Submitted details outside the review workflow: the same review page as the email link,
+    // linked to this record so Save and Approve & send update it.
+    if (a.status==="submitted" && !a.workflow_state){
+      var d=Object.assign({}, data, {_type:type, _aid:a.id, _review:true});
+      history.replaceState(null, "", window.location.pathname+"#review="+(encodeData(d)||""));
+      window.location.reload();
+      return;
+    }
     switchTab(type==="da"?0:(type==="rb"?2:1));
     hydrateForm(type, data);
-    if(window._editing && window._editing.id!==a.id && window.wfReset) wfReset();
+    // A previously opened agreement's workflow panel must never linger under another record.
+    if(window.wfReset && (!a.workflow_state || (window._editing && window._editing.id!==a.id))) wfReset();
     window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at, revision:Number(a.workflow_revision||0), workflow:!!a.workflow_state };
     window._lawyerState = data;
     window._clauseOverrides = data.clauseOverrides || {};
@@ -26596,6 +26651,8 @@ function archiveEdit(id){
     apShowPanel(a);
     if(a.workflow_state && window.wfRefresh) wfRefresh(a.id);
     window.scrollTo(0,0);
+    // Out for signature, awaiting the CEO, or signed: the signing view is the next step.
+    if (["sent","pending_signature","signed","vendora_signed"].indexOf(a.status)>=0) renderSigningView(a);
   }).catch(function(e){ alert("Could not open that agreement."); });
 }
 function exitEdit(){
@@ -26612,6 +26669,7 @@ function exitEdit(){
 function apShowPanel(a){
   var p=document.getElementById("archivePanel"); if(!p) return;
   p.style.display="block";
+  var stage=document.getElementById("apStage"); if(stage) stage.innerHTML=stageStripHtml(a);
   var sel=document.getElementById("apStatus");
   sel.innerHTML=statusOptions(a.status||"draft"); sel.value=a.status||"draft";
   sel.setAttribute("data-prev", a.status||"draft");

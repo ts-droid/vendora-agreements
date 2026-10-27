@@ -166,7 +166,7 @@ window.WorkflowHardNoDialog = (function () {
   var order={deal_breaker:0,red_flag:1,negotiate:2,missing:3,acceptable:4};
   async function api(url,method,body){var r=await fetch(url,{method:method||'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});var j=await r.json();if(!r.ok){var err=new Error(j.error||'Begäran misslyckades.');err.explanation=j.explanation||'';throw err;}return j;}
   function uid(){return crypto.randomUUID();}
-  function reset(){WorkflowHardNoDialog.dismiss();document.body.classList.remove('wf-case-open');current=null;window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
+  function reset(){WorkflowHardNoDialog.dismiss();document.body.classList.remove('wf-case-open');current=null;document.querySelectorAll('[id^="wf_panel_"]').forEach(function(panel){panel.remove();});window._aiMessages=[];window._aiReview=null;window._openProposals=[];window._reviewData=null;window._lastBuild=null;window._lawyerState=null;window._clauseOverrides={};}
   window.wfReset=reset;
   function adopt(row){
     if(current&&current.id!==row.id)reset();current=row;
