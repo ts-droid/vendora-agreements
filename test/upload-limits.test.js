@@ -13,7 +13,7 @@ function multipart(bytes){
 }
 test('the browser and all server paths share one 50 MB limit',()=>{
   assert.equal(limits.MAX_FILE_BYTES,50*1024*1024);assert.equal(extract.MAX_BYTES,limits.MAX_FILE_BYTES);
-  const html=fs.readFileSync(require.resolve('../index.html'),'utf8');assert.equal((html.match(/file.size>UploadLimits.MAX_FILE_BYTES/g)||[]).length,4);
+  const html=fs.readFileSync(require.resolve('../index.html'),'utf8');assert.equal((html.match(/file.size>UploadLimits.MAX_FILE_BYTES/g)||[]).length,5);
   assert.doesNotMatch(html,/max (5|8|15) MB|up to (5|8|15) MB/i);
   assert.match(fs.readFileSync(require.resolve('../server'),'utf8'),/limit: uploadLimits.MAX_REVIEW_BODY_BYTES/);
 });

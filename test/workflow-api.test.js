@@ -53,7 +53,7 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     assert.equal(await page.$eval('.genbar',e=>getComputedStyle(e).position),'static','sticky generation toolbar must not intercept decision clicks');
     const initial=await good('/api/workflow/'+id);assert.equal(initial.state.items.length,5);const baseline=C.digest(initial.state.baseline);
     assert.ok(initial.signatureProblems.includes('Minst ett försäljningsställe krävs.'),'customer must still supply an approved point of sale');
-    const blocked=await api('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
+    const blocked=await api('/api/agreements/'+id+'/send-for-signature','POST',{email:'jane@counterparty.example.test',expectedRevision:initial.revision,summary:{terms:[],deviations:[]}});assert.equal(blocked.status,400);
     // Company details are a separate preview, not silently copied from the uploaded paper.
     const imported=initial.state.companyImports[0];assert.equal(imported.fields.length,5);
     assert.equal(initial.data.name,seeds.ra.name);assert.equal(initial.data.reg,seeds.ra.reg);
@@ -140,21 +140,36 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     r=await good('/api/workflow/'+id);assert.equal(r.data.pay,'50');assert.deepEqual(r.data.clauseOverrides,amendments);assert.equal(r.signatureProblems.length,0,JSON.stringify(r.signatureProblems));
     // A concurrent save cannot overwrite an acknowledged decision.
     assert.equal((await api('/api/agreements/'+id,'PUT',{data:r.data,expectedRevision:r.revision-1})).status,409);
-    // No configured real mail is used. Test both failure reporting and a real server signature lock.
-    failMail=true;const sent=await good('/api/agreements/'+id+'/request-signature','POST',{expectedRevision:r.revision,summary:{terms:[],deviations:[]}});assert.equal(sent.notified,false);failMail=false;
-    r=await good('/api/workflow/'+id);assert.equal(r.status,'pending_signature');assert.ok(r.summary.deviations.length>0);
+    // Signing order: approve & send → the counterparty signs and uploads through the public link → the CEO countersigns.
+    // No configured real mail is used. Test both failure reporting and a real server lock.
+    assert.equal((await api('/api/agreements/'+id+'/send-for-signature','POST',{expectedRevision:r.revision,email:'not-an-email'})).status,400);
+    failMail=true;const sentOut=await good('/api/agreements/'+id+'/send-for-signature','POST',{expectedRevision:r.revision,email:'jane@counterparty.example.test',summary:{terms:[],deviations:[]}});assert.equal(sentOut.sent,false);assert.match(sentOut.link,/#agreementcopy=\d+\.[A-Za-z0-9_-]+$/);failMail=false;
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'sent');assert.equal(r.state.signatureShare.delivery,'failed');assert.ok(r.summary.deviations.length>0);assert.equal(r.signatureEmail,'jane@counterparty.example.test');
+    assert.equal((await api('/api/agreements/'+id,'PUT',{data:{...r.data,pay:'1'},expectedRevision:r.revision})).status,409);
+    const shareToken=r.state.signatureShare.token;
+    // The public link: the frozen copy, no internals, no Vendora signature yet.
+    const published=await good('/api/public-agreements/'+id+'?token='+shareToken,'GET',undefined,null);assert.equal(published.status,'sent');assert.equal(published.data.pay,'50');assert.equal(published.data.redlines,undefined);assert.equal(published.data.workflow_state,undefined);assert.equal(published.data._vendoraSignature,undefined);assert.equal(published.counterparty,null);
+    assert.equal((await api('/api/public-agreements/'+id+'?token=wrong','GET',undefined,null)).status,404);
+    assert.equal((await api('/api/agreements/'+id+'/sign','POST',{},signer)).status,409,'the CEO cannot sign before the counterparty has');
+    // Counterparty upload: wrong token, no signer name, wrong file type, then the real one — accepted once.
+    const signedUpload=(headers,body,q='?token='+shareToken)=>fetch(base+'/api/public-agreements/'+id+'/signed-copy'+q,{method:'POST',headers:{'Content-Type':'application/pdf',...headers},body});
+    assert.equal((await signedUpload({'X-Filename':'signed.pdf','X-Signer-Name':'Jane'},Buffer.from('%PDF-1.4'),'?token=wrong')).status,404);
+    assert.equal((await signedUpload({'X-Filename':'signed.pdf'},Buffer.from('%PDF-1.4'))).status,400);
+    assert.equal((await signedUpload({'X-Filename':'signed.exe','X-Signer-Name':'Jane'},Buffer.from('MZ'))).status,400);
+    const uploaded=await signedUpload({'X-Filename':encodeURIComponent('Signed by Counterparty.pdf'),'X-Signer-Name':encodeURIComponent('Jane Signer')},Buffer.from('%PDF-1.4 synthetic signed copy'));assert.equal(uploaded.status,200);assert.equal((await uploaded.json()).status,'pending_signature');
+    assert.equal((await signedUpload({'X-Filename':'again.pdf','X-Signer-Name':'Jane'},Buffer.from('%PDF-1.4'))).status,409);
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'pending_signature');assert.equal(r.state.counterpartySignature.by,'Jane Signer');assert.equal(r.state.counterpartySignature.verification,'uploaded');assert.ok(r.counterparty.fileId);
+    const ceoMail=mail.find(m=>m.to==='signer@vendora.se'&&/Ready for your signature/.test(m.subject));assert.ok(ceoMail,'the CEO is asked to countersign');assert.match(ceoMail.html,/#sign=\d+/);
+    // Still locked; only the signer may countersign.
     assert.equal((await api('/api/agreements/'+id,'PUT',{data:{...r.data,pay:'1'},expectedRevision:r.revision})).status,409);
     assert.equal((await api('/api/agreements/'+id+'/sign','POST',{},owner)).status,403);
     await good('/api/agreements/'+id+'/sign','POST',{},signer);
-    r=await good('/api/workflow/'+id);assert.equal(r.status,'vendora_signed');assert.equal(r.data._vendoraSignature.digest,r.state.approval.digest);
-    const requestMail=await good('/api/workflow/'+id+'/send-signature','POST',{expectedRevision:r.revision});assert.equal(requestMail.sent,true);assert.equal(requestMail.status,'sent');
-    const published=await good('/api/public-agreements/'+id+'?token='+requestMail.state.signatureShare.token,'GET',undefined,null);assert.equal(published.data.pay,'50');assert.equal(published.data.redlines,undefined);assert.equal(published.data.workflow_state,undefined);
-    assert.equal((await api('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:999999,expectedRevision:requestMail.revision})).status,400);
+    r=await good('/api/workflow/'+id);assert.equal(r.status,'signed');assert.equal(r.data._vendoraSignature.digest,r.state.approval.digest);
+    const doneMail=mail.find(m=>m.to==='jane@counterparty.example.test'&&/Fully signed/.test(m.subject));assert.ok(doneMail,'the counterparty gets the download link');assert.ok(doneMail.html.includes('#agreementcopy='+id+'.'+shareToken));
+    const finalPublic=await good('/api/public-agreements/'+id+'?token='+shareToken,'GET',undefined,null);assert.equal(finalPublic.status,'signed');assert.equal(finalPublic.data._vendoraSignature.digest,r.state.approval.digest);assert.equal(finalPublic.counterparty.by,'Jane Signer');assert.equal(finalPublic.counterparty.filename,'Signed by Counterparty.pdf');assert.equal(finalPublic.vendora.title,'CEO');
     await page.evaluate(id=>wfRefresh(id),id);
-    const finalExport=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const result=await buildRA(d);const buf=await result.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});assert.match(finalExport.xml,/50/);assert.match(finalExport.xml,/complete payment/);assert.match(finalExport.xml,/customer.example.test/);fs.writeFileSync('test-results/final-agreement-synthetic.docx',Buffer.from(finalExport.bytes));
-    const doc=Buffer.from(finalExport.bytes);const uploadResponse=await fetch(base+'/api/agreements/'+id+'/files',{method:'POST',headers:{Cookie:cookie(owner),'Content-Type':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','X-Filename':'synthetic-countersigned-copy.docx'},body:doc});const fileResult=await uploadResponse.json();assert.equal(uploadResponse.status,200,JSON.stringify(fileResult));assert.equal(fileResult.status,'sent');
-    r=await good('/api/workflow/'+id);await good('/api/workflow/'+id+'/confirm-countersign','POST',{confirmed:true,fileId:fileResult.file.id,expectedRevision:r.revision});
-    r=await good('/api/workflow/'+id);assert.equal(r.status,'signed');assert.equal(r.state.counterpartySignature.verification,'manual');
+    const finalExport=await page.evaluate(async()=>{const d=cloneData(window._editing.base);const result=await buildRA(d);const buf=await result.blob.arrayBuffer();return {xml:await zipEntryText(buf,'word/document.xml'),bytes:Array.from(new Uint8Array(buf))};});assert.match(finalExport.xml,/50/);assert.match(finalExport.xml,/complete payment/);assert.match(finalExport.xml,/Completed Customer AB/);
+    fs.writeFileSync('test-results/our-agreement-fully-signed.docx',Buffer.from(finalExport.bytes));
     const history=await good('/api/workflow/'+id+'/versions');assert.ok(history.versions.length>=16);
     assert.equal(pageErrors.length,0,pageErrors.join('\n'));assert.ok(mail.length>=3);
     // Both other templates use the same real review/import API and actual Word export.

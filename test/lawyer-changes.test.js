@@ -680,7 +680,7 @@ test('the update route validates stored data after the signature lock', function
   const writeAt = submit.indexOf('UPDATE agreements SET');
   assert.ok(tokenAt > 0 && tokenAt < lockAt && lockAt < validAt && validAt < writeAt);
   assert.match(submit, /vendora_signed_at IS NULL/);
-  assert.match(submit, /status NOT IN \('pending_signature','vendora_signed','signed'\)/);
+  assert.match(submit, /status NOT IN \('sent','pending_signature','vendora_signed','signed'\)/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.match(html, /function agreementErrorText/);
   assert.match(html, /agreementErrorText\(res\.j/);

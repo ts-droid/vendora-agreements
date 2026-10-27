@@ -88,6 +88,13 @@ async function init() {
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_by TEXT;`);
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_email TEXT;`);
   await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS vendora_signed_at TIMESTAMPTZ;`);
+  // Counterparty-first signing: the seller approves and sends a signing link, the counterparty uploads
+  // their signed copy, the CEO countersigns last.
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_token TEXT;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_sent_at TIMESTAMPTZ;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS signature_summary JSONB;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS counterparty_signed_at TIMESTAMPTZ;`);
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS counterparty_signed_by TEXT;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;`);
   // Set once the user has seen (or skipped) the first-login walkthrough.
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;`);
@@ -124,6 +131,8 @@ async function init() {
     );
   `);
   await query(`CREATE INDEX IF NOT EXISTS agreement_files_agreement_idx ON agreement_files (agreement_id);`);
+  // The counterparty's signed copy, once it has arrived (references the files table, so it is created here).
+  await query(`ALTER TABLE agreements ADD COLUMN IF NOT EXISTS counterparty_signed_file INTEGER REFERENCES agreement_files(id) ON DELETE SET NULL;`);
   // Contract reviews: a counterparty's own contract compared with Vendora's agreement. Kept with
   // the document and benchmark so a review can be reopened, continued in the lawyer chat and
   // exported later.
