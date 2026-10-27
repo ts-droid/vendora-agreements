@@ -6,6 +6,8 @@ const hardNo=require('./workflow-hard-no');
 const counterpartyDetails=require('./counterparty-details');
 function install(app, deps) {
   const {db,auth,isAdmin,isSigner,sendMailSafe,mailShell,coverHtml,SIGNER_EMAIL,SIGNER_NAME,publishStatusChange}=deps;
+  // Signing order: the seller approves and sends; the counterparty signs and uploads through their
+  // link (server.js owns the public routes); the CEO countersigns last.
   const who=req=>req.user.name||req.user.email;
   const when=()=>new Date().toISOString();
   const owned=(req,row)=>row&&(isAdmin(req.user)||Number(row.created_by)===Number(req.user.uid));
@@ -37,7 +39,8 @@ function install(app, deps) {
       if(item.changes.length){try{core.checkTargets(row.data,item);item.preview=core.apply(row.data,item.changes).displayed;item.issue='';}catch(e){item.issue=e.message;item.preview=[];}}
       if(hardNo.isHardNo(item))item.hardNoReview=hardNo.context(row,item);
     }
-    return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at};}
+    return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at,signedBy:row.vendora_signed_by,
+      counterparty:row.counterparty_signed_at?{signedAt:row.counterparty_signed_at,by:row.counterparty_signed_by,fileId:row.counterparty_signed_file}:null,signatureEmail:row.counterparty_email||null,signatureSentAt:row.signature_sent_at||null};}
   async function load(req){const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);if(!owned(req,r.rows[0]))throw core.error('Avtalet finns inte.',404);return r.rows[0];}
   app.get('/api/workflow/:id',auth.requireAuth,wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(view(await load(req)));}));
   app.post('/api/workflow/:id/start',auth.requireAuth,wrap(async(req,res)=>{
@@ -130,38 +133,6 @@ function install(app, deps) {
   app.get('/api/workflow/:id/versions',auth.requireAuth,wrap(async(req,res)=>{
     await load(req);const r=await db.query('SELECT revision,actor,action,created_at FROM agreement_versions WHERE agreement_id=$1 ORDER BY revision DESC LIMIT 100',[req.params.id]);res.json({versions:r.rows});
   }));
-  // Share the locked Vendora-approved version. This sends a signing request; it does NOT
-  // pretend the counterparty has signed or provide a qualified electronic signature.
-  app.post('/api/workflow/:id/send-signature',auth.requireAuth,wrap(async(req,res)=>{
-    let row=await lock(req,async(row,c)=>{
-      if(!row.vendora_signed_at||!['vendora_signed','sent'].includes(row.status))throw core.error('Vendora måste godkänna och skriva under först.');
-      core.checkVersion(row,req.body.expectedRevision);const s=core.copy(core.state(row));
-      if(s.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Den godkända standardversionen kräver arkiverad dokumentexport.');
-      if(!row.counterparty_email)throw core.error('Motpartens e-postadress saknas.',400);
-      if(!s.signatureShare)s.signatureShare={token:crypto.randomBytes(24).toString('base64url'),data:core.publicData(row.data),stamp:row.data._vendoraSignature,version:s.approval.version};
-      return write(c,row,row.data,s,who(req),'prepare-counterparty-signature');
-    });
-    const link='https://'+req.get('host')+'/#agreementcopy='+row.id+'.'+row.workflow_state.signatureShare.token;
-    const sent=await sendMailSafe({to:row.counterparty_email,replyTo:req.user.email,subject:'Avtal för underskrift — Vendora Nordic AB',html:mailShell('Avtal för underskrift','<p>Vendora har godkänt avtalet. Ladda ned, kontrollera och underteckna avtalet. Returnera den undertecknade kopian till er kontaktperson på Vendora.</p>'+deps.btnHtml(link,'Öppna avtalet'))});
-    row=await lock(req,async(current,c)=>{if(!current.vendora_signed_at)throw core.error('Underskriften återkallades under utskicket.');const s=core.copy(core.state(current));s.signatureShare.delivery=sent?'sent':'failed';return write(c,current,current.data,s,who(req),'counterparty-signature-mail',sent?'sent':current.status);});
-    res.json({...view(row),sent});
-  }));
-  app.get('/api/public-agreements/:id',wrap(async(req,res)=>{
-    const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);const row=r.rows[0],s=row&&row.workflow_state,share=s&&s.signatureShare;
-    if(!row||!row.vendora_signed_at||!share||!deps.tokenEq(req.query.token,share.token))throw core.error('Länken är ogiltig eller återkallad.',404);
-    if(s.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Begär den arkiverade avtalskopian från Vendora.');
-    res.set('Cache-Control','no-store');res.json({type:row.type,data:{...share.data,_vendoraSignature:share.stamp},version:share.version});
-  }));
-  app.post('/api/workflow/:id/confirm-countersign',auth.requireAuth,wrap(async(req,res)=>{
-    const row=await lock(req,async(row,c)=>{
-      if(!row.vendora_signed_at||!['vendora_signed','sent'].includes(row.status))throw core.error('Vendora har inte skrivit under denna version.');
-      core.checkVersion(row,req.body.expectedRevision);if(req.body.confirmed!==true)throw core.error('Bekräfta att båda parter undertecknat rätt version.',400);
-      const file=await c.query('SELECT id FROM agreement_files WHERE id=$1 AND agreement_id=$2',[req.body.fileId,row.id]);if(!file.rows.length)throw core.error('Ladda upp den kontrollerade, underskrivna kopian först.',400);
-      const s=core.copy(core.state(row));s.counterpartySignature={fileId:Number(req.body.fileId),checkedBy:who(req),at:when(),version:s.approval.version,verification:'manual'};
-      return write(c,row,row.data,s,who(req),'confirm-countersign','signed');
-    });publishStatusChange(row.id,'sent','signed');res.json(view(row));
-  }));
-
   const methods={view,wrap,lock,write,load};
   methods.manualSave=async(req,res)=>{
     const row=await lock(req,async(row,c)=>{
@@ -200,40 +171,67 @@ function install(app, deps) {
     if(details)next.companyImports=(next.companyImports||[]).concat(details);
     return write(c,row,row.data,next,who(req),failed?'review-failed':'review-complete');
   });
-  methods.requestSignature=async(req,res)=>{
+  // Seller/admin: approve the negotiated agreement for Vendora, freeze it and send the counterparty
+  // their signing link. Readiness is the same check the cover sheet shows.
+  methods.sendForSignature=async(req,res)=>{
     if(!SIGNER_EMAIL)throw core.error('Ingen intern undertecknare är konfigurerad.',503);
-    const row=await lock(req,async(row,c)=>{
+    const to=String(req.body.email||'').trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to))throw core.error('Ange motpartens e-postadress.',400);
+    let row=await lock(req,async(row,c)=>{
       core.editable(row);if(!['draft','submitted','generated','imported'].includes(row.status))throw core.error('Invänta kundens komplettering.');
       core.checkVersion(row,req.body.expectedRevision);
       const problems=core.signatureProblems(row);if(problems.length)throw core.error(problems.join(' '),400);
-      const s=core.copy(core.state(row));s.signatureShare=null;s.counterpartySignature=null;s.approval={version:Number(row.workflow_revision)+1,digest:core.digest(row.data),requestedBy:who(req),at:when()};
-      await c.query(`UPDATE agreements SET signature_requested_by=$1,signature_requested_by_name=$2,signature_requested_at=now(),signature_note=NULL WHERE id=$3`,[req.user.email,who(req),row.id]);
-      return write(c,row,row.data,s,who(req),'request-signature','pending_signature');
+      const s=core.copy(core.state(row));const version=Number(row.workflow_revision)+1;
+      s.counterpartySignature=null;
+      s.signatureShare={token:crypto.randomBytes(24).toString('base64url'),data:core.publicData(row.data),version,email:to,at:when(),delivery:'pending'};
+      s.approval={version,digest:core.digest(row.data),requestedBy:who(req),at:when()};
+      await c.query(`UPDATE agreements SET counterparty_email=$1,signature_token=$2,signature_sent_at=now(),
+        signature_requested_by=$3,signature_requested_by_name=$4,signature_requested_at=now(),signature_note=NULL,
+        counterparty_signed_at=NULL,counterparty_signed_by=NULL,counterparty_signed_file=NULL,
+        vendora_signed_by=NULL,vendora_signed_email=NULL,vendora_signed_at=NULL WHERE id=$5`,[to,s.signatureShare.token,req.user.email,who(req),row.id]);
+      return write(c,row,row.data,s,who(req),'send-for-signature','sent');
     });
-    const notified=await sendMailSafe({to:SIGNER_EMAIL,replyTo:req.user.email,subject:'Avtal för godkännande och underskrift — '+row.data.name,
-      html:mailShell('Godkännande och underskrift',coverHtml(core.summary(row))+deps.btnHtml('https://'+req.get('host')+'/#sign='+row.id,'Granska och godkänn'))});
-    publishStatusChange(row.id,null,'pending_signature');res.json({ok:true,status:'pending_signature',notified,revision:row.workflow_revision});
+    const link='https://'+req.get('host')+'/#agreementcopy='+row.id+'.'+row.workflow_state.signatureShare.token;
+    const sent=await sendMailSafe(deps.signatureRequestMail({...row,counterparty_email:to},who(req),req.user.email,to,link));
+    row=await lock(req,async(current,c)=>{const s=core.copy(core.state(current));if(!s.signatureShare||s.signatureShare.version!==row.workflow_state.signatureShare.version)return current;
+      s.signatureShare.delivery=sent?'sent':'failed';return write(c,current,current.data,s,who(req),sent?'signature-mail-sent':'signature-mail-failed');});
+    publishStatusChange(row.id,null,'sent');
+    res.json({...view(row),ok:true,sent,link,email:to,mailReason:sent?null:deps.mailReason()});
   };
+  // The counterparty's signed copy is in (through their link, or uploaded by the seller): record it
+  // against the frozen version and hand the agreement to the CEO. Called by server.js; no mail here.
+  methods.counterpartySigned=async(id,file,signerName)=>db.withTransaction(async c=>{
+    const r=await c.query('SELECT * FROM agreements WHERE id=$1 FOR UPDATE',[id]);const row=r.rows[0];
+    const s=core.copy(core.state(row));
+    if(row.status!=='sent'||!s.signatureShare)throw core.error('This agreement is not awaiting the counterparty\'s signature.');
+    s.counterpartySignature={fileId:Number(file.id),by:signerName,at:when(),version:s.signatureShare.version,verification:'uploaded'};
+    await c.query('UPDATE agreements SET counterparty_signed_at=now(),counterparty_signed_by=$1,counterparty_signed_file=$2 WHERE id=$3',[signerName,file.id,row.id]);
+    await write(c,row,row.data,s,signerName+' (counterparty)','counterparty-signed','pending_signature');
+    return (await c.query('SELECT status,status_updated_at,workflow_revision FROM agreements WHERE id=$1',[row.id])).rows[0];
+  });
   methods.withdraw=async(req,res)=>{
     const row=await lock(req,async(row,c)=>{
       const s=core.copy(core.state(row)),data=core.copy(row.data);
-      if(!['pending_signature','vendora_signed','sent','signed','invited'].includes(row.status))throw core.error('Avtalet är inte låst.');
+      if(!['sent','pending_signature','vendora_signed','signed','invited'].includes(row.status))throw core.error('Avtalet är inte låst.');
       if(req.body.expectedRevision!==undefined)core.checkVersion(row,req.body.expectedRevision);
       delete data._vendoraSignature;s.approval=null;s.signatureShare=null;s.counterpartySignature=null;
-      await c.query('UPDATE agreements SET vendora_signed_by=NULL,vendora_signed_email=NULL,vendora_signed_at=NULL,update_token=NULL,signature_note=$1 WHERE id=$2',[String(req.body.note||'Återkallat till granskning').slice(0,2000),row.id]);
+      await c.query(`UPDATE agreements SET vendora_signed_by=NULL,vendora_signed_email=NULL,vendora_signed_at=NULL,update_token=NULL,signature_note=$1,
+        signature_token=NULL,counterparty_signed_at=NULL,counterparty_signed_by=NULL,counterparty_signed_file=NULL WHERE id=$2`,[String(req.body.note||'Återkallat till granskning').slice(0,2000),row.id]);
       return write(c,row,data,s,who(req),'withdraw-to-review','submitted');
     });publishStatusChange(row.id,null,'submitted');res.json({ok:true,status:'submitted',revision:row.workflow_revision});
   };
+  // CEO: countersign the exact version the counterparty signed. Completes the agreement.
   methods.sign=async(req,res)=>{
     if(!isSigner(req.user))throw core.error('Endast utsedd undertecknare får skriva under.',403);
     const row=await lock(req,async(row,c)=>{
       const s=core.copy(core.state(row));if(row.status!=='pending_signature'||!s.approval||s.approval.digest!==core.digest(row.data))throw core.error('Godkännandet avser inte denna version.');
+      if(!s.counterpartySignature)throw core.error('Motpartens signerade kopia saknas.');
       const data=core.copy(row.data);const stamp={name:SIGNER_NAME,title:'CEO',email:req.user.email,at:when(),version:s.approval.version,digest:s.approval.digest};data._vendoraSignature=stamp;
       await c.query('UPDATE agreements SET vendora_signed_by=$1,vendora_signed_email=$2,vendora_signed_at=now() WHERE id=$3',[SIGNER_NAME,req.user.email,row.id]);
-      s.approval.signedBy=req.user.email;s.approval.signedAt=stamp.at;return write(c,row,data,s,who(req),'vendora-sign','vendora_signed');
+      s.approval.signedBy=req.user.email;s.approval.signedAt=stamp.at;return write(c,row,data,s,who(req),'vendora-sign','signed');
     });
-    const notified=row.signature_requested_by?await sendMailSafe({to:row.signature_requested_by,subject:'Avtal godkänt av Vendora — '+row.data.name,html:mailShell('Avtalet är godkänt',deps.btnHtml('https://'+req.get('host')+'/#workflow='+row.id,'Öppna avtalet'))}):false;
-    publishStatusChange(row.id,'pending_signature','vendora_signed');res.json({ok:true,notified,status:'vendora_signed',vendora_signed_at:row.workflow_state.approval.signedAt,data:row.data,revision:row.workflow_revision});
+    const fresh=(await db.query('SELECT * FROM agreements WHERE id=$1',[row.id])).rows[0];
+    const notified=await deps.notifyFullySigned(req,fresh);
+    publishStatusChange(row.id,'pending_signature','signed');res.json({ok:true,notified,status:'signed',vendora_signed_at:row.workflow_state.approval.signedAt,data:row.data,revision:row.workflow_revision});
   };
   return methods;
 }

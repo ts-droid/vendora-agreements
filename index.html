@@ -646,7 +646,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
   <h2 style="display:flex;align-items:center;gap:12px">Saved agreements
     <button onclick="loadArchive()" style="font-size:12px;font-weight:500;padding:5px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">&#8635; Refresh</button>
   </h2>
-  <div class="desc">Every agreement you generate is saved here. Negotiate with the counterparty, then send it to the CEO for signature.</div>
+  <div class="desc">Every agreement you generate is saved here. Negotiate with the counterparty, approve &amp; send it for signature; the CEO countersigns last.</div>
   <div id="archiveScope" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
   <div style="display:flex;gap:8px;align-items:center;margin:12px 0 2px">
     <input id="importLink" placeholder="Import a past agreement: paste a review or invite link&hellip;" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px" onkeydown="if(event.key==='Enter')importFromLink()">
@@ -25283,7 +25283,7 @@ function showReviewMode(d) {
   function fld(label, key){
     var v = d[key]!=null ? d[key] : "";
     return "<div><label style='"+lblStyle+"'>"+esc(label)+"</label>"
-      + "<input value=\""+esc(v)+"\" oninput='rvSet(\""+key+"\",this.value)' style='"+idStyle+"'></div>";
+      + "<input id='rv_"+key+"' value=\""+esc(v)+"\" oninput='rvSet(\""+key+"\",this.value)' style='"+idStyle+"'></div>";
   }
   var fieldDefs = isDA ? [
     ["Supplier name","name"],["Reg. no.","reg"],["Country","country"],["Address","addr"],["VAT / Tax ID","vat"],
@@ -25333,9 +25333,10 @@ function showReviewMode(d) {
 
   var genBar = document.createElement("div");
   genBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
-  genBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>Edit above &amp; consult the lawyer, then generate — or send it to the CEO for signature</span>"
+  genBar.innerHTML = "<span id='reviewBarText' style='font-size:12px;color:var(--muted)'>Accept or keep each proposal and edit above, then save — or approve &amp; send for signature</span>"
     + "<div style='display:flex;gap:10px;align-items:center'>"
-    + "<button id='reviewCeoBtn' onclick='reviewSendToCeo()' style='display:none;align-items:center;padding:12px 18px;border:1px solid var(--navy);background:#fff;color:var(--navy);border-radius:4px;font-size:14px;font-weight:600;cursor:pointer'></button>"
+    + "<button id='reviewSaveBtn' onclick='reviewSave()' style='display:none;align-items:center;padding:12px 18px;border:1px solid var(--border);background:#fff;color:var(--navy);border-radius:4px;font-size:14px;font-weight:600;cursor:pointer'>&#128190; Save</button>"
+    + "<button id='reviewCeoBtn' onclick='reviewSendForSignature()' style='display:none;align-items:center;padding:12px 18px;border:1px solid var(--navy);background:#fff;color:var(--navy);border-radius:4px;font-size:14px;font-weight:600;cursor:pointer'></button>"
     + "<button class='btn-gen' onclick='generateFromReview()' id='reviewGenBtn'><span>Generate &amp; Download (.docx)</span><div class='spin' id='review_spin'></div></button>"
     + "</div>";
 
@@ -25391,16 +25392,21 @@ function showReviewMode(d) {
 }
 
 /* Bind edits in the review screen back to the submitted data object. */
-function rvSet(key, val){ if (window._reviewData) window._reviewData[key] = val; }
+function rvSet(key, val){ if (window._reviewData) { window._reviewData[key] = val; reviewMarkDirty(); } }
+function reviewMarkDirty(){
+  window._reviewDirty = true;
+  var txt = document.getElementById("reviewBarText");
+  if (txt){ txt.style.color = "#9a4b00"; txt.textContent = "Unsaved changes — click Save to store them in the archive, or approve & send for signature."; }
+}
 function rvSetContact(role, field, val){
-  var d = window._reviewData; if (!d) return;
+  var d = window._reviewData; if (!d) return; reviewMarkDirty();
   d.contacts = d.contacts || {};
   d.contacts[role] = d.contacts[role] || { p:{}, b:{} };
   d.contacts[role].p = d.contacts[role].p || {};
   d.contacts[role].p[field] = val;
 }
 function rvSetRC(role, field, val){
-  var d = window._reviewData; if (!d) return;
+  var d = window._reviewData; if (!d) return; reviewMarkDirty();
   d.rcontacts = d.rcontacts || {};
   d.rcontacts[role] = d.rcontacts[role] || {};
   d.rcontacts[role][field] = val;
@@ -25413,6 +25419,17 @@ function resolveProposal(key, decision) {
   if (acc && keep) {
     acc.classList.toggle("active-accept", decision === "accept");
     keep.classList.toggle("active-keep", decision === "keep");
+  }
+  // The decision takes effect in the agreement details at once, so what you see is what gets
+  // saved, generated and sent for signature.
+  var d = window._reviewData;
+  if (d) {
+    applyAcceptedProposals(d);
+    Object.keys(d._proposals || {}).forEach(function(k){
+      var inp = document.getElementById("rv_"+k);
+      if (inp && Object.prototype.hasOwnProperty.call(d, k) && (d[k] == null || typeof d[k] !== "object")) inp.value = d[k] == null ? "" : d[k];
+    });
+    reviewMarkDirty();
   }
 }
 
@@ -25475,34 +25492,49 @@ function generateFromReview() {
   });
 }
 
-// Review screen → CEO: save the negotiated data to the archive record (creating one if this review
-// wasn't linked to an invite), then open the cover-sheet dialog to send it for signature.
-function reviewSendToCeo() {
-  var d = window._reviewData; if (!d) return;
-  var btn = document.getElementById("reviewCeoBtn"); btn.disabled = true;
+// Review screen → archive: store the adjusted data (accept/keep decisions applied) on the linked
+// record, creating one if this review wasn't linked to an invite.
+function reviewPersist(statusAfter){
+  var d = window._reviewData; if (!d) return Promise.reject(new Error("Nothing to save."));
   applyAcceptedProposals(d);
-  var body = { counterpartyName:(d.name||null), counterpartyEmail:reviewCounterpartyEmail(d), data:d, status:"generated" };
-  var save = d._aid
+  var body = { counterpartyName:(d.name||null), counterpartyEmail:reviewCounterpartyEmail(d), data:d };
+  if (statusAfter) body.status = statusAfter;
+  return d._aid
     ? fetch("/api/agreements/"+d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
         .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); return d._aid; }); })
-    : fetch("/api/agreements", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({type:d._type}, body))})
+    : fetch("/api/agreements", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({type:d._type, status:statusAfter||"generated"}, body))})
         .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); d._aid = x.id; return x.id; }); });
-  save.then(function(id){ requestCeoSignature(id); })
+}
+function reviewSave(){
+  var btn = document.getElementById("reviewSaveBtn"), txt = document.getElementById("reviewBarText");
+  if (btn) btn.disabled = true;
+  reviewPersist(null).then(function(){
+    window._reviewDirty = false;
+    if (txt){ txt.style.color = "#1e7e34"; txt.textContent = "Saved to the archive ✓ " + fmtWhen(new Date().toISOString()); }
+  }).catch(function(e){ if (txt){ txt.style.color = "#c0392b"; txt.textContent = e.message; } })
+    .finally(function(){ if (btn) btn.disabled = false; });
+}
+// Review screen → signature: save, then open the approve & send dialog (the counterparty signs
+// first, the CEO countersigns last).
+function reviewSendForSignature() {
+  var btn = document.getElementById("reviewCeoBtn"); if (btn) btn.disabled = true;
+  reviewPersist("generated").then(function(id){ window._reviewDirty = false; sendForSignature(id); })
     .catch(function(e){ alert(e.message); })
-    .finally(function(){ btn.disabled = false; });
+    .finally(function(){ if (btn) btn.disabled = false; });
 }
 // The review screen is reached from a link, outside the normal login flow — find out whether the
 // viewer is signed in and a signer is configured before offering "Send to CEO".
 function initReviewSigning() {
   fetch("/api/config").then(function(r){ return r.json(); }).then(function(cfg){
     window._signerOn = !!(cfg && cfg.signer); window._signerName = (cfg && cfg.signerName) || "the CEO";
-    if (!cfg || !cfg.archive || !cfg.signer) return;
+    if (!cfg || !cfg.archive) return;
     return fetch("/api/auth/me").then(function(r){
       if (!r.ok) return;
       return r.json().then(function(j){
         window._authUser = j.user; window._isAdmin = !!j.user.isAdmin; window._isSigner = !!j.user.isSigner;
+        var s = document.getElementById("reviewSaveBtn"); if (s) s.style.display = "inline-flex";
         var b = document.getElementById("reviewCeoBtn");
-        if (b){ b.style.display = "inline-flex"; b.textContent = "✍️ Send to " + firstName(window._signerName) + " for signature"; }
+        if (b && window._signerOn){ b.style.display = "inline-flex"; b.textContent = "✍️ Approve & send for signature"; }
       });
     });
   }).catch(function(){});
@@ -25843,29 +25875,30 @@ var GUIDE = {
     { short:"Negotiate", t:"Adjust and negotiate",
       b:"Open the link in the email. Everything the customer filled in is editable, and you choose <em>Accept</em> or <em>Keep mine</em> on each of their proposals. Click <em>Discuss with the Contract Lawyer</em> for advice or reworded clauses.",
       tip:"Does the reseller insist on their own contract? Use <em>Review the reseller's own contract</em> on the agreement tab: upload their PDF or Word file and the Contract Lawyer compares it with our agreement — deal-breakers, red flags, what to negotiate and ready-to-paste wording — then continues the discussion in the chat." },
-    { short:"To {CEO}", t:"Send to {CEO} for signature",
-      b:"Click <em>Send to {CEO} for signature</em>. You see the cover sheet with the key terms and every deviation before you send. {CEO} approves in the app or returns it with a comment — you get an email either way." },
-    { short:"To customer", t:"Send to the customer",
-      b:"Once {CEO} has signed, download the agreement (<em>.docx</em>) from the archive — the signature is stamped in — and send it to the customer to sign. Set the status to <em>Sent to counterparty</em>." },
-    { short:"Upload", t:"Upload the countersigned copy",
-      b:"Use <em>Upload</em> on the agreement's row in the archive. The status changes to <em>Fully signed</em> automatically." }
+    { short:"Decide & save", t:"Decide on their proposals and save",
+      b:"<em>Accept</em> or <em>Keep mine</em> on each proposal updates the agreement details right away. Click <em>Save</em> to store the agreed version in the archive, or <em>Generate &amp; Download</em> for a Word copy." },
+    { short:"Send to sign", t:"Approve &amp; send for signature",
+      b:"Click <em>Approve &amp; send for signature</em>. You see the cover sheet with the key terms and every deviation, confirm the recipient, and the customer gets a link to download the final agreement, sign it and upload the signed copy. The agreement is locked meanwhile." },
+    { short:"{CEO} signs", t:"{CEO} countersigns",
+      b:"When the signed copy arrives it is stored in the archive and {CEO} gets an email. {CEO} countersigns in the app (or returns it with a comment), the status becomes <em>Fully signed</em>, and the customer is emailed a link to download the signed agreement." },
+    { short:"By email?", t:"Signed copy came by email?",
+      b:"Upload it on the agreement's row in the archive or in the signing view. That registers the signature the same way and sends it on to {CEO}." }
   ],
   statuses: [
     ["Draft", "Saved, not generated", "You"],
     ["Invited", "Fill-in link sent", "Customer — send a reminder if needed"],
     ["Submitted", "Customer has filled in their details", "You review and adjust"],
-    ["Generated", "Ready to send to {CEO}", "You"],
-    ["Awaiting CEO signature", "With {CEO}; the agreement is locked", "{CEO}"],
-    ["Signed by Vendora", "{CEO} has signed", "You send it to the customer"],
-    ["Sent to counterparty", "With the customer for signature", "Customer"],
-    ["Fully signed", "Countersigned copy uploaded", "Done"],
+    ["Generated", "Ready to approve &amp; send for signature", "You"],
+    ["Awaiting counterparty signature", "The customer has the signing link; the agreement is locked", "Customer — send a reminder if needed"],
+    ["Counterparty signed · awaiting CEO", "Signed copy received; with {CEO} for countersignature", "{CEO}"],
+    ["Fully signed", "{CEO} has countersigned; the customer got a download link", "Done"],
     ["Imported", "Imported from an earlier link", "You"]
   ],
   tips: [
-    ["Locked during signature", "From the moment you send it to {CEO} — and after they sign — the agreement can't be changed. Need a change? Click <em>Withdraw</em>, edit, and send again. A signature already given is voided and {CEO} is told."],
-    ["Reminders", "<em>Remind</em> on the row emails the customer: to fill in their details if they haven't, otherwise to sign. The date of the last reminder shows under the button."],
-    ["Returned by {CEO}", "The agreement goes back to <em>Generated</em> and the comment shows in red under the status. Make the change and send it again."],
-    ["The cover sheet", "Generated automatically for {CEO}: the key terms plus every deviation from standard — accepted customer requests, changed terms, MDF, credit limit and reworded clauses. It's internal and never sent to the customer."],
+    ["Locked during signature", "From the moment you approve &amp; send it — until both parties have signed — the agreement can't be changed. Need a change? Click <em>Withdraw</em>, edit, and send again. The customer's link stops working and any signature already given is void."],
+    ["Reminders", "<em>Remind</em> on the row emails the customer: to fill in their details if they haven't, otherwise to sign and upload their signed copy. The date of the last reminder shows under the button."],
+    ["Returned by {CEO}", "If {CEO} returns it instead of countersigning, the agreement goes back to <em>Generated</em> and the comment shows in red under the status. The customer's signed copy stays in the archive but that version is void: make the change and send it for signature again."],
+    ["The cover sheet", "Generated automatically for you and {CEO}: the key terms plus every deviation from standard — accepted customer requests, changed terms, MDF, credit limit and reworded clauses. It's internal and never sent to the customer."],
     ["Contract Lawyer", "Help with wording and negotiation based on Vendora's playbook — not legal advice. Learned something in a negotiation? Save it as a note in the playbook."],
     ["Reviewing their contract", "Upload the counterparty's own contract (PDF, Word or text) on the agreement tab and give the review a name. The lawyer compares it clause by clause with our agreement as set up in the form, classifies every point — deal-breaker, red flag, missing, to negotiate, acceptable — and gives wording to send back. Every review is saved under <em>Archive &rarr; Contract reviews</em>, where you can reopen it, continue in the chat with the document in context, or download the memo again."],
     ["The signature", "An internal approval in the app: {CEO}'s name, email and time are logged. It isn't a BankID signature — the customer signs as usual."]
@@ -26004,20 +26037,21 @@ function saveToArchive(type, data){
 }
 
 // Lifecycle order: negotiate → CEO signs for Vendora → counterparty countersigns.
+// Signing order: approve & send → the counterparty signs and uploads → the CEO countersigns last.
 var STATUS_META = {
-  draft:             {label:"Draft",                  bg:"#ece7df", fg:"#5f6360"},
-  invited:           {label:"Invited",                bg:"#e7f1f6", fg:"#245c73"},
-  submitted:         {label:"Submitted",              bg:"#f8f0df", fg:"#8a5a12"},
-  generated:         {label:"Generated",              bg:"#e5f3ea", fg:"#1f6b45"},
-  pending_signature: {label:"Awaiting CEO signature", bg:"#f8f0df", fg:"#8a5a12"},
-  vendora_signed:    {label:"Signed by Vendora",      bg:"#e7f0ea", fg:"#16362d"},
-  sent:              {label:"Sent to counterparty",   bg:"#e7f1f6", fg:"#245c73"},
-  signed:            {label:"Fully signed",           bg:"#1f6b45", fg:"#fff"},
-  imported:          {label:"Imported",               bg:"#ece7df", fg:"#5f6360"}
+  draft:             {label:"Draft",                            bg:"#ece7df", fg:"#5f6360"},
+  invited:           {label:"Invited",                          bg:"#e7f1f6", fg:"#245c73"},
+  submitted:         {label:"Submitted",                        bg:"#f8f0df", fg:"#8a5a12"},
+  generated:         {label:"Generated",                        bg:"#e5f3ea", fg:"#1f6b45"},
+  sent:              {label:"Awaiting counterparty signature",  bg:"#e7f1f6", fg:"#245c73"},
+  pending_signature: {label:"Counterparty signed · awaiting CEO", bg:"#f8f0df", fg:"#8a5a12"},
+  vendora_signed:    {label:"Signed by Vendora (earlier flow)", bg:"#e7f0ea", fg:"#16362d"},
+  signed:            {label:"Fully signed",                     bg:"#1f6b45", fg:"#fff"},
+  imported:          {label:"Imported",                         bg:"#ece7df", fg:"#5f6360"}
 };
 // Mirrors the server's rules (server.js enforces them; the UI just doesn't offer invalid moves).
-var WORKFLOW_ONLY = {pending_signature:1, vendora_signed:1};
-var LOCKED_STATUS = {pending_signature:1, vendora_signed:1};
+var WORKFLOW_ONLY = {sent:1, pending_signature:1, vendora_signed:1};
+var LOCKED_STATUS = {sent:1, pending_signature:1, vendora_signed:1};
 // Frozen = awaiting the CEO, or carrying Vendora's signature (even after it moves on to the counterparty).
 function isLockedRow(a){ return !!(a && (LOCKED_STATUS[a.status] || a.vendora_signed_at)); }
 function editingLocked(){ var e=window._editing; return !!(e && isLockedRow({status:e.status, vendora_signed_at:e.signedAt})); }
@@ -26028,23 +26062,29 @@ function statusBadge(s){
 }
 function statusOptions(sel){
   return Object.keys(STATUS_META).map(function(k){
-    var off = k!==sel && (WORKFLOW_ONLY[k] || sel==="pending_signature" || (sel==="vendora_signed" && k!=="sent" && k!=="signed"));
+    var off = k!==sel && (WORKFLOW_ONLY[k] || sel==="sent" || sel==="pending_signature" || (sel==="vendora_signed" && k!=="signed"));
     return "<option value='"+k+"'"+(k===sel?" selected":"")+(off?" disabled":"")+">"+esc(STATUS_META[k].label)+"</option>";
   }).join("");
 }
 function fmtWhen(s){ return s ? String(s).slice(0,16).replace("T"," ") : ""; }
 function firstName(n){ return String(n||"CEO").split(" ")[0]; }
 
-// The signature line under a row's status: where it stands in the CEO workflow + the next action.
+// The signature line under a row's status: where it stands in the signing flow + the next action.
 function sigLine(a){
   var sm = "font-size:10px;margin-top:3px;white-space:normal;max-width:230px";
-  if (a.status==="pending_signature"){
-    return "<div style='"+sm+";color:#9a4b00'>&#9203; Awaiting "+esc(window._signerName||"CEO")+(a.signature_requested_at?" · since "+esc(fmtWhen(a.signature_requested_at)):"")+"</div>"
-      + "<a onclick='openSigningView("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer;font-weight:600'>"+(window._isSigner?"&#9997;&#65039; Review &amp; sign":"View request")+"</a>";
+  var view = "<a onclick='openSigningView("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer;font-weight:600'>";
+  if (a.status==="sent"){
+    return "<div style='"+sm+";color:#245c73'>&#9993;&#65039; Signing link sent"+(a.signature_sent_at?" · "+esc(fmtWhen(a.signature_sent_at)):"")+(a.counterparty_email?" · "+esc(a.counterparty_email):"")+"</div>"
+      + view+"View / upload signed copy</a>";
   }
-  if (a.vendora_signed_at && (a.status==="vendora_signed"||a.status==="sent"||a.status==="signed")){
-    return "<div style='"+sm+";color:#155724'>&#10004; Signed by "+esc(a.vendora_signed_by||"Vendora")+" · "+esc(fmtWhen(a.vendora_signed_at))+"</div>"
-      + "<a onclick='openSigningView("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer'>View signature</a>";
+  if (a.status==="pending_signature"){
+    return "<div style='"+sm+";color:#155724'>&#10004; Signed by "+esc(a.counterparty_signed_by||a.counterparty_name||"counterparty")+(a.counterparty_signed_at?" · "+esc(fmtWhen(a.counterparty_signed_at)):"")+"</div>"
+      + "<div style='"+sm+";color:#9a4b00'>&#9203; Awaiting "+esc(window._signerName||"CEO")+"</div>"
+      + view+(window._isSigner?"&#9997;&#65039; Review &amp; countersign":"View")+"</a>";
+  }
+  if (a.vendora_signed_at && (a.status==="vendora_signed"||a.status==="signed")){
+    return "<div style='"+sm+";color:#155724'>&#10004; Signed by "+esc(a.vendora_signed_by||"Vendora")+" · "+esc(fmtWhen(a.vendora_signed_at))+(a.counterparty_signed_at?" · and by "+esc(a.counterparty_signed_by||a.counterparty_name||"counterparty"):"")+"</div>"
+      + "<a onclick='openSigningView("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer'>View signatures</a>";
   }
   var out = "";
   if (a.signature_note){
@@ -26052,7 +26092,7 @@ function sigLine(a){
     out += "<div title='"+esc(n)+"' style='"+sm+";color:#c0392b'>&#8617; Returned: "+esc(n.length>90?n.slice(0,90)+"…":n)+"</div>";
   }
   if (window._signerOn && SIGNABLE_FROM[a.status]){
-    out += "<a onclick='requestCeoSignature("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer;font-weight:600'>&#9997;&#65039; Send to "+esc(firstName(window._signerName))+" for signature</a>";
+    out += "<a onclick='sendForSignature("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer;font-weight:600'>&#9997;&#65039; Approve &amp; send for signature</a>";
   }
   return out;
 }
@@ -26080,7 +26120,7 @@ function loadArchive(){
         + "<td><button type='button' class='archive-name' onclick='archiveEdit("+id+")'>"+esc(a.counterparty_name||"—")+"</button>"+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
         // Status — inline editable
         + "<td style='white-space:nowrap'>"
-          + "<select onchange='ovSetStatus("+id+",this)' data-prev='"+esc(a.status||"")+"'"+(a.status==="pending_signature"?" disabled title='Awaiting the CEO — withdraw the request to change it'":"")+" style='font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:4px'>"+statusOptions(a.status)+"</select>"
+          + "<select onchange='ovSetStatus("+id+",this)' data-prev='"+esc(a.status||"")+"'"+(LOCKED_STATUS[a.status]?" disabled title='Locked while out for signature — withdraw to change it'":"")+" style='font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:4px'>"+statusOptions(a.status)+"</select>"
           + "<div id='ovStat_"+id+"' style='"+mut+";margin-top:3px'>"+(a.status_updated_at?"updated "+esc(fmtWhen(a.status_updated_at)):"")+"</div>"
           + sigLine(a)
         + "</td>"
@@ -26346,31 +26386,40 @@ function sigPost(path, body){
 }
 
 // Seller: preview the cover sheet, then send to the CEO.
-function requestCeoSignature(id){
+// Seller → counterparty: show the cover sheet, confirm the recipient, then approve & send the signing
+// link. The counterparty signs and uploads their copy; the CEO countersigns last.
+function sendForSignature(id){
   fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
-    var a=j.agreement, summary=a.workflow_summary||buildCoverSummary(a.type, a.data||{});
+    var a=j.agreement, d=a.data||{}, summary=a.workflow_summary||buildCoverSummary(a.type, d);
+    var cp=a.counterparty_name||d.name||"the counterparty", signer=window._signerName||"the CEO";
+    var email=d.sig_email||(d.contacts&&d.contacts.mgmt&&d.contacts.mgmt.p&&d.contacts.mgmt.p.e)||(d.rcontacts&&d.rcontacts.notices&&d.rcontacts.notices.e)||a.counterparty_email||"";
     var box=(sigOverlay(), document.getElementById("sigBox"));
-    box.innerHTML = sigHeader("Send for signature", a, esc(window._signerName)+" gets this cover sheet by email and signs in the app. The agreement is locked while it waits.")
+    box.innerHTML = sigHeader("Approve & send for signature", a, "You approve this version for Vendora. "+esc(cp)+" gets a link to download, sign and upload the signed copy; "+esc(signer)+" countersigns last, and "+esc(cp)+" is emailed the signed agreement. The agreement is locked from now until it is fully signed.")
       + "<div style='margin-top:16px'>"+coverSheetHtml(summary)+"</div>"
+      + "<label for='sigEmail' style='display:block;font-size:12px;color:var(--muted);margin-top:14px'>Send the signing link to</label>"
+      + "<input id='sigEmail' type='email' value=\""+esc(email)+"\" placeholder='name@company.com' style='width:100%;max-width:380px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box'>"
       + "<div id='sigMsg' style='font-size:12px;margin-top:12px'></div>"
       + "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:16px'>"
       + "<button onclick='closeSig()' style='padding:9px 16px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>Cancel</button>"
-      + "<button id='sigSendBtn' style='padding:9px 18px;border:none;background:var(--navy);color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>&#9997;&#65039; Send to "+esc(firstName(window._signerName))+"</button></div>";
+      + "<button id='sigSendBtn' style='padding:9px 18px;border:none;background:var(--navy);color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>&#9997;&#65039; Approve &amp; send</button></div>";
     document.getElementById("sigOverlay").style.display="block";
     document.getElementById("sigSendBtn").onclick=function(){
-      var b=this, m=document.getElementById("sigMsg"); b.disabled=true; m.style.color="var(--muted)"; m.textContent="Sending…";
-      sigPost("/api/agreements/"+id+"/request-signature", {summary:summary,expectedRevision:a.workflow_revision}).then(function(x){
-        m.style.color="#1e7e34";
-        m.textContent = x.notified ? "Sent ✓ — "+window._signerName+" has been notified by email."
-          : "Status set to “Awaiting CEO signature”, but the email could not be sent — let "+firstName(window._signerName)+" know. "+(x.mailReason||"");
+      var b=this, m=document.getElementById("sigMsg"), to=(document.getElementById("sigEmail").value||"").trim();
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)){ m.style.color="#c0392b"; m.textContent="Enter the counterparty's email address."; return; }
+      b.disabled=true; m.style.color="var(--muted)"; m.textContent="Sending…";
+      sigPost("/api/agreements/"+id+"/send-for-signature", {summary:summary,email:to,expectedRevision:a.workflow_revision}).then(function(x){
+        m.style.color=x.sent?"#1e7e34":"#9a4b00";
+        m.innerHTML = x.sent ? "Sent ✓ — "+esc(to)+" has the signing link. The agreement is locked until both parties have signed."
+          : "Approved and locked, but the email could not be sent"+(x.mailReason?" ("+esc(x.mailReason)+")":"")+". Send the link yourself:<br><a href='"+esc(x.link||"")+"' style='word-break:break-all'>"+esc(x.link||"")+"</a>";
         b.style.display="none";
         refreshEditing(id); loadArchive();
       }).catch(function(e){ b.disabled=false; m.style.color="#c0392b"; m.textContent=e.message; });
     };
   }).catch(function(){ alert("Could not open that agreement."); });
 }
+// Name kept for callers from before the signing order changed.
+function requestCeoSignature(id){ return sendForSignature(id); }
 
-// CEO (and anyone with access, read-only): the signing view with the cover sheet.
 function openSigningView(id){
   fetch("/api/agreements/"+id).then(function(r){ if(!r.ok) throw 0; return r.json(); })
     .then(function(j){ renderSigningView(j.agreement); })
@@ -26380,35 +26429,48 @@ function renderSigningView(a){
   var d=a.data||{}; d._type=d._type||a.type;
   window._signRow=a; window._signData=d; window._aiMessages=window._aiMessages||[];
   var summary=a.workflow_summary||buildCoverSummary(a.type, d);
-  var pending = a.status==="pending_signature";
-  var signedV = !!a.vendora_signed_at && (a.status==="vendora_signed"||a.status==="sent"||a.status==="signed");
+  var sent = a.status==="sent", pending = a.status==="pending_signature", done = a.status==="signed" || a.status==="vendora_signed";
+  var signedV = !!a.vendora_signed_at;
+  var cp = a.counterparty_name || d.name || "the counterparty", signer = window._signerName || "the CEO";
   var mine = !!(window._authUser && a.created_by===window._authUser.id);
-  var canWithdraw = (mine||window._isAdmin) && isLockedRow(a);
+  var canWithdraw = (mine||window._isAdmin) && isLockedRow(a) && a.status!=="signed";
   var meta=[];
-  if (a.signature_requested_by_name) meta.push("Requested by "+esc(a.signature_requested_by_name)+(a.signature_requested_at?" · "+esc(fmtWhen(a.signature_requested_at)):""));
+  if (a.signature_requested_by_name) meta.push("Approved &amp; sent by "+esc(a.signature_requested_by_name)+(a.signature_requested_at?" · "+esc(fmtWhen(a.signature_requested_at)):""));
   if (!meta.length && a.created_by_name) meta.push("Created by "+esc(a.created_by_name));
-  var html = sigHeader(pending?"Signature requested":signedV?"Signed by Vendora":((STATUS_META[a.status]||{}).label||"Agreement"), a, meta.join(" &nbsp;·&nbsp; "));
-  if (signedV) html += "<div style='background:#d4edda;border:1px solid #b7dfc3;color:#155724;border-radius:6px;padding:10px 14px;margin-top:14px;font-size:13px'>&#10004; <strong>Signed electronically for Vendora</strong> by "+esc(a.vendora_signed_by||"")+" on "+esc(fmtWhen(a.vendora_signed_at))+" — stamped in the agreement's signature block.</div>";
+  var kicker = sent?"Awaiting counterparty signature":pending?"Counterparty signed — signature requested":done?"Fully signed":((STATUS_META[a.status]||{}).label||"Agreement");
+  var html = sigHeader(kicker, a, meta.join(" &nbsp;·&nbsp; "));
+  function note(bg,border,fg,inner){ return "<div style='background:"+bg+";border:1px solid "+border+";color:"+fg+";border-radius:6px;padding:10px 14px;margin-top:14px;font-size:13px'>"+inner+"</div>"; }
+  if (sent) html += note("#e7f1f6","#b9d3e0","#245c73","&#9993;&#65039; Signing link sent to <strong>"+esc(a.counterparty_email||"")+"</strong>"+(a.signature_sent_at?" on "+esc(fmtWhen(a.signature_sent_at)):"")+". "+esc(cp)+" downloads, signs and uploads the signed copy; it then comes to "+esc(signer)+" for countersignature. The content is locked meanwhile.");
+  if (a.counterparty_signed_at) html += note("#d4edda","#b7dfc3","#155724","&#10004; <strong>Signed for "+esc(cp)+"</strong> by "+esc(a.counterparty_signed_by||"")+" on "+esc(fmtWhen(a.counterparty_signed_at))+(a.counterparty_signed_file?" — <a href='/api/agreements/"+a.id+"/files/"+a.counterparty_signed_file+"' style='color:#155724;font-weight:600'>download the signed copy</a>":""));
+  if (signedV) html += note("#d4edda","#b7dfc3","#155724","&#10004; <strong>Signed electronically for Vendora</strong> by "+esc(a.vendora_signed_by||"")+" on "+esc(fmtWhen(a.vendora_signed_at))+" — stamped in the agreement's signature block."+(done?" "+esc(cp)+" has been emailed a link to download the signed agreement.":""));
   html += "<h3 style='margin:18px 0 8px;font-size:14px'>Cover sheet</h3>"+coverSheetHtml(summary);
   html += "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:16px'>"
     + "<button onclick='sigDownload()' style='padding:8px 14px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>&#8681; "+(signedV?"Signed agreement":"Agreement")+" (.docx)</button>"
     + "<button onclick='sigDownloadCover()' style='padding:8px 14px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>&#8681; Cover sheet (.docx)</button>"
     + (window._aiEnabled ? "<button onclick='toggleAiDrawer()' style='padding:8px 14px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>&#9878;&#65039; Ask the Contract Lawyer</button>" : "")
     + "</div><div id='sigMsg' style='font-size:12px;margin-top:12px'></div>";
+  if (sent){
+    html += "<div style='border-top:1px solid var(--border);margin-top:18px;padding-top:16px'>"
+      + "<div style='font-size:13px;margin-bottom:8px'>Received the signed copy by email instead? Upload it here and the agreement moves on to "+esc(signer)+".</div>"
+      + "<div style='display:flex;flex-wrap:wrap;gap:8px;align-items:center'><input type='file' id='sigUploadFile' accept='.pdf,.docx,.doc,.png,.jpg,.jpeg' style='font-size:12px'>"
+      + "<input id='sigUploadName' placeholder='Signed by (name)' value=\""+esc(d.sig_name||"")+"\" style='padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:12px'>"
+      + "<button onclick='sigUploadSigned()' style='padding:8px 12px;border:1px solid var(--navy);background:#fff;color:var(--navy);border-radius:6px;cursor:pointer;font-size:12px'>Upload signed copy</button></div>"
+      + "<div style='margin-top:10px'><a onclick='sigRemind()' style='font-size:12px;color:var(--blue2);cursor:pointer'>Send a reminder to "+esc(a.counterparty_email||"the counterparty")+"</a></div></div>";
+  }
   if (pending && window._isSigner){
     html += "<div style='border-top:1px solid var(--border);margin-top:18px;padding-top:16px'>"
       + "<div style='display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap'>"
       + "<button onclick='sigShowReturn()' style='padding:10px 16px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer'>&#8617; Return to seller</button>"
-      + "<button id='sigApproveBtn' onclick='sigApprove()' style='padding:10px 20px;border:none;background:#1e7e34;color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>&#10004; Approve &amp; sign for Vendora</button></div>"
+      + "<button id='sigApproveBtn' onclick='sigApprove()' style='padding:10px 20px;border:none;background:#1e7e34;color:#fff;border-radius:6px;font-weight:600;cursor:pointer'>&#10004; Countersign for Vendora</button></div>"
       + "<div id='sigReturnBox' style='display:none;margin-top:12px'><textarea id='sigReturnNote' placeholder='What should the seller change?' style='width:100%;min-height:80px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box'></textarea>"
       + "<div style='text-align:right;margin-top:8px'><button onclick='sigReturn()' style='padding:8px 16px;border:none;background:#c0392b;color:#fff;border-radius:6px;cursor:pointer'>Send back with comment</button></div></div>"
-      + "<div style='font-size:11px;color:var(--muted);margin-top:10px'>Approving records your electronic approval (name, e-mail and time) and stamps it into Vendora's signature block. It is an internal approval, not a qualified e-signature.</div></div>";
+      + "<div style='font-size:11px;color:var(--muted);margin-top:10px'>Countersigning records your electronic approval (name, e-mail and time), stamps it into Vendora's signature block and completes the agreement. "+esc(cp)+" is then emailed a link to download the signed agreement. It is an internal approval, not a qualified e-signature.</div></div>";
   } else if (pending){
-    html += "<div style='font-size:12px;color:#9a4b00;margin-top:14px'>&#9203; Waiting for "+esc(window._signerName)+" to review and sign.</div>";
+    html += "<div style='font-size:12px;color:#9a4b00;margin-top:14px'>&#9203; Waiting for "+esc(signer)+" to countersign.</div>";
   }
   if (canWithdraw){
     html += "<div style='text-align:right;margin-top:14px'><a onclick='sigWithdraw()' style='font-size:12px;color:#c0392b;cursor:pointer'>"
-      + (a.vendora_signed_at?"Withdraw &amp; void Vendora's signature":"Withdraw signature request")+"</a></div>";
+      + (a.vendora_signed_at?"Withdraw &amp; void Vendora's signature":sent?"Withdraw the signing request":"Withdraw (voids the counterparty's signed version)")+"</a></div>";
   }
   var o=sigOverlay();   // create the overlay first — on a fresh page (the email link) it doesn't exist yet
   document.getElementById("sigBox").innerHTML=html;
@@ -26422,14 +26484,14 @@ function sigShowReturn(){
 }
 function sigApprove(){
   var a=window._signRow; if (!a) return;
-  if (!confirm("Approve and sign the "+(TYPE_NAME[a.type]||"agreement")+" with "+(a.counterparty_name||(a.data&&a.data.name)||"the counterparty")+" for Vendora?")) return;
+  if (!confirm("Countersign the "+(TYPE_NAME[a.type]||"agreement")+" with "+(a.counterparty_name||(a.data&&a.data.name)||"the counterparty")+" for Vendora? This completes the agreement.")) return;
   var b=document.getElementById("sigApproveBtn"), m=document.getElementById("sigMsg");
   b.disabled=true; m.style.color="var(--muted)"; m.textContent="Signing…";
   sigPost("/api/agreements/"+a.id+"/sign")
     .then(function(){ return fetch("/api/agreements/"+a.id).then(function(r){ return r.json(); }); })
     .then(function(j){
       renderSigningView(j.agreement);
-      var mm=document.getElementById("sigMsg"); mm.style.color="#1e7e34"; mm.textContent="Signed ✓ — the seller has been notified.";
+      var mm=document.getElementById("sigMsg"); mm.style.color="#1e7e34"; mm.textContent="Signed ✓ — "+(a.counterparty_name||"the counterparty")+" has been emailed a link to the signed agreement, and the seller has been notified.";
       refreshEditing(a.id); loadArchive();
     })
     .catch(function(e){ b.disabled=false; m.style.color="#c0392b"; m.textContent=e.message; });
@@ -26446,9 +26508,36 @@ function sigReturn(){
 function sigWithdraw(){
   var a=window._signRow; if (!a) return;
   var voids = !!a.vendora_signed_at;
-  if (!confirm(voids ? "Withdraw this agreement? This VOIDS Vendora's signature — it must be signed again." : "Withdraw the signature request so the agreement can be edited again?")) return;
+  if (!confirm(voids ? "Withdraw this agreement? This VOIDS Vendora's signature — it must be signed again." : "Withdraw it so the agreement can be edited again? The counterparty's signing link stops working and any signature they gave is void.")) return;
   sigPost("/api/agreements/"+a.id+"/withdraw").then(function(){ closeSig(); refreshEditing(a.id); loadArchive(); })
     .catch(function(e){ var m=document.getElementById("sigMsg"); m.style.color="#c0392b"; m.textContent=e.message; });
+}
+
+// The counterparty's signed copy came by email instead of through their link: upload it from the
+// signing view and the agreement moves on to the CEO.
+function sigUploadSigned(){
+  var a=window._signRow; if(!a) return;
+  var input=document.getElementById("sigUploadFile"), name=(document.getElementById("sigUploadName").value||"").trim(), m=document.getElementById("sigMsg");
+  var file=input.files&&input.files[0];
+  if(!file){ m.style.color="#c0392b"; m.textContent="Choose the signed file first."; return; }
+  if(!name){ m.style.color="#c0392b"; m.textContent="Enter who signed for the counterparty."; return; }
+  if(file.size>UploadLimits.MAX_FILE_BYTES){ m.style.color="#c0392b"; m.textContent="File too large (max "+UploadLimits.MAX_FILE_LABEL+")."; return; }
+  m.style.color="var(--muted)"; m.textContent="Uploading…";
+  fetch("/api/agreements/"+a.id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name),"X-Signer-Name":encodeURIComponent(name)},body:file})
+    .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(x.error||"Upload failed"); return x; }); })
+    .then(function(){ return fetch("/api/agreements/"+a.id).then(function(r){ return r.json(); }); })
+    .then(function(j){
+      renderSigningView(j.agreement);
+      var mm=document.getElementById("sigMsg"); mm.style.color="#1e7e34"; mm.textContent="Signed copy registered ✓ — "+(window._signerName||"the CEO")+" has been asked to countersign.";
+      refreshEditing(a.id); loadArchive();
+    })
+    .catch(function(e){ m.style.color="#c0392b"; m.textContent=e.message; });
+}
+function sigRemind(){
+  var a=window._signRow; if(!a) return;
+  var m=document.getElementById("sigMsg"); m.style.color="var(--muted)"; m.textContent="Sending reminder…";
+  sigPost("/api/agreements/"+a.id+"/remind").then(function(x){ m.style.color=x.sent?"#1e7e34":"#c0392b"; m.textContent=x.sent?"Reminder sent ✓":"Not sent: "+(x.reason||"email not configured"); loadArchive(); })
+    .catch(function(e){ m.style.color="#c0392b"; m.textContent=e.message; });
 }
 
 function importFromLink(){
@@ -26511,18 +26600,19 @@ function apShowPanel(a){
   var sel=document.getElementById("apStatus");
   sel.innerHTML=statusOptions(a.status||"draft"); sel.value=a.status||"draft";
   sel.setAttribute("data-prev", a.status||"draft");
-  sel.disabled = a.status==="pending_signature";
+  sel.disabled = isLockedRow(a);
   document.getElementById("apSig").innerHTML = sigLine(a) || "<span style='color:var(--muted)'>—</span>";
   // Frozen while awaiting / carrying the CEO's signature: saving is disabled until withdrawn.
   var locked = isLockedRow(a), save=document.getElementById("editSaveBtn"), st=document.getElementById("editBarStatus");
-  if (save){ save.disabled=locked; save.style.opacity=locked?.45:1; save.title=locked?"Locked for the CEO's signature — withdraw to edit":""; }
-  if (st){ st.style.color=locked?"#9a4b00":""; st.textContent=locked?"🔒 Locked — "+(a.status==="pending_signature"?"awaiting the CEO's signature":"signed by Vendora")+". Withdraw to edit; downloads use the approved version.":""; }
+  if (save){ save.disabled=locked; save.style.opacity=locked?.45:1; save.title=locked?"Locked while out for signature — withdraw to edit":""; }
+  if (st){ st.style.color=locked?"#9a4b00":""; st.textContent=locked?"🔒 Locked — "+(a.status==="sent"?"out for the counterparty's signature":a.status==="pending_signature"?"awaiting "+(window._signerName||"the CEO")+"'s countersignature":"signed")+". Withdraw to edit; downloads use the approved version.":""; }
   document.getElementById("apStatusMsg").textContent="";
   document.getElementById("apUploadMsg").textContent="";
   // Reminder hint reflects what will be sent for the current status.
   var msg=document.getElementById("apRemindMsg"), btn=document.getElementById("apRemindBtn");
   if(!a.counterparty_email){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="No counterparty email on file."; }
-  else { btn.disabled=false; btn.style.opacity=1; msg.textContent=(a.status==="invited"?"Nudge to fill in their details":"Nudge to sign & return")+" → "+a.counterparty_email; }
+  else if(a.status!=="invited" && a.status!=="sent"){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="Reminders go out while the customer has a link: invited, or sent for signature."; }
+  else { btn.disabled=false; btn.style.opacity=1; msg.textContent=(a.status==="invited"?"Nudge to fill in their details":"Nudge to sign & upload")+" → "+a.counterparty_email; }
   apLoadFiles();
 }
 function apSetStatus(status){
@@ -26533,7 +26623,7 @@ function apSetStatus(status){
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||"Failed"); return j; }); })
     .then(function(){ e.status=status; sel.setAttribute("data-prev",status); m.style.color="#1e7e34"; m.textContent="Saved ✓";
       var msg=document.getElementById("apRemindMsg");
-      if(e.cpEmail) msg.textContent=(status==="invited"?"Nudge to fill in their details":"Nudge to sign & return")+" → "+e.cpEmail;
+      if(e.cpEmail) msg.textContent=(status==="invited"?"Nudge to fill in their details":"Nudge to sign & upload")+" → "+e.cpEmail;
       refreshEditing(e.id);
     })
     .catch(function(err){ sel.value=sel.getAttribute("data-prev")||sel.value; m.style.color="#c0392b"; m.textContent=err.message||"Failed"; });
@@ -26561,7 +26651,7 @@ function apUpload(input){
   var msg=document.getElementById("apUploadMsg"); msg.style.color="var(--muted)"; msg.textContent="Uploading…";
   fetch("/api/agreements/"+e.id+"/files",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-Filename":encodeURIComponent(file.name)},body:file})
     .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-    .then(function(res){ msg.style.color="#1e7e34"; msg.textContent="Uploaded ✓ — verify the returned signature before marking the agreement fully signed";
+    .then(function(res){ msg.style.color="#1e7e34"; msg.textContent=res.status==="pending_signature"?"Signed copy registered ✓ — sent to "+(window._signerName||"the CEO")+" for countersignature":"Uploaded ✓";
       if(res.status){ document.getElementById("apStatus").value=res.status; e.status=res.status; }
       apLoadFiles();
     })
@@ -26595,7 +26685,7 @@ function updateArchive(editing, formData, showStatus){
   // Content is frozen while awaiting / carrying the CEO's signature — don't try to save (the server
   // would refuse any change); regenerating the .docx still works.
   if (isLockedRow({status:editing.status, vendora_signed_at:editing.signedAt})) {
-    if (showStatus && st){ st.style.color="#9a4b00"; st.textContent="🔒 Locked for the CEO's signature — withdraw to edit."; }
+    if (showStatus && st){ st.style.color="#9a4b00"; st.textContent="🔒 Locked while out for signature — withdraw to edit."; }
     return Promise.resolve();
   }
   if (showStatus && st){ st.style.color="var(--muted)"; st.textContent="Saving…"; }
@@ -26839,7 +26929,7 @@ async function applyApproved(list){
     await wfRefresh(e.id);return {data:saved.data,applied:list,rejected:[],conflicts:[]};
   }
   var locked = window._signData || (typeof editingLocked === "function" && editingLocked());
-  if (locked){ alert("This agreement is locked for the CEO's signature. Return it to the seller (or withdraw the request) to change the wording."); return null; }
+  if (locked){ alert("This agreement is locked while out for signature. Withdraw it (or have it returned) to change the wording."); return null; }
   var LC = window.LawyerChanges;
   if (!LC){ alert("The change helper did not load. Reload the page and try again."); return null; }
   var ctx = writableAgreement();

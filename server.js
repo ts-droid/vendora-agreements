@@ -71,17 +71,18 @@ function escHtml(s) {
 const DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || 'vendora.se').toLowerCase();
 
 // Valid archive lifecycle statuses:
-// draft → invited → submitted → generated → pending_signature (awaiting the CEO) → vendora_signed
-// (approved + signed by the CEO) → sent (to the counterparty) → signed (fully executed);
-// plus 'imported' for records brought in from a link.
-const STATUSES = ['draft', 'invited', 'submitted', 'generated', 'pending_signature', 'vendora_signed', 'sent', 'signed', 'imported'];
-// While awaiting or carrying the CEO's signature, an agreement's content is frozen.
-const LOCKED = ['pending_signature', 'vendora_signed'];
-// …including after it moves on to the counterparty: anything still carrying Vendora's signature.
+// draft → invited → submitted → generated → sent (approved by Vendora and sent to the counterparty
+// for signature) → pending_signature (the counterparty signed and uploaded; awaiting the CEO's
+// countersignature) → signed (fully executed); plus 'imported' for records brought in from a link.
+// 'vendora_signed' only remains for records from the earlier CEO-first order.
+const STATUSES = ['draft', 'invited', 'submitted', 'generated', 'sent', 'pending_signature', 'vendora_signed', 'signed', 'imported'];
+// From the moment an agreement goes out for signature until it is fully signed, its content is frozen…
+const LOCKED = ['sent', 'pending_signature', 'vendora_signed'];
+// …as is anything still carrying Vendora's signature.
 function isLocked(row) { return LOCKED.includes(row.status) || !!row.vendora_signed_at; }
 // Statuses that may only be reached through the signature workflow, never set by hand.
-const WORKFLOW_ONLY = ['pending_signature', 'vendora_signed'];
-// A signature can be requested once negotiation is done (never while still awaiting the counterparty).
+const WORKFLOW_ONLY = ['sent', 'pending_signature', 'vendora_signed'];
+// An agreement can go out for signature once negotiation is done (never while still awaiting the counterparty's details).
 const SIGNABLE_FROM = ['draft', 'submitted', 'generated', 'imported'];
 
 // Roles. Admins see every agreement; everyone else sees only the agreements they created.
@@ -945,7 +946,8 @@ app.post('/api/admin/mail-test', auth.requireAuth, requireAdmin, async (req, res
 // One transactional workflow shared by initial review and customer feedback.
 const workflow = require('./workflow-api').install(app, {
   db,auth,ai,isAdmin,isSigner,loadPlaybook,sendMailSafe,mailShell,coverHtml,btnHtml,
-  SIGNER_EMAIL,SIGNER_NAME,publishStatusChange,tokenEq
+  SIGNER_EMAIL,SIGNER_NAME,publishStatusChange,tokenEq,
+  signatureRequestMail:(...a)=>signatureRequestMail(...a), notifyFullySigned:(...a)=>notifyFullySigned(...a), mailReason:()=>lastMailError
 });
 
 // ── Agreements archive (auth required) ─────────────────────────────────────────
@@ -1021,7 +1023,7 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
       `UPDATE agreements SET data=$1, status='submitted', counterparty_name=COALESCE($2,counterparty_name),
          counterparty_email=COALESCE($3,counterparty_email), status_updated_at=now(), updated_at=now()
          WHERE id=$4 AND status IN ('invited','submitted') AND vendora_signed_at IS NULL
-           AND status NOT IN ('pending_signature','vendora_signed','signed')`,
+           AND status NOT IN ('sent','pending_signature','vendora_signed','signed')`,
       [data, counterpartyName || null, counterpartyEmail || null, req.params.id]
     );
     if (!upd.rowCount) return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
@@ -1041,6 +1043,7 @@ app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
               a.status_updated_at, a.last_reminder_at, a.created_by, a.created_by_name, a.created_at, a.updated_at,
               a.signature_requested_by_name, a.signature_requested_at, a.signature_note,
               a.vendora_signed_by, a.vendora_signed_at,
+              a.signature_sent_at, a.counterparty_signed_at, a.counterparty_signed_by, a.counterparty_signed_file,
               (SELECT COUNT(*) FROM agreement_files f WHERE f.agreement_id = a.id)::int AS file_count
        FROM agreements a
        WHERE $1::boolean OR a.created_by = $2
@@ -1057,7 +1060,7 @@ app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
 app.get('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const row = await loadOwned(req, res); if (!row) return;
-    delete row.update_token; // capability token never leaves the server once issued
+    delete row.update_token; delete row.signature_token; // capability tokens never leave the server once issued
     if(row.workflow_state)row.workflow_summary=workflowCore.summary(row);
     res.json({ agreement: row });
   } catch (err) {
@@ -1077,7 +1080,7 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
     if (isLocked(row)) {
       const same = await db.query('SELECT data = $1::jsonb AS same FROM agreements WHERE id=$2', [data, req.params.id]);
       if (same.rows[0] && same.rows[0].same) return res.json({ id: row.id, updated_at: row.updated_at, locked: true });
-      return res.status(409).json({ error: 'This agreement is locked for the CEO\'s signature. Withdraw the signature request before editing.', locked: true });
+      return res.status(409).json({ error: 'This agreement is locked while out for signature. Withdraw it before editing.', locked: true });
     }
     stripServerFields(data);
     // The column is already a type. Fill a missing data._type from it. A conflicting
@@ -1116,11 +1119,11 @@ app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, r
   try {
     const { status } = req.body || {};
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
-    if (WORKFLOW_ONLY.includes(status)) return res.status(400).json({ error: 'Use "Send to CEO for signature" — this status is set by the signature workflow.' });
+    if (WORKFLOW_ONLY.includes(status)) return res.status(400).json({ error: 'Use "Approve & send for signature" — this status is set by the signature workflow.' });
     const row = await loadOwned(req, res); if (!row) return;
     if (row.workflow_state) return res.status(409).json({error:'Använd avtalsflödets gransknings- och signeringssteg. Status kan inte sättas manuellt.'});
-    if (row.status === 'pending_signature') {
-      return res.status(409).json({ error: 'Awaiting the CEO\'s signature — withdraw the request first.' });
+    if (row.status === 'sent' || row.status === 'pending_signature') {
+      return res.status(409).json({ error: (row.status === 'sent' ? 'Out for the counterparty\'s signature' : 'Awaiting the CEO\'s signature') + ' — withdraw it first.' });
     }
     // Once the CEO has signed, the record can only move forward (to the counterparty / fully signed).
     if (row.vendora_signed_at && !['sent', 'signed'].includes(status)) {
@@ -1163,21 +1166,28 @@ app.post('/api/agreements/:id/files',
       if (!buf || !buf.length) return res.status(400).json({ error: 'Empty file' });
       const row = await loadOwned(req, res);
       if (!row) return;
-      const filename = safeFilename(decodeURIComponent(req.get('X-Filename') || 'signed-agreement'));
+      const filename = safeFilename(headerText(req, 'X-Filename') || 'signed-agreement');
       const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].slice(0, 120);
       const who = req.user.name || req.user.email;
-      const r = await db.query(
-        `INSERT INTO agreement_files (agreement_id, filename, mime, size_bytes, content, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, filename, mime, size_bytes, uploaded_by, uploaded_at`,
-        [req.params.id, filename, mime, buf.length, buf, who]
-      );
-      // A countersigned upload means the deal is done.
-      const up = row.workflow_state ? {rows:[{status_updated_at:row.status_updated_at}]} : await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id]);
-      if (!row.workflow_state) publishStatusChange(req.params.id, row.status, 'signed');
-      res.json({ file: r.rows[0], status: row.workflow_state ? row.status : 'signed', status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
+      const file = await storeFile(row.id, filename, mime, buf, who);
+      // While the agreement is out for the counterparty's signature, an upload IS their signed copy
+      // (received by email instead of through their link): it moves the agreement on to the CEO.
+      if (row.status === 'sent') {
+        const signer = (headerText(req, 'X-Signer-Name') || '').slice(0, 200) || cpName(row);
+        const result = await registerCounterpartySignature(req, row, file, signer, who);
+        return res.json({ file, status: result.status, status_updated_at: result.status_updated_at, notified: result.notified });
+      }
+      // Outside the signature workflow (paper agreements, imports) a countersigned upload means the deal
+      // is done. Records in the workflow, or already signed, keep their status.
+      const legacyDone = !row.workflow_state && !['pending_signature', 'signed'].includes(row.status);
+      const up = legacyDone
+        ? await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id])
+        : { rows: [{ status_updated_at: row.status_updated_at }] };
+      if (legacyDone) publishStatusChange(req.params.id, row.status, 'signed');
+      res.json({ file, status: legacyDone ? 'signed' : row.status, status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
     } catch (err) {
       console.error('Upload file error:', err.message);
-      res.status(500).json({ error: 'Could not store file' });
+      res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not store file' });
     }
   });
 
@@ -1220,6 +1230,7 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
     const row = await loadOwned(req, res); if (!row) return;
     if (!row.counterparty_email) return res.status(400).json({ error: 'No counterparty email on file for this agreement.' });
     const kind = row.status === 'invited' ? 'fill' : 'sign';
+    if (kind === 'sign' && !signingLink(req, row)) return res.status(409).json({ error: 'This agreement has not been sent for signature yet.' });
     const transporter = getTransporter();
     if (!transporter) {
       publishAgreement('agreement.email_failed', row.id, {
@@ -1243,14 +1254,16 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
       }
       const linkData = Object.assign({}, row.workflow_state ? {} : row.data || {}, { _aid: Number(req.params.id), _atok: token }, row.workflow_state ? {_sentVersion:row.workflow_state.sent.version} : {});
       link = 'https://' + req.get('host') + '/#fill=' + Buffer.from(JSON.stringify(linkData), 'utf8').toString('base64');
+    } else {
+      link = signingLink(req, row);
     }
 
     const btn = link
-      ? `<div style="text-align:center;margin:26px 0"><a href="${escHtml(link)}" style="display:inline-block;background:#0F2240;color:#fff;padding:13px 30px;text-decoration:none;font-size:14px;font-weight:bold">${kind === 'fill' ? 'Fill in your details →' : 'Open the agreement →'}</a></div>`
+      ? `<div style="text-align:center;margin:26px 0"><a href="${escHtml(link)}" style="display:inline-block;background:#0F2240;color:#fff;padding:13px 30px;text-decoration:none;font-size:14px;font-weight:bold">${kind === 'fill' ? 'Fill in your details →' : 'Review, sign & upload →'}</a></div>`
       : '';
     const body = kind === 'fill'
       ? `<p style="color:#333;font-size:14px">This is a friendly reminder to fill in your company details for the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. It only takes a few minutes.</p>`
-      : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please sign the agreement you received and return the countersigned copy to us.</p>`;
+      : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please open the link below, sign the agreement and upload the signed copy. Vendora's CEO then countersigns and you receive the fully signed agreement.</p>`;
 
     let mailed = false;
     try {
@@ -1290,7 +1303,7 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
 });
 
 // ── CEO signature workflow ─────────────────────────────────────────────────────
-// seller: request-signature → CEO: sign | return (with comment) → seller/admin: withdraw.
+// seller: send-for-signature → counterparty: signed-copy → CEO: sign | return (with comment) → seller/admin: withdraw.
 const TYPE_LABEL = { da: 'Distributor Agreement', ra: 'Reseller Agreement', rb: 'Reseller Agreement — Simplified' };
 function oneLine(s) { return String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').slice(0, 200); }
 
@@ -1339,78 +1352,248 @@ async function sendMailSafe(msg) {
 }
 function cpName(row) { return row.counterparty_name || (row.data && row.data.name) || 'the counterparty'; }
 
-// Seller → CEO: freeze the negotiated agreement and ask the signer to approve it.
-app.post('/api/agreements/:id/request-signature', requireDb, auth.requireAuth, async (req, res) => {
+// ── Signature flow ─────────────────────────────────────────────────────────────
+// The order is counterparty first: the seller approves the negotiated agreement for Vendora and
+// sends the counterparty a link; they download, sign and upload the signed copy; the CEO then
+// countersigns in the app and the counterparty is emailed a link to the fully signed agreement.
+
+// Who the signature request goes to: the signatory the counterparty entered, else their contact
+// persons, else the email on the record.
+function signingEmail(row) {
+  const d = row.data || {};
+  return d.sig_email || (d.contacts && d.contacts.mgmt && d.contacts.mgmt.p && d.contacts.mgmt.p.e)
+    || (d.rcontacts && d.rcontacts.notices && d.rcontacts.notices.e) || row.counterparty_email || null;
+}
+function signingToken(row) {
+  return row.workflow_state ? (row.workflow_state.signatureShare && row.workflow_state.signatureShare.token) || null : row.signature_token || null;
+}
+function signingLink(req, row) {
+  const token = signingToken(row);
+  return token ? 'https://' + req.get('host') + '/#agreementcopy=' + row.id + '.' + token : null;
+}
+// Header values arrive URL-encoded from the browser; a malformed one is treated as absent.
+function headerText(req, name) {
+  const raw = req.get(name); if (!raw) return '';
+  try { return String(decodeURIComponent(raw)).trim(); } catch (e) { return ''; }
+}
+const SIGNED_COPY_TYPES = /\.(pdf|docx?|png|jpe?g)$/i;
+async function storeFile(agreementId, filename, mime, buf, who) {
+  const r = await db.query(
+    `INSERT INTO agreement_files (agreement_id, filename, mime, size_bytes, content, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, filename, mime, size_bytes, uploaded_by, uploaded_at`,
+    [agreementId, filename, mime, buf.length, buf, who]);
+  return r.rows[0];
+}
+// What the counterparty may see of a record outside the workflow: the agreement itself, never the
+// negotiation bookkeeping (proposals, decisions, invite tokens).
+function publicCopy(data) {
+  const out = {};
+  Object.keys(data || {}).forEach(function (k) {
+    if ((k[0] === '_' && k !== '_type' && k !== '_vendoraSignature') || k === 'redlines' || k === 'workflow_state' || k === 'workflow_revision') return;
+    out[k] = data[k];
+  });
+  return out;
+}
+// Counterparty-facing mails are in English: Vendora's counterparties are international.
+function signatureRequestMail(row, who, replyTo, to, link) {
+  const type = TYPE_LABEL[row.type] || 'Agreement';
+  return {
+    to, replyTo,
+    subject: oneLine(`Agreement ready for your signature: ${type} — Vendora Nordic AB`),
+    html: mailShell(`&#x270D;&#xFE0F; ${escHtml(type)} ready for your signature`,
+      `<p style="color:#555;font-size:14px"><strong>${escHtml(who)}</strong> at Vendora Nordic AB has approved the final version of the ${escHtml(type)} between Vendora Nordic AB and <strong>${escHtml(cpName(row))}</strong>.</p>`
+      + `<p style="color:#555;font-size:14px">Open the link below to download the agreement, give it a final check, sign it, and upload the signed copy. Vendora's CEO then countersigns, and you receive an email with the fully signed agreement ready for download.</p>`
+      + btnHtml(link, 'Review, sign & upload →')
+      + `<p style="color:#999;font-size:12px">The link is personal to this agreement. Questions? Just reply to this email.</p>`),
+  };
+}
+// The counterparty's signed copy has arrived (through their link, or uploaded by the seller when it
+// came by email): record it, move the agreement on to the CEO, and tell the CEO and the seller.
+async function registerCounterpartySignature(req, row, file, signerName, uploadedBy) {
+  let status_updated_at;
+  if (row.workflow_state) {
+    status_updated_at = (await workflow.counterpartySigned(row.id, file, signerName)).status_updated_at;
+  } else {
+    const up = await db.query(
+      `UPDATE agreements SET status='pending_signature', status_updated_at=now(), updated_at=now(),
+         counterparty_signed_at=now(), counterparty_signed_by=$1, counterparty_signed_file=$2
+       WHERE id=$3 AND status='sent' RETURNING status_updated_at`, [signerName, file.id, row.id]);
+    if (!up.rows[0]) { const e = new Error('This agreement is not awaiting the counterparty\'s signature.'); e.status = 409; throw e; }
+    status_updated_at = up.rows[0].status_updated_at;
+  }
+  publishStatusChange(row.id, 'sent', 'pending_signature');
+  const type = TYPE_LABEL[row.type] || 'Agreement';
+  const summary = cleanSummary(row.workflow_state ? workflowCore.summary(row) : row.signature_summary);
+  const notified = SIGNER_EMAIL ? await sendMailSafe({
+    to: SIGNER_EMAIL, ...(row.signature_requested_by ? { replyTo: row.signature_requested_by } : {}),
+    subject: oneLine(`Ready for your signature: ${type} — ${cpName(row)}`),
+    html: mailShell(`&#x270D;&#xFE0F; ${escHtml(cpName(row))} has signed — your signature is requested`,
+      `<p style="color:#555;font-size:14px"><strong>${escHtml(signerName)}</strong> signed the ${escHtml(type)} for <strong>${escHtml(cpName(row))}</strong>`
+      + (uploadedBy ? ` (signed copy uploaded by ${escHtml(uploadedBy)})` : ' and uploaded the signed copy')
+      + `. ${escHtml(row.signature_requested_by_name || 'The seller')} approved this version for Vendora before it went out. Please countersign it.</p>`
+      + coverHtml(summary) + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Review & sign →')),
+  }) : false;
+  if (row.signature_requested_by && row.signature_requested_by !== SIGNER_EMAIL) {
+    await sendMailSafe({
+      to: row.signature_requested_by,
+      subject: oneLine(`Signed by ${cpName(row)}: ${type}`),
+      html: mailShell(`&#x2714; ${escHtml(cpName(row))} has signed`,
+        `<p style="color:#555;font-size:14px">The signed copy from <strong>${escHtml(cpName(row))}</strong> is in the archive. ${escHtml(SIGNER_NAME)} has been asked to countersign; you get an email when the agreement is fully signed.</p>`
+        + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Open the agreement →')),
+    });
+  }
+  return { status: 'pending_signature', status_updated_at, notified };
+}
+// Both signatures are in place: the counterparty gets a link to download the fully signed
+// agreement, and the seller hears that the deal is done.
+async function notifyFullySigned(req, row) {
+  const type = TYPE_LABEL[row.type] || 'Agreement';
+  const link = signingLink(req, row);
+  const to = row.counterparty_email || signingEmail(row);
+  const counterparty = to && link ? await sendMailSafe({
+    to, ...(row.signature_requested_by ? { replyTo: row.signature_requested_by } : {}),
+    subject: oneLine(`Fully signed: ${type} — Vendora Nordic AB`),
+    html: mailShell(`&#x2714; Your ${escHtml(type)} with Vendora Nordic AB is fully signed`,
+      `<p style="color:#555;font-size:14px">${escHtml(SIGNER_NAME)}, CEO of Vendora Nordic AB, has countersigned the ${escHtml(type)} between Vendora Nordic AB and <strong>${escHtml(cpName(row))}</strong>. The signed agreement is now ready for download.</p>`
+      + btnHtml(link, 'Download the signed agreement →')
+      + `<p style="color:#999;font-size:12px">Keep this email: the link stays valid for downloading your copy.</p>`),
+  }) : false;
+  if (row.signature_requested_by) {
+    await sendMailSafe({
+      to: row.signature_requested_by,
+      subject: oneLine(`Fully signed: ${type} — ${cpName(row)}`),
+      html: mailShell(`&#x2714; Signed by ${escHtml(SIGNER_NAME)}`,
+        `<p style="color:#555;font-size:14px">${escHtml(SIGNER_NAME)} countersigned the ${escHtml(type)} with <strong>${escHtml(cpName(row))}</strong>. The agreement is fully signed${counterparty ? ', and the counterparty has been emailed a link to download it' : ''}.</p>`
+        + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Open the agreement →')),
+    });
+  }
+  return counterparty;
+}
+
+// Seller → counterparty: approve the negotiated agreement for Vendora, freeze it and send the
+// counterparty a link to review, sign and upload the signed copy.
+app.post('/api/agreements/:id/send-for-signature', requireDb, auth.requireAuth, async (req, res) => {
   try {
     if (!SIGNER_EMAIL) return res.status(503).json({ error: 'No signer is configured on this server (set SIGNER_EMAIL).' });
     const row = await loadOwned(req, res); if (!row) return;
-    if (row.workflow_state) return workflow.wrap(workflow.requestSignature)(req,res);
+    const body = req.body || {};
+    const to = String(body.email || signingEmail(row) || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'Enter the counterparty\'s email address for the signature request.' });
+    body.email = to; req.body = body;
+    if (row.workflow_state) return workflow.wrap(workflow.sendForSignature)(req, res);
     if (!SIGNABLE_FROM.includes(row.status)) {
       return res.status(409).json({ error: row.status === 'invited'
         ? 'Still waiting for the counterparty\'s details.'
         : 'This agreement can\'t be sent for signature from its current status.' });
     }
-    const summary = cleanSummary((req.body || {}).summary);
+    const summary = cleanSummary(body.summary);
     const who = req.user.name || req.user.email;
+    const token = crypto.randomBytes(24).toString('base64url');
     const up = await db.query(
-      `UPDATE agreements SET status='pending_signature', status_updated_at=now(), updated_at=now(),
-         signature_requested_by=$1, signature_requested_by_name=$2, signature_requested_at=now(), signature_note=NULL,
+      `UPDATE agreements SET status='sent', status_updated_at=now(), updated_at=now(), counterparty_email=$1,
+         signature_token=$2, signature_sent_at=now(), signature_summary=$3,
+         signature_requested_by=$4, signature_requested_by_name=$5, signature_requested_at=now(), signature_note=NULL,
+         counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL,
          vendora_signed_by=NULL, vendora_signed_email=NULL, vendora_signed_at=NULL,
          data = data - '_vendoraSignature'
-       WHERE id=$3 RETURNING status_updated_at, signature_requested_at`,
-      [req.user.email, who, req.params.id]);
-    publishStatusChange(row.id, row.status, 'pending_signature');
-    const type = TYPE_LABEL[row.type] || 'Agreement';
-    const notified = await sendMailSafe({
-      to: SIGNER_EMAIL, replyTo: req.user.email,
-      subject: oneLine(`Signature requested: ${type} — ${cpName(row)}`),
-      html: mailShell(`&#x270D;&#xFE0F; Signature requested: ${escHtml(type)} with ${escHtml(cpName(row))}`,
-        `<p style="color:#555;font-size:14px"><strong>${escHtml(who)}</strong> has finished negotiating this agreement and asks you to review and sign it for Vendora.</p>`
-        + coverHtml(summary) + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Review & sign →')),
-    });
-    res.json({ ok: true, status: 'pending_signature', status_updated_at: up.rows[0].status_updated_at,
-      signature_requested_at: up.rows[0].signature_requested_at, notified, mailReason: notified ? null : lastMailError });
+       WHERE id=$6 RETURNING status_updated_at, signature_sent_at`,
+      [to, token, summary, req.user.email, who, req.params.id]);
+    publishStatusChange(row.id, row.status, 'sent');
+    const link = 'https://' + req.get('host') + '/#agreementcopy=' + row.id + '.' + token;
+    const sent = await sendMailSafe(signatureRequestMail(row, who, req.user.email, to, link));
+    res.json({ ok: true, status: 'sent', sent, mailReason: sent ? null : lastMailError, link, email: to,
+      status_updated_at: up.rows[0].status_updated_at, signature_sent_at: up.rows[0].signature_sent_at });
   } catch (err) {
-    console.error('Request signature error:', err.message);
-    res.status(500).json({ error: 'Could not request the signature' });
+    console.error('Send for signature error:', err.message);
+    res.status(500).json({ error: 'Could not send the agreement for signature' });
   }
 });
 
-// CEO approves and signs for Vendora. The stamp is written into the agreement data, so every later
-// export of the .docx carries it; the content stays locked from here on.
+// The counterparty's view of an agreement sent to them: the frozen version to download (with
+// Vendora's signature once the CEO has countersigned) and where the signing stands.
+app.get('/api/public-agreements/:id', publicLimiter, requireDb, async (req, res) => {
+  try {
+    const row = /^\d+$/.test(String(req.params.id)) ? (await db.query('SELECT * FROM agreements WHERE id=$1', [req.params.id])).rows[0] : null;
+    const token = row && signingToken(row);
+    if (!row || !token || !tokenEq(req.query.token, token) || !['sent', 'pending_signature', 'signed'].includes(row.status)) {
+      return res.status(404).json({ error: 'This signing link is not valid or has been withdrawn. Please contact Vendora.' });
+    }
+    if (row.workflow_state && row.workflow_state.templateVersion !== workflowCore.TEMPLATE_VERSION) {
+      return res.status(409).json({ error: 'Please ask Vendora for the archived copy of this agreement.' });
+    }
+    const data = row.workflow_state ? Object.assign({}, row.workflow_state.signatureShare.data) : publicCopy(row.data);
+    if (row.vendora_signed_at && row.data && row.data._vendoraSignature) data._vendoraSignature = row.data._vendoraSignature;
+    let file = null;
+    if (row.counterparty_signed_file) {
+      file = (await db.query('SELECT filename FROM agreement_files WHERE id=$1 AND agreement_id=$2', [row.counterparty_signed_file, row.id])).rows[0] || null;
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      type: row.type, status: row.status, name: cpName(row), data,
+      version: row.workflow_state ? row.workflow_state.signatureShare.version : null,
+      counterparty: row.counterparty_signed_at ? { signedAt: row.counterparty_signed_at, by: row.counterparty_signed_by, filename: file && file.filename } : null,
+      vendora: row.vendora_signed_at ? { signedAt: row.vendora_signed_at, by: row.vendora_signed_by, title: 'CEO' } : null,
+    });
+  } catch (err) {
+    console.error('Public agreement error:', err.message);
+    res.status(500).json({ error: 'Could not load the agreement' });
+  }
+});
+
+// The counterparty uploads their signed copy through the same link.
+app.post('/api/public-agreements/:id/signed-copy', publicLimiter, requireDb,
+  express.raw({ type: () => true, limit: uploadLimits.MAX_FILE_BYTES }),
+  async (req, res) => {
+    try {
+      const row = /^\d+$/.test(String(req.params.id)) ? (await db.query('SELECT * FROM agreements WHERE id=$1', [req.params.id])).rows[0] : null;
+      const token = row && signingToken(row);
+      if (!row || !token || !tokenEq(req.query.token, token)) return res.status(404).json({ error: 'This signing link is not valid or has been withdrawn. Please contact Vendora.' });
+      if (row.status !== 'sent') {
+        return res.status(409).json({ error: ['pending_signature', 'signed'].includes(row.status)
+          ? 'A signed copy has already been received for this agreement.'
+          : 'This agreement is not awaiting your signature. Please contact Vendora.' });
+      }
+      const buf = req.body;
+      if (!buf || !buf.length) return res.status(400).json({ error: 'Choose the signed file first.' });
+      const filename = safeFilename(headerText(req, 'X-Filename') || 'signed-agreement.pdf');
+      if (!SIGNED_COPY_TYPES.test(filename)) return res.status(400).json({ error: 'Upload the signed agreement as PDF, Word, PNG or JPEG.' });
+      const signer = headerText(req, 'X-Signer-Name').slice(0, 200);
+      if (!signer) return res.status(400).json({ error: 'Enter the name of the person who signed.' });
+      const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].slice(0, 120);
+      const file = await storeFile(row.id, filename, mime, buf, signer + ' (' + cpName(row) + ')');
+      const result = await registerCounterpartySignature(req, row, file, signer, null);
+      res.json({ ok: true, status: result.status, filename: file.filename, receivedAt: file.uploaded_at });
+    } catch (err) {
+      console.error('Signed copy upload error:', err.message);
+      res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not store the signed copy' });
+    }
+  });
+
+// CEO: countersign the version the counterparty has already signed.
 app.post('/api/agreements/:id/sign', requireDb, auth.requireAuth, async (req, res) => {
   try {
     if (!isSigner(req.user)) return res.status(403).json({ error: 'Only the designated signer can sign for Vendora.' });
     const row = await loadOwned(req, res); if (!row) return;
     if (row.workflow_state) return workflow.wrap(workflow.sign)(req,res);
+    if (row.status !== 'pending_signature') return res.status(409).json({ error: 'This agreement is not awaiting your signature.' });
     const stamp = { name: SIGNER_NAME, title: 'CEO', email: req.user.email, at: new Date().toISOString() };
     const up = await db.query(
-      `UPDATE agreements SET status='vendora_signed', status_updated_at=now(), updated_at=now(),
+      `UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now(),
          vendora_signed_by=$1, vendora_signed_email=$2, vendora_signed_at=now(),
          data = jsonb_set(data, '{_vendoraSignature}', $3::jsonb)
        WHERE id=$4 AND status='pending_signature' RETURNING vendora_signed_at, data`,
       [SIGNER_NAME, req.user.email, JSON.stringify(stamp), req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
-    publishStatusChange(row.id, row.status, 'vendora_signed');
-    if (row.signature_requested_by) {
-      const type = TYPE_LABEL[row.type] || 'agreement';
-      await sendMailSafe({
-        to: row.signature_requested_by,
-        subject: oneLine(`Signed by Vendora: ${type} — ${cpName(row)}`),
-        html: mailShell(`&#x2714; Signed by ${escHtml(SIGNER_NAME)}`,
-          `<p style="color:#555;font-size:14px">${escHtml(SIGNER_NAME)} approved and signed the ${escHtml(type)} with <strong>${escHtml(cpName(row))}</strong>.`
-          + ` Download the signed agreement from the archive and send it to the counterparty for countersignature.</p>`
-          + btnHtml('https://' + req.get('host') + '/', 'Open the archive →')),
-      });
-    }
-    res.json({ ok: true, status: 'vendora_signed', vendora_signed_at: up.rows[0].vendora_signed_at, data: up.rows[0].data });
+    publishStatusChange(row.id, row.status, 'signed');
+    const notified = await notifyFullySigned(req, Object.assign({}, row, { status: 'signed', vendora_signed_at: up.rows[0].vendora_signed_at, vendora_signed_by: SIGNER_NAME }));
+    res.json({ ok: true, status: 'signed', vendora_signed_at: up.rows[0].vendora_signed_at, data: up.rows[0].data, notified });
   } catch (err) {
     console.error('Sign error:', err.message);
     res.status(500).json({ error: 'Could not sign the agreement' });
   }
 });
-
-// CEO sends it back to the seller with a comment instead of signing.
+// CEO: send it back to the seller instead of signing. The counterparty's signed copy stays in the
+// archive, but that version is void: the agreement must be changed and sent for signature again.
 app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, res) => {
   try {
     if (!isSigner(req.user)) return res.status(403).json({ error: 'Only the designated signer can return an agreement.' });
@@ -1419,7 +1602,8 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
     const note = String((req.body || {}).note || '').trim().slice(0, 2000);
     if (!note) return res.status(400).json({ error: 'Add a comment so the seller knows what to change.' });
     const up = await db.query(
-      `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(), signature_note=$1
+      `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(), signature_note=$1,
+         signature_token=NULL, counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL
        WHERE id=$2 AND status='pending_signature' RETURNING status_updated_at`,
       [note, req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
@@ -1430,9 +1614,9 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
         to: row.signature_requested_by, replyTo: req.user.email,
         subject: oneLine(`Returned for changes: ${type} — ${cpName(row)}`),
         html: mailShell(`&#x21A9;&#xFE0F; Returned for changes`,
-          `<p style="color:#555;font-size:14px">${escHtml(SIGNER_NAME)} returned the ${escHtml(type)} with <strong>${escHtml(cpName(row))}</strong> instead of signing:</p>`
+          `<p style="color:#555;font-size:14px">${escHtml(SIGNER_NAME)} returned the ${escHtml(type)} with <strong>${escHtml(cpName(row))}</strong> instead of countersigning it:</p>`
           + `<blockquote style="border-left:3px solid #ffe69c;margin:12px 0;padding:6px 12px;color:#555;font-size:14px;white-space:pre-wrap">${escHtml(note)}</blockquote>`
-          + `<p style="color:#555;font-size:14px">Make the changes, then send it for signature again.</p>`
+          + `<p style="color:#555;font-size:14px">The counterparty's signed copy stays in the archive, but that version is void. Make the changes, then send the agreement for signature again.</p>`
           + btnHtml('https://' + req.get('host') + '/', 'Open the archive →')),
       });
     }
@@ -1442,8 +1626,8 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
     res.status(500).json({ error: 'Could not return the agreement' });
   }
 });
-
-// Seller/admin pulls it back out of the signature workflow (voids Vendora's signature if present).
+// Seller/admin: take a sent (or already countersigned) agreement back so it can be edited. The
+// counterparty's link stops working; any Vendora signature is voided.
 app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const row = await loadOwned(req, res); if (!row) return;
@@ -1452,6 +1636,7 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
     const up = await db.query(
       `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(),
          vendora_signed_by=NULL, vendora_signed_email=NULL, vendora_signed_at=NULL, signature_note=NULL,
+         signature_token=NULL, counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL,
          data = data - '_vendoraSignature'
        WHERE id=$1 RETURNING status_updated_at`, [req.params.id]);
     publishStatusChange(row.id, row.status, 'generated');

@@ -231,17 +231,23 @@ window.WorkflowHardNoDialog = (function () {
     });return html;
   }
   function render(){if(!current||!current.state)return;var row=current,el=mount(row.type),s=row.state;if(!el)return;
-    var pending=s.items.filter(i=>i.status==='pending'),companyPending=(s.companyImports||[]).some(i=>i.status==='pending'),stage=row.status==='pending_signature'?4:['vendora_signed','sent','signed'].indexOf(row.status)>=0?5:row.status==='submitted'?3:row.status==='invited'?2:1;
-    var steps=['1. Jämför och anpassa','2. Kundens komplettering','3. Granska återkoppling','4. Internt godkännande','5. Underskrift'];
+    var pending=s.items.filter(i=>i.status==='pending'),companyPending=(s.companyImports||[]).some(i=>i.status==='pending'),stage=['pending_signature','vendora_signed','signed'].indexOf(row.status)>=0?5:row.status==='sent'?4:row.status==='submitted'?3:row.status==='invited'?2:1;
+    var steps=['1. Jämför och anpassa','2. Kundens komplettering','3. Granska återkoppling','4. Motpartens underskrift','5. Vendoras underskrift'];
     var html='<div class="wf-progress">'+steps.map((x,i)=>'<span'+(stage===i+1?' aria-current="step"':'')+'>'+x+'</span>').join('')+'</div>';
     html+='<h2>Vårt avtal · version '+row.revision+'</h2><p>Godkända anpassningar ändrar endast detta avtal. Standardmallen och kundens original lämnas orörda.</p>';
     if(s.reviewRunning)html+='<div class="wf-activity" role="status"><span class="wf-spinner" aria-hidden="true"></span><div><strong>AI-granskningen pågår</strong><p>Resultatet är inte klart. Inga ändringar har godkänts ännu.</p></div></div>';
     html+='<div class="wf-actions"><button data-wf="download">Ladda ned vårt avtal</button><button data-wf="redline">Word med ändringsmarkeringar</button>';
-    if(!['pending_signature','vendora_signed','sent','signed'].includes(row.status))html+='<button data-wf="invite" '+(pending.length||companyPending||s.reviewRunning?'disabled':'')+'>Skicka till kunden för granskning</button><button data-wf="signature" '+(row.signatureProblems.length||row.status==='invited'?'disabled':'')+'>Skicka för godkännande / underskrift</button>';
+    // Signing order: approve & send → the counterparty signs and uploads → Vendora's CEO countersigns.
+    if(!['sent','pending_signature','vendora_signed','signed'].includes(row.status))html+='<button data-wf="invite" '+(pending.length||companyPending||s.reviewRunning?'disabled':'')+'>Skicka till kunden för granskning</button><button data-wf="signature" '+(row.signatureProblems.length||row.status==='invited'?'disabled':'')+'>Godkänn och skicka för underskrift</button>';
     if(row.status==='invited')html+='<button data-wf="withdraw">Återkalla kundlänken för omarbetning</button>';
-    if(row.status==='pending_signature')html+='<button data-wf="signview">Öppna intern signering</button>';
-    if(row.status==='vendora_signed'||row.status==='sent')html+='<button data-wf="signview">Visa godkänd version</button><button data-wf="counterparty">Skicka för motpartens underskrift</button><button data-wf="confirm">Registrera returnerat, underskrivet avtal</button>';
+    if(row.status==='sent')html+='<button data-wf="signview">Visa utskicket</button><button data-wf="upload-signed">Registrera signerad kopia (mottagen via mejl)</button><button data-wf="remind">Påminn motparten</button><button data-wf="withdraw">Återkalla utskicket</button>';
+    if(row.status==='pending_signature')html+='<button data-wf="signview">'+(window._isSigner?'Granska och skriv under':'Visa motpartens underskrift')+'</button>';
+    if(row.status==='signed'||row.status==='vendora_signed')html+='<button data-wf="signview">Visa underskrifterna</button>';
     html+='</div><div id="wf_message" role="status" aria-live="polite"></div>';
+    var signerName=window._signerName||'VD';
+    if(row.status==='sent')html+='<p class="wf-note">Skickat för underskrift till '+esc(row.signatureEmail||'')+(row.signatureSentAt?' · '+esc(fmtWhen(row.signatureSentAt)):'')+(s.signatureShare&&s.signatureShare.delivery==='failed'?'. E-posten kunde inte skickas: öppna "Visa utskicket" och skicka länken manuellt':'')+'. Avtalet är låst tills motparten signerat och '+esc(signerName)+' skrivit under.</p>';
+    if(row.counterparty)html+='<p class="wf-note">Signerat för motparten av '+esc(row.counterparty.by||'')+' · '+esc(fmtWhen(row.counterparty.signedAt))+(row.status==='pending_signature'?'. Väntar på '+esc(signerName)+'s underskrift.':'')+'</p>';
+    if(row.signedAt)html+='<p class="wf-note">Undertecknat för Vendora av '+esc(row.signedBy||signerName)+' · '+esc(fmtWhen(row.signedAt))+'. Motparten har fått en länk till det signerade avtalet.</p>';
     html+=companyImportsHtml(row);
     if(row.signatureProblems.length)html+='<details class="wf-check"><summary>Kvar före slutgodkännande ('+row.signatureProblems.length+')</summary><p>'+row.signatureProblems.map(p=>esc(p.replace(/Saknad uppgift: (\w+)/g,(_,k)=>'Saknad uppgift: '+({name:'företagsnamn',reg:'organisations-/registreringsnummer',country:'registreringsland',addr:'registrerad adress',sig_name:'undertecknarens namn',sig_email:'undertecknarens e-post'}[k]||k)))).join('<br>')+'</p>'+(window._isAdmin&&s.items.some(i=>i.status==='accepted'&&i.requiresCounsel)?'<button data-wf="counsel">Dokumentera särskilt godkännande</button>':'')+'</details>';
     if(s.sent)html+='<p class="wf-note">Senast utskickad version: '+s.sent.version+' · E-post: '+esc(s.sent.delivery==='sent'?'skickad':s.sent.delivery==='failed'?'kunde inte skickas':'inte bekräftad')+'. Kundens villkorsförslag ändrar inte avtalet automatiskt.</p>';
@@ -326,12 +332,12 @@ window.WorkflowHardNoDialog = (function () {
         }
         else if(action==='download'||action==='redline'){var data=JSON.parse(JSON.stringify(current.data));data._trackChanges=action==='redline';await downloadAgreementData(current.type,data);}
         else if(action==='invite')await invite(row.type);
-        else if(action==='signature'){await window.wfEnsure(row.type);requestCeoSignature(current.id);}
+        else if(action==='signature'){await window.wfEnsure(row.type);sendForSignature(current.id);}
         else if(action==='signview')openSigningView(row.id);
-        else if(action==='withdraw'){if(confirm('Återkalla kundlänken och öppna avtalet för omarbetning?')){await api('/api/agreements/'+row.id+'/withdraw','POST',{expectedRevision:current.revision});await refresh(row.id);}}
+        else if(action==='withdraw'){if(confirm(row.status==='sent'?'Återkalla utskicket? Motpartens signeringslänk slutar fungera och avtalet öppnas för omarbetning.':'Återkalla kundlänken och öppna avtalet för omarbetning?')){await api('/api/agreements/'+row.id+'/withdraw','POST',{expectedRevision:current.revision});await refresh(row.id);}}
+        else if(action==='upload-signed')uploadSignedCopy(row);
+        else if(action==='remind'){var reminder=await api('/api/agreements/'+row.id+'/remind','POST',{});message(reminder.sent?'Påminnelse skickad till motparten.':'Påminnelsen kunde inte skickas: '+(reminder.reason||'e-post är inte konfigurerad'),!reminder.sent);}
         else if(action==='counsel'){var approval=prompt('Vem har granskat och godkänt riskvillkoren? Ange en dokumenthänvisning.');if(approval)adopt(await api('/api/workflow/'+row.id+'/counsel-approval','POST',{note:approval,expectedRevision:current.revision}));}
-        else if(action==='counterparty'){var result=await api('/api/workflow/'+row.id+'/send-signature','POST',{expectedRevision:current.revision});adopt(result);message(result.sent?'E-post skickad till motparten. Avtalet är inte markerat som underskrivet av motparten.':'E-post kunde inte skickas. Försök igen.');}
-        else if(action==='confirm'){var files=await api('/api/agreements/'+row.id+'/files');if(!files.files.length)throw new Error('Ladda först upp det returnerade, underskrivna avtalet i arkivet.');var fid=prompt('Ange fil-ID för kontrollerat underskrivet avtal:\n'+files.files.map(f=>f.id+': '+f.filename).join('\n'));if(fid&&confirm('Jag har kontrollerat att båda parter undertecknat rätt, oförändrad avtalsversion.'))adopt(await api('/api/workflow/'+row.id+'/confirm-countersign','POST',{fileId:Number(fid),expectedRevision:current.revision,confirmed:true}));}
       }catch(e){
         // Keep the error beside the clicked proposal, even after re-rendering its server state.
         if(current&&current.id===row.id){try{await refresh(row.id);}catch(_){} }
@@ -344,6 +350,24 @@ window.WorkflowHardNoDialog = (function () {
       }};});
   }
   function message(text,bad){actionMessage=text;var el=document.getElementById('wf_message');if(el){el.textContent=text;el.className=bad?'wf-warning':'wf-note';}else alert(text);}
+  function fmtWhen(iso){return iso?String(iso).slice(0,16).replace('T',' '):'';}
+  // The counterparty's signed copy came by email instead of through their link: the seller uploads it
+  // here and the agreement moves on to the CEO. Not awaited by the click handler, since a cancelled
+  // file dialog never fires change.
+  function uploadSignedCopy(row){
+    var input=document.createElement('input');input.type='file';input.accept='.pdf,.docx,.doc,.png,.jpg,.jpeg';
+    input.onchange=async function(){
+      var file=input.files&&input.files[0];if(!file)return;
+      try{
+        if(window.UploadLimits&&file.size>window.UploadLimits.MAX_FILE_BYTES)throw new Error('Filen är större än '+window.UploadLimits.MAX_FILE_LABEL+'.');
+        var signer=prompt('Vem har signerat för motparten? (namn)',row.data.sig_name||'');if(!signer||!signer.trim())return;
+        var r=await fetch('/api/agreements/'+row.id+'/files',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Signer-Name':encodeURIComponent(signer.trim())},body:file});
+        var j=await r.json();if(!r.ok)throw new Error(j.error||'Uppladdningen misslyckades.');
+        await refresh(row.id);message('Motpartens signerade kopia är registrerad. '+(window._signerName||'VD')+' har fått en begäran om underskrift.');
+      }catch(e){message(e.message,true);}
+    };
+    input.click();
+  }
   async function invite(type){
     var email=gv(type+'_inv_email')||(current&&current.state.sent&&current.state.sent.email)||'';if(!email)email=prompt('Kundens e-postadress:')||'';if(!email)return;
     var row=await window.wfEnsure(type);
@@ -355,12 +379,61 @@ window.WorkflowHardNoDialog = (function () {
   window.wfDecisionRefresh=function(){if(window._editing&&window._editing.workflow)return refresh(window._editing.id);return Promise.resolve();};
   // Start straight from a saved archive record, including links sent after customer submission.
   async function openHash(){var m=location.hash.match(/^#workflow=(\d+)$/);if(!m)return;try{var u=await api('/api/auth/me');window._authUser=u.user;window._archiveEnabled=true;window._isAdmin=!!u.user.isAdmin;window._isSigner=!!u.user.isSigner;var row=await api('/api/workflow/'+m[1]);switchTab(row.type==='da'?0:row.type==='ra'?1:2);adopt(row);}catch(e){alert('Logga in och öppna avtalet i arkivet. '+e.message);}}
+  // The counterparty's page (#agreementcopy=id.token): download the frozen agreement, upload the
+  // signed copy, and later download the fully signed version. Public and in English; no sign-in.
   async function copyView(){var m=location.hash.match(/^#agreementcopy=(\d+)\.([A-Za-z0-9_-]+)$/);if(!m)return;
-    try{var v=await api('/api/public-agreements/'+m[1]+'?token='+encodeURIComponent(m[2]));var shell=document.querySelector('.shell');shell.textContent='';var card=document.createElement('section');card.className='card';
-      var title=document.createElement('h2');title.textContent='Avtal för underskrift — '+(v.data.name||'')+' · version '+v.version;card.appendChild(title);
-      var text=document.createElement('p');text.textContent='Ladda ned och kontrollera avtalet. Underteckna och returnera den undertecknade kopian till er kontaktperson på Vendora. Den här sidan registrerar inte en underskrift.';card.appendChild(text);
-      var button=document.createElement('button');button.textContent='Ladda ned avtalet (.docx)';button.onclick=function(){downloadAgreementData(v.type,v.data);};card.appendChild(button);shell.appendChild(card);
-    }catch(e){alert(e.message);}}
+    var shell=document.querySelector('.shell');['.topbar','.tabs','.genbar'].forEach(function(sel){var hidden=document.querySelector(sel);if(hidden)hidden.style.display='none';});
+    function el(tag,text,cls){var n=document.createElement(tag);if(text)n.textContent=text;if(cls)n.className=cls;return n;}
+    function when(iso){return iso?String(iso).slice(0,16).replace('T',' ')+' UTC':'';}
+    async function load(){paint(await api('/api/public-agreements/'+m[1]+'?token='+encodeURIComponent(m[2])));}
+    function paint(v){
+      shell.textContent='';var card=el('section','','card wf-public');card.setAttribute('data-public-status',v.status);
+      var type=v.type==='da'?'Distributor Agreement':'Reseller Agreement';
+      card.appendChild(el('div','Vendora Nordic AB','wf-public-kicker'));
+      card.appendChild(el('h2',type+' — '+(v.name||'')+(v.version?' · version '+v.version:'')));
+      var download=el('button',v.status==='signed'?'Download the signed agreement (.docx)':'Download the agreement (.docx)','wf-public-primary');download.type='button';download.id='wf-public-download';
+      download.onclick=function(){downloadAgreementData(v.type,JSON.parse(JSON.stringify(v.data)));};
+      if(v.status==='sent'){
+        card.appendChild(el('p','Vendora Nordic AB has approved the final version of this agreement. Please download it, give it a final check and sign it, then upload the signed copy below. Vendora\'s CEO countersigns, and you will receive an email with the fully signed agreement ready for download.'));
+        card.appendChild(download);
+        var form=el('div','','wf-public-upload');form.appendChild(el('h3','Upload your signed copy'));
+        var nameLabel=el('label','Name of the person who signed');nameLabel.htmlFor='wf-signer-name';form.appendChild(nameLabel);
+        var name=document.createElement('input');name.id='wf-signer-name';name.type='text';name.maxLength=200;name.value=v.data.sig_name||'';form.appendChild(name);
+        var fileLabel=el('label','Signed agreement (PDF, Word, PNG or JPEG, up to '+(window.UploadLimits?window.UploadLimits.MAX_FILE_LABEL:'50 MB')+')');fileLabel.htmlFor='wf-signed-file';form.appendChild(fileLabel);
+        var file=document.createElement('input');file.id='wf-signed-file';file.type='file';file.accept='.pdf,.docx,.doc,.png,.jpg,.jpeg';form.appendChild(file);
+        var send=el('button','Upload signed copy','wf-public-primary');send.type='button';send.id='wf-upload-signed';form.appendChild(send);
+        var status=el('p','','wf-note');status.id='wf-public-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');form.appendChild(status);
+        send.onclick=async function(){
+          var f=file.files&&file.files[0];
+          if(!name.value.trim()){status.textContent='Enter the name of the person who signed.';status.className='wf-warning';return;}
+          if(!f){status.textContent='Choose the signed file first.';status.className='wf-warning';return;}
+          if(window.UploadLimits&&f.size>window.UploadLimits.MAX_FILE_BYTES){status.textContent='The file is larger than '+window.UploadLimits.MAX_FILE_LABEL+'.';status.className='wf-warning';return;}
+          send.disabled=true;status.className='wf-note';status.textContent='Uploading…';
+          try{
+            var r=await fetch('/api/public-agreements/'+m[1]+'/signed-copy?token='+encodeURIComponent(m[2]),{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream','X-Filename':encodeURIComponent(f.name),'X-Signer-Name':encodeURIComponent(name.value.trim())},body:f});
+            var j=await r.json();if(!r.ok)throw new Error(j.error||'The upload failed. Please try again.');
+            await load();
+          }catch(e){send.disabled=false;status.textContent=e.message;status.className='wf-warning';}
+        };
+        card.appendChild(form);
+      }else if(v.status==='pending_signature'){
+        card.appendChild(el('p','Thank you. Your signed copy'+(v.counterparty&&v.counterparty.filename?' ('+v.counterparty.filename+')':'')+' was received'+(v.counterparty?' on '+when(v.counterparty.signedAt)+', signed by '+(v.counterparty.by||'')+'.':'.')+' Vendora\'s CEO is countersigning; you will receive an email when the fully signed agreement is ready for download.','wf-public-ok'));
+        card.appendChild(download);
+      }else{
+        card.appendChild(el('p','This agreement is signed by both parties.','wf-public-ok'));
+        var list=el('ul','','wf-public-signatures');
+        if(v.counterparty)list.appendChild(el('li','Signed for '+(v.name||'the counterparty')+' by '+(v.counterparty.by||'')+' on '+when(v.counterparty.signedAt)));
+        if(v.vendora)list.appendChild(el('li','Signed for Vendora Nordic AB by '+(v.vendora.by||'')+', '+(v.vendora.title||'CEO')+', on '+when(v.vendora.signedAt)));
+        card.appendChild(list);
+        card.appendChild(el('p','Download your copy below. Vendora\'s electronic signature is stamped in the signature block.'));
+        card.appendChild(download);
+      }
+      card.appendChild(el('p','Questions? Reply to the email you received from Vendora.','wf-note'));
+      shell.appendChild(card);
+    }
+    try{await load();}catch(e){shell.textContent='';var card=el('section','','card wf-public');card.appendChild(el('h2','This link is not available'));card.appendChild(el('p',e.message));shell.appendChild(card);}
+  }
   window.addEventListener('hashchange',openHash);window.addEventListener('hashchange',copyView);openHash();copyView();
+  var publicStyle=document.createElement('style');publicStyle.textContent='.wf-public{max-width:720px;margin:30px auto}.wf-public-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}.wf-public-upload{margin-top:22px;padding-top:16px;border-top:1px solid var(--border)}.wf-public-upload label{display:block;margin:12px 0 6px;font-size:13px}.wf-public-upload input[type=text]{width:100%;max-width:420px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font:inherit;box-sizing:border-box}.wf-public-primary{display:block;margin-top:12px;padding:10px 18px;cursor:pointer}.wf-public-ok{background:#e6f2ea;border:1px solid #b7dfc3;border-radius:8px;padding:12px 14px;line-height:1.5}.wf-public-signatures{margin:10px 0 0 18px;line-height:1.6}';document.head.appendChild(publicStyle);
   var style=document.createElement('style');style.textContent='.wf-progress{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.wf-progress span{padding:8px 12px;border:1px solid var(--border);border-radius:20px;font-size:12px}.wf-progress [aria-current]{background:var(--navy);color:#fff}.wf-item{border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:14px}.wf-item-title{display:flex;gap:15px;justify-content:space-between}.wf-item-title span{font-size:12px;font-weight:600}.wf-line{margin-top:10px;white-space:pre-wrap;line-height:1.5}.wf-diff{padding:12px;margin:12px 0;background:#f7f8fa;white-space:pre-wrap;line-height:1.6}.wf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.wf-actions button{padding:8px 13px;cursor:pointer}.wf-actions button:disabled{opacity:.45;cursor:not-allowed}.wf-note{font-size:12px;line-height:1.5;color:var(--muted);margin-top:12px}.wf-warning{color:#964514;font-size:13px;margin:12px 0}.wf-check{margin:14px 0;padding:12px;background:#f8f0df}';document.head.appendChild(style);
 })();
