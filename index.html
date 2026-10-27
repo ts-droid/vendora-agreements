@@ -25777,6 +25777,9 @@ function initApp(){
   var path = window.location.pathname, hash = window.location.hash;
   var isFillOrReview = path.indexOf("/i/")===0 || (hash && (hash.indexOf("#fill=")===0 || hash.indexOf("#review=")===0));
   if (isFillOrReview) { checkFillMode(); return; }   // counterparty / review flows never require login
+  // The counterparty's signing page (#agreementcopy=id.token) is public too: workflow-ui.js renders
+  // it from the token-protected API, so never put the Vendora sign-in overlay over it.
+  if (hash && hash.indexOf("#agreementcopy=")===0) return;
   fetch("/api/config").then(function(r){return r.json();}).then(function(cfg){
     window._archiveEnabled = !!(cfg && cfg.archive);
     window._googleClientId = (cfg && cfg.googleClientId) || null;
