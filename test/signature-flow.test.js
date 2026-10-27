@@ -88,6 +88,33 @@ test('counterparty signs first, the CEO countersigns last', {skip:!url?'TEST_DAT
     assert.equal((await api('/api/public-agreements/'+made2.id+'?token='+token3,'GET',undefined,null)).status,404);
     await good('/api/agreements/'+made2.id,'PUT',{data:{...data,pay:'60'}});
 
+    // Electronic signature on the signing page: validation, then one signature with a drawn image.
+    const made3=await good('/api/agreements','POST',{type:'ra',data,status:'generated',counterpartyName:data.name});ids.push(made3.id);
+    const sent4=await good('/api/agreements/'+made3.id+'/send-for-signature','POST',{});const token4=sent4.link.match(/\.([A-Za-z0-9_-]+)$/)[1];
+    const esign=(body,q='?token='+token4,h)=>api('/api/public-agreements/'+made3.id+'/sign'+q,'POST',body,null,h);
+    const signerBody={name:'Jane Signer',email:'jane@counterparty.example.test',confirmed:true};
+    assert.equal((await esign(signerBody,'?token=wrong')).status,404);
+    assert.equal((await esign({...signerBody,name:'J'})).status,400);
+    assert.equal((await esign({...signerBody,email:'nope'})).status,400);
+    assert.equal((await esign({...signerBody,confirmed:false})).status,400);
+    assert.equal((await esign({...signerBody,image:'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='})).status,400);
+    const png='data:image/png;base64,'+Buffer.from('fake png bytes for the test 1234567890').toString('base64');
+    const signedE=await esign({...signerBody,title:'CEO',image:png},undefined,{'User-Agent':'TestBrowser/1.0'});
+    assert.equal(signedE.status,200,JSON.stringify(signedE.body));assert.equal(signedE.body.status,'pending_signature');
+    assert.equal((await esign(signerBody)).status,409);
+    const rowE=(await good('/api/agreements/'+made3.id)).agreement;assert.equal(rowE.status,'pending_signature');assert.equal(rowE.counterparty_signed_by,'Jane Signer');assert.equal(rowE.counterparty_signed_file,null);
+    const stampE=rowE.data._counterpartySignature;assert.equal(stampE.method,'electronic');assert.equal(stampE.title,'CEO');assert.equal(stampE.image,png);assert.ok(stampE.ip);assert.equal(stampE.userAgent,'TestBrowser/1.0');assert.equal(stampE.digest.length,16);
+    const pubE=await good('/api/public-agreements/'+made3.id+'?token='+token4,'GET',undefined,null);assert.equal(pubE.counterparty.method,'electronic');assert.equal(pubE.counterparty.title,'CEO');assert.equal(pubE.data._counterpartySignature.name,'Jane Signer');
+    assert.match(lastMail(m=>m.to==='signer@vendora.se').html,/electronically on the signing page/);
+    await good('/api/agreements/'+made3.id+'/sign','POST',{},signer);
+    const doneE=(await good('/api/agreements/'+made3.id)).agreement;assert.equal(doneE.status,'signed');assert.equal(doneE.data._counterpartySignature.name,'Jane Signer');assert.equal(doneE.data._vendoraSignature.title,'CEO');
+    // Withdrawing a signed-electronically agreement voids the stamp too.
+    await good('/api/agreements/'+made3.id+'/withdraw','POST',{});
+    assert.equal((await good('/api/agreements/'+made3.id)).agreement.data._counterpartySignature,undefined);
+    // A client can never plant a counterparty signature through a save.
+    const forged=await good('/api/agreements','POST',{type:'ra',data:{...data,_counterpartySignature:{name:'Forged',at:'2026-01-01T00:00:00Z'}},status:'draft',counterpartyName:data.name});ids.push(forged.id);
+    assert.equal((await good('/api/agreements/'+forged.id)).agreement.data._counterpartySignature,undefined);
+
     // Paper flow for imports is unchanged: an upload means fully signed.
     const imported=await good('/api/agreements','POST',{type:'ra',data,status:'imported',counterpartyName:data.name});ids.push(imported.id);
     const paper=await good('/api/agreements/'+imported.id+'/files','POST',Buffer.from('%PDF-1.4 paper'),owner,{'Content-Type':'application/pdf','X-Filename':'paper.pdf'});assert.equal(paper.status,'signed');

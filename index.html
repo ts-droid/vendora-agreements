@@ -24077,19 +24077,21 @@ function docxHelpers() {
   }
 
   // lStamp (optional): Vendora's electronic approval {date,text} — filled into Vendora's box.
-  function sigTable(lName,lSub,rName,rSub,lFill,rFill,lStamp){
+  function sigTable(lName,lSub,rName,rSub,lFill,rFill,lStamp,rStamp){
+    // A stamp is {date, text, place?, image?}: Vendora's in-app approval on the left, the
+    // counterparty's electronic signature (optionally drawn) on the right.
     function sigBox(name,sub,fill,stamp){
-      return new d.TableCell({borders:bA,shading:{fill:fill,type:d.ShadingType.CLEAR},width:{size:4453,type:d.WidthType.DXA},margins:{top:180,bottom:260,left:180,right:180},children:[
-        par([{t:name,b:true,c:BL}]),sp(),
-        par(stamp ? "Place and date: Lomma, "+stamp.date : "Place and date:"),
-        stamp ? par([{t:"✔ "+stamp.text,i:true,sz:17,c:"155724"}]) : sp(),
-        new d.Paragraph({border:{bottom:{style:d.BorderStyle.SINGLE,size:4,color:"AAAAAA",space:1}},spacing:{before:stamp?200:420,after:35},children:[]}),
-        par([{t:sub,sz:15,c:"888888"}])
-      ]});
+      var kids=[par([{t:name,b:true,c:BL}]),sp(),
+        par(stamp ? (stamp.place ? "Place and date: "+stamp.place+", "+stamp.date : "Date: "+stamp.date) : "Place and date:")];
+      if (stamp && stamp.image) kids.push(new d.Paragraph({spacing:{before:60,after:40},children:[new d.ImageRun({type:"png",data:stamp.image,transformation:{width:170,height:52}})]}));
+      kids.push(stamp ? par([{t:"✔ "+stamp.text,i:true,sz:17,c:"155724"}]) : sp());
+      kids.push(new d.Paragraph({border:{bottom:{style:d.BorderStyle.SINGLE,size:4,color:"AAAAAA",space:1}},spacing:{before:stamp?200:420,after:35},children:[]}));
+      kids.push(par([{t:sub,sz:15,c:"888888"}]));
+      return new d.TableCell({borders:bA,shading:{fill:fill,type:d.ShadingType.CLEAR},width:{size:4453,type:d.WidthType.DXA},margins:{top:180,bottom:260,left:180,right:180},children:kids});
     }
     return new d.Table({width:{size:W,type:d.WidthType.DXA},columnWidths:[4453,600,4453],
       borders:{top:bN,bottom:bN,left:bN,right:bN,insideH:bN,insideV:bN},
-      rows:[new d.TableRow({children:[sigBox(lName,lSub,lFill,lStamp),new d.TableCell({borders:bN,width:{size:600,type:d.WidthType.DXA},children:[sp()]}),sigBox(rName,rSub,rFill,null)]})]
+      rows:[new d.TableRow({children:[sigBox(lName,lSub,lFill,lStamp),new d.TableCell({borders:bN,width:{size:600,type:d.WidthType.DXA},children:[sp()]}),sigBox(rName,rSub,rFill,rStamp||null)]})]
     });
   }
 
@@ -24484,7 +24486,7 @@ async function buildDA(overrideData) {
     clauseItemsNode(h, "da.s20.p1", "This Agreement is governed by and construed in accordance with Swedish law, without regard to its conflict of law provisions. Disputes shall first be resolved through good-faith negotiations. If not resolved within thirty (30) days of a written request, the Parties agree to submit to SCC mediation, unless one Party objects. If mediation fails, the dispute shall be finally settled by SCC arbitration. Rules for Expedited Arbitrations apply unless the SCC determines otherwise. Seat: Malm\u00f6. Language: English.", {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
-    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE SUPPLIER]","[Authorised signatory / name]",h.LITE,h.GREY,vendoraStamp(data)),
+    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE SUPPLIER]","[Authorised signatory / name]",h.LITE,h.GREY,vendoraStamp(data),counterpartyStamp(data)),
     h.pgBrk(),
     // Appendix 1
     h.appHdr("APPENDIX 1 — SUPPLIER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
@@ -24679,7 +24681,7 @@ async function buildRA(overrideData) {
     clauseNode(h, "ra.s17.law", LawyerChanges.standardClauseText("ra", "ra.s17.law", data), null, {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
-    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")):"[Authorised signatory / name]"),h.LITE,h.GREY,vendoraStamp(data)),
+    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO",data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")):"[Authorised signatory / name]"),h.LITE,h.GREY,vendoraStamp(data),counterpartyStamp(data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
     h.h2("A   Products and Territory"),
@@ -24760,7 +24762,7 @@ async function buildRB(overrideData) {
     h.h1("7   Governing Law",{keepNext:true}),clauseItemsNode(h, "rb.s7.p1", "Swedish law. SCC arbitration, seat Malmö, language English.", {keepNext:true}),
     h.sp(),h.sp(),
     ...lawyerBodyExtras(h),
-    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY,vendoraStamp(data)),
+    h.sigTable("VENDORA NORDIC AB","Andreas Höynälä, CEO — "+dt,data.name||"[THE RESELLER]",(data.sig_name?(data.sig_name+(data.sig_title?", "+data.sig_title:"")+" — "+dt):"[Authorised signatory] — "+dt),h.LITE,h.GREY,vendoraStamp(data),counterpartyStamp(data)),
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS",h.NAVY),h.sp(),
     h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),h.fldRow("Shipping terms",data.inco+" "+(data.incoplace||"Vendora Nordic AB, Lomma, Sweden")),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
@@ -25878,9 +25880,9 @@ var GUIDE = {
     { short:"Decide & save", t:"Decide on their proposals and save",
       b:"<em>Accept</em> or <em>Keep mine</em> on each proposal updates the agreement details right away. Click <em>Save</em> to store the agreed version in the archive, or <em>Generate &amp; Download</em> for a Word copy." },
     { short:"Send to sign", t:"Approve &amp; send for signature",
-      b:"Click <em>Approve &amp; send for signature</em>. You see the cover sheet with the key terms and every deviation, confirm the recipient, and the customer gets a link to download the final agreement, sign it and upload the signed copy. The agreement is locked meanwhile." },
+      b:"Click <em>Approve &amp; send for signature</em>. You see the cover sheet with the key terms and every deviation, confirm the recipient, and the customer gets a link to download the final agreement and sign it electronically on the page (typed name and title, optional drawn signature), or upload a signed paper copy. The agreement is locked meanwhile." },
     { short:"{CEO} signs", t:"{CEO} countersigns",
-      b:"When the signed copy arrives it is stored in the archive and {CEO} gets an email. {CEO} countersigns in the app (or returns it with a comment), the status becomes <em>Fully signed</em>, and the customer is emailed a link to download the signed agreement." },
+      b:"When the customer has signed, the signature (or the uploaded copy) is stored in the archive and {CEO} gets an email. {CEO} countersigns in the app (or returns it with a comment), the status becomes <em>Fully signed</em>, and the customer is emailed a link to download the signed agreement with both signatures in the signature block." },
     { short:"By email?", t:"Signed copy came by email?",
       b:"Upload it on the agreement's row in the archive or in the signing view. That registers the signature the same way and sends it on to {CEO}." }
   ],
@@ -26339,8 +26341,18 @@ function downloadCoverSheet(a){
 // Vendora's electronic approval, rendered in the signature block of every exported .docx.
 function vendoraStamp(data){
   var s = data && data._vendoraSignature; if (!s || !s.at) return null;
-  return { date: String(s.at).slice(0,10),
+  return { date: String(s.at).slice(0,10), place: "Lomma",
     text: "Signed electronically by "+(s.name||"")+", "+(s.title||"CEO")+" on "+String(s.at).slice(0,10)+" (approved in Vendora Agreements)" };
+}
+// The counterparty's electronic signature from the signing page, with the drawn signature if given.
+function counterpartyStamp(data){
+  var s = data && data._counterpartySignature; if (!s || !s.at) return null;
+  var bytes = null;
+  if (s.image && /^data:image\/png;base64,/.test(s.image)) {
+    try { var bin = atob(s.image.split(",")[1]); bytes = new Uint8Array(bin.length); for (var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); } catch(e){ bytes = null; }
+  }
+  return { date: String(s.at).slice(0,10), image: bytes,
+    text: "Signed electronically by "+(s.name||"")+(s.title?", "+s.title:"")+" on "+String(s.at).slice(0,10)+" via Vendora Agreements"+(s.ip?" (IP "+s.ip+")":"") };
 }
 
 /* ── CEO signature workflow UI ── */
@@ -26441,7 +26453,10 @@ function renderSigningView(a){
   var html = sigHeader(kicker, a, meta.join(" &nbsp;·&nbsp; "));
   function note(bg,border,fg,inner){ return "<div style='background:"+bg+";border:1px solid "+border+";color:"+fg+";border-radius:6px;padding:10px 14px;margin-top:14px;font-size:13px'>"+inner+"</div>"; }
   if (sent) html += note("#e7f1f6","#b9d3e0","#245c73","&#9993;&#65039; Signing link sent to <strong>"+esc(a.counterparty_email||"")+"</strong>"+(a.signature_sent_at?" on "+esc(fmtWhen(a.signature_sent_at)):"")+". "+esc(cp)+" downloads, signs and uploads the signed copy; it then comes to "+esc(signer)+" for countersignature. The content is locked meanwhile.");
-  if (a.counterparty_signed_at) html += note("#d4edda","#b7dfc3","#155724","&#10004; <strong>Signed for "+esc(cp)+"</strong> by "+esc(a.counterparty_signed_by||"")+" on "+esc(fmtWhen(a.counterparty_signed_at))+(a.counterparty_signed_file?" — <a href='/api/agreements/"+a.id+"/files/"+a.counterparty_signed_file+"' style='color:#155724;font-weight:600'>download the signed copy</a>":""));
+  var cs = d._counterpartySignature && d._counterpartySignature.at ? d._counterpartySignature : null;
+  if (a.counterparty_signed_at) html += note("#d4edda","#b7dfc3","#155724","&#10004; <strong>Signed for "+esc(cp)+"</strong> by "+esc(a.counterparty_signed_by||"")+(cs&&cs.title?", "+esc(cs.title):"")+" on "+esc(fmtWhen(a.counterparty_signed_at))
+    + (cs ? " — electronically on the signing page ("+esc(cs.email||"")+(cs.ip?", IP "+esc(cs.ip):"")+")"+(cs.image?"<div style='margin-top:6px'><img src='"+esc(cs.image)+"' alt='Drawn signature' style='max-height:48px;background:#fff;border:1px solid #b7dfc3;border-radius:4px;padding:2px 6px'></div>":"")
+      : (a.counterparty_signed_file?" — <a href='/api/agreements/"+a.id+"/files/"+a.counterparty_signed_file+"' style='color:#155724;font-weight:600'>download the signed copy</a>":"")));
   if (signedV) html += note("#d4edda","#b7dfc3","#155724","&#10004; <strong>Signed electronically for Vendora</strong> by "+esc(a.vendora_signed_by||"")+" on "+esc(fmtWhen(a.vendora_signed_at))+" — stamped in the agreement's signature block."+(done?" "+esc(cp)+" has been emailed a link to download the signed agreement.":""));
   html += "<h3 style='margin:18px 0 8px;font-size:14px'>Cover sheet</h3>"+coverSheetHtml(summary);
   html += "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:16px'>"

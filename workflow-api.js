@@ -40,7 +40,7 @@ function install(app, deps) {
       if(hardNo.isHardNo(item))item.hardNoReview=hardNo.context(row,item);
     }
     return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at,signedBy:row.vendora_signed_by,
-      counterparty:row.counterparty_signed_at?{signedAt:row.counterparty_signed_at,by:row.counterparty_signed_by,fileId:row.counterparty_signed_file}:null,signatureEmail:row.counterparty_email||null,signatureSentAt:row.signature_sent_at||null};}
+      counterparty:row.counterparty_signed_at?{signedAt:row.counterparty_signed_at,by:row.counterparty_signed_by,fileId:row.counterparty_signed_file,method:row.data&&row.data._counterpartySignature?'electronic':'uploaded'}:null,signatureEmail:row.counterparty_email||null,signatureSentAt:row.signature_sent_at||null};}
   async function load(req){const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);if(!owned(req,r.rows[0]))throw core.error('Avtalet finns inte.',404);return r.rows[0];}
   app.get('/api/workflow/:id',auth.requireAuth,wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(view(await load(req)));}));
   app.post('/api/workflow/:id/start',auth.requireAuth,wrap(async(req,res)=>{
@@ -199,13 +199,14 @@ function install(app, deps) {
   };
   // The counterparty's signed copy is in (through their link, or uploaded by the seller): record it
   // against the frozen version and hand the agreement to the CEO. Called by server.js; no mail here.
-  methods.counterpartySigned=async(id,file,signerName)=>db.withTransaction(async c=>{
+  methods.counterpartySigned=async(id,file,signerName,stamp)=>db.withTransaction(async c=>{
     const r=await c.query('SELECT * FROM agreements WHERE id=$1 FOR UPDATE',[id]);const row=r.rows[0];
     const s=core.copy(core.state(row));
     if(row.status!=='sent'||!s.signatureShare)throw core.error('This agreement is not awaiting the counterparty\'s signature.');
-    s.counterpartySignature={fileId:Number(file.id),by:signerName,at:when(),version:s.signatureShare.version,verification:'uploaded'};
-    await c.query('UPDATE agreements SET counterparty_signed_at=now(),counterparty_signed_by=$1,counterparty_signed_file=$2 WHERE id=$3',[signerName,file.id,row.id]);
-    await write(c,row,row.data,s,signerName+' (counterparty)','counterparty-signed','pending_signature');
+    s.counterpartySignature={fileId:file?Number(file.id):null,by:signerName,at:when(),version:s.signatureShare.version,verification:stamp?'electronic':'uploaded'};
+    const data=core.copy(row.data);if(stamp)data._counterpartySignature=stamp;else delete data._counterpartySignature;
+    await c.query('UPDATE agreements SET counterparty_signed_at=now(),counterparty_signed_by=$1,counterparty_signed_file=$2 WHERE id=$3',[signerName,file?file.id:null,row.id]);
+    await write(c,row,data,s,signerName+' (counterparty)','counterparty-signed','pending_signature');
     return (await c.query('SELECT status,status_updated_at,workflow_revision FROM agreements WHERE id=$1',[row.id])).rows[0];
   });
   methods.withdraw=async(req,res)=>{
@@ -213,7 +214,7 @@ function install(app, deps) {
       const s=core.copy(core.state(row)),data=core.copy(row.data);
       if(!['sent','pending_signature','vendora_signed','signed','invited'].includes(row.status))throw core.error('Avtalet är inte låst.');
       if(req.body.expectedRevision!==undefined)core.checkVersion(row,req.body.expectedRevision);
-      delete data._vendoraSignature;s.approval=null;s.signatureShare=null;s.counterpartySignature=null;
+      delete data._vendoraSignature;delete data._counterpartySignature;s.approval=null;s.signatureShare=null;s.counterpartySignature=null;
       await c.query(`UPDATE agreements SET vendora_signed_by=NULL,vendora_signed_email=NULL,vendora_signed_at=NULL,update_token=NULL,signature_note=$1,
         signature_token=NULL,counterparty_signed_at=NULL,counterparty_signed_by=NULL,counterparty_signed_file=NULL WHERE id=$2`,[String(req.body.note||'Återkallat till granskning').slice(0,2000),row.id]);
       return write(c,row,data,s,who(req),'withdraw-to-review','submitted');

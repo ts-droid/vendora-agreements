@@ -24,7 +24,7 @@ function checkVersion(row, version) { if (!Number.isInteger(version)||version!==
 function editable(row) { if (['pending_signature','vendora_signed','signed','sent'].includes(row.status)||row.vendora_signed_at) throw error('Avtalet är låst för godkännande eller underskrift. Återkalla först.'); }
 function ensureType(data) { if(!data||!TYPES.includes(data._type))throw error('Välj rätt avtalstyp.',400); }
 function stripTransient(data) { const out=copy(data||{});['_atok','_aid','_review','_trackChanges','_isPreview','_revision','_sentVersion'].forEach(k=>delete out[k]); return out; }
-function standard(data) { const d=stripTransient(data);EDIT_KEYS.concat(['_proposals','_accepted','_vendoraSignature']).forEach(k=>delete d[k]);return d; }
+function standard(data) { const d=stripTransient(data);EDIT_KEYS.concat(['_proposals','_accepted','_vendoraSignature','_counterpartySignature']).forEach(k=>delete d[k]);return d; }
 function benchmark(data) {
   const label=data._type==='da'?'DISTRIBUTOR AGREEMENT':'RESELLER AGREEMENT'+(data._type==='rb'?' — SIMPLIFIED':'');
   return label+'\nVendora standard template\n'+clauses.catalog(data._type).filter(c=>c.when(data)).map(c=>c.label+'\n'+c.render(data)).join('\n\n');

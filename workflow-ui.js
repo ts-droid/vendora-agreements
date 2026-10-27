@@ -393,10 +393,46 @@ window.WorkflowHardNoDialog = (function () {
       card.appendChild(el('h2',type+' — '+(v.name||'')+(v.version?' · version '+v.version:'')));
       var download=el('button',v.status==='signed'?'Download the signed agreement (.docx)':'Download the agreement (.docx)','wf-public-primary');download.type='button';download.id='wf-public-download';
       download.onclick=function(){downloadAgreementData(v.type,JSON.parse(JSON.stringify(v.data)));};
+      var cs=v.data._counterpartySignature&&v.data._counterpartySignature.at?v.data._counterpartySignature:null;
+      function signatureLine(prefix){var who=(cs?cs.name+(cs.title?', '+cs.title:''):(v.counterparty&&v.counterparty.by)||'');var how=cs?' electronically':(v.counterparty&&v.counterparty.filename?' ('+v.counterparty.filename+')':'');return prefix+who+how+(v.counterparty?' on '+when(v.counterparty.signedAt):'');}
+      function signatureImage(){if(!cs||!cs.image||!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(cs.image))return null;var img=document.createElement('img');img.src=cs.image;img.alt='Drawn signature';img.className='wf-sign-image';return img;}
       if(v.status==='sent'){
-        card.appendChild(el('p','Vendora Nordic AB has approved the final version of this agreement. Please download it, give it a final check and sign it, then upload the signed copy below. Vendora\'s CEO countersigns, and you will receive an email with the fully signed agreement ready for download.'));
+        card.appendChild(el('p','Vendora Nordic AB has approved the final version of this agreement. Please download it and give it a final check, then sign below. Vendora\'s CEO countersigns, and you will receive an email with the fully signed agreement ready for download.'));
         card.appendChild(download);
-        var form=el('div','','wf-public-upload');form.appendChild(el('h3','Upload your signed copy'));
+        // Electronic signature: the primary way to sign.
+        var sign=el('div','','wf-public-sign');sign.appendChild(el('h3','Sign electronically'));
+        sign.appendChild(el('p','Type your name and title, draw your signature if you like, and confirm. Your name, title, email, the time, your IP address and the exact version you sign are recorded, and your signature appears in the agreement\'s signature block. This is an electronic signature (eIDAS); no printing needed.','wf-note'));
+        function field(id,label,value,type){var l=el('label',label);l.htmlFor=id;sign.appendChild(l);var i=document.createElement('input');i.id=id;i.type=type||'text';i.maxLength=200;i.value=value||'';sign.appendChild(i);return i;}
+        var sName=field('wf-sign-name','Full name',v.data.sig_name),sTitle=field('wf-sign-title','Title / position',v.data.sig_title),sEmail=field('wf-sign-email','Email',v.data.sig_email,'email');
+        var padLabel=el('label','Signature (draw with your mouse or finger — optional)');padLabel.htmlFor='wf-sign-pad';sign.appendChild(padLabel);
+        var pad=document.createElement('canvas');pad.id='wf-sign-pad';pad.width=720;pad.height=220;pad.className='wf-sign-pad';pad.setAttribute('role','img');pad.setAttribute('aria-label','Signature pad');sign.appendChild(pad);
+        var tools=el('div','','wf-sign-tools');var clear=el('button','Clear','wf-public-secondary');clear.type='button';clear.id='wf-sign-clear';tools.appendChild(clear);sign.appendChild(tools);
+        var drawn=false,drawing=false,ctx=pad.getContext('2d');ctx.lineWidth=3;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#15302a';
+        function pos(ev){var r=pad.getBoundingClientRect();return {x:(ev.clientX-r.left)*pad.width/r.width,y:(ev.clientY-r.top)*pad.height/r.height};}
+        pad.addEventListener('pointerdown',function(ev){drawing=true;drawn=true;try{pad.setPointerCapture(ev.pointerId);}catch(_){}var p0=pos(ev);ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p0.x+0.1,p0.y+0.1);ctx.stroke();ev.preventDefault();});
+        pad.addEventListener('pointermove',function(ev){if(!drawing)return;var p1=pos(ev);ctx.lineTo(p1.x,p1.y);ctx.stroke();ev.preventDefault();});
+        function stop(){drawing=false;}pad.addEventListener('pointerup',stop);pad.addEventListener('pointercancel',stop);pad.addEventListener('pointerleave',stop);
+        clear.onclick=function(){ctx.clearRect(0,0,pad.width,pad.height);drawn=false;};
+        var confirmLabel=el('label','','wf-sign-confirm');var confirmBox=document.createElement('input');confirmBox.type='checkbox';confirmBox.id='wf-sign-confirm';confirmLabel.appendChild(confirmBox);
+        confirmLabel.appendChild(document.createTextNode(' I am authorised to sign on behalf of '+(v.name||'the counterparty')+', I have read the agreement'+(v.version?' (version '+v.version+')':'')+' and I agree to be bound by it. I understand that this is an electronic signature.'));sign.appendChild(confirmLabel);
+        var signBtn=el('button','Sign the agreement','wf-public-primary');signBtn.type='button';signBtn.id='wf-sign-submit';sign.appendChild(signBtn);
+        var signStatus=el('p','','wf-note');signStatus.id='wf-sign-status';signStatus.setAttribute('role','status');signStatus.setAttribute('aria-live','polite');sign.appendChild(signStatus);
+        signBtn.onclick=async function(){
+          if(sName.value.trim().length<2){signStatus.textContent='Enter the full name of the person signing.';signStatus.className='wf-warning';return;}
+          if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sEmail.value.trim())){signStatus.textContent='Enter the signer\'s email address.';signStatus.className='wf-warning';return;}
+          if(!confirmBox.checked){signStatus.textContent='Tick the confirmation to sign.';signStatus.className='wf-warning';return;}
+          signBtn.disabled=true;signStatus.className='wf-note';signStatus.textContent='Recording your signature…';
+          try{
+            var body={name:sName.value.trim(),title:sTitle.value.trim(),email:sEmail.value.trim(),confirmed:true};if(drawn)body.image=pad.toDataURL('image/png');
+            var r=await fetch('/api/public-agreements/'+m[1]+'/sign?token='+encodeURIComponent(m[2]),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            var j=await r.json();if(!r.ok)throw new Error(j.error||'The signature could not be recorded. Please try again.');
+            await load();
+          }catch(err){signBtn.disabled=false;signStatus.textContent=err.message;signStatus.className='wf-warning';}
+        };
+        card.appendChild(sign);
+        // Paper alternative: print, sign, upload.
+        var alt=document.createElement('details');alt.className='wf-public-upload';alt.id='wf-public-paper';var summary=el('summary','Prefer to sign on paper? Print, sign and upload the signed copy instead.');alt.appendChild(summary);
+        var form=el('div','');
         var nameLabel=el('label','Name of the person who signed');nameLabel.htmlFor='wf-signer-name';form.appendChild(nameLabel);
         var name=document.createElement('input');name.id='wf-signer-name';name.type='text';name.maxLength=200;name.value=v.data.sig_name||'';form.appendChild(name);
         var fileLabel=el('label','Signed agreement (PDF, Word, PNG or JPEG, up to '+(window.UploadLimits?window.UploadLimits.MAX_FILE_LABEL:'50 MB')+')');fileLabel.htmlFor='wf-signed-file';form.appendChild(fileLabel);
@@ -415,17 +451,19 @@ window.WorkflowHardNoDialog = (function () {
             await load();
           }catch(e){send.disabled=false;status.textContent=e.message;status.className='wf-warning';}
         };
-        card.appendChild(form);
+        alt.appendChild(form);card.appendChild(alt);
       }else if(v.status==='pending_signature'){
-        card.appendChild(el('p','Thank you. Your signed copy'+(v.counterparty&&v.counterparty.filename?' ('+v.counterparty.filename+')':'')+' was received'+(v.counterparty?' on '+when(v.counterparty.signedAt)+', signed by '+(v.counterparty.by||'')+'.':'.')+' Vendora\'s CEO is countersigning; you will receive an email when the fully signed agreement is ready for download.','wf-public-ok'));
+        card.appendChild(el('p','Thank you. '+signatureLine('Signed for '+(v.name||'the counterparty')+' by ')+'. Vendora\'s CEO is countersigning; you will receive an email when the fully signed agreement is ready for download.','wf-public-ok'));
+        var drawnNow=signatureImage();if(drawnNow)card.appendChild(drawnNow);
         card.appendChild(download);
       }else{
         card.appendChild(el('p','This agreement is signed by both parties.','wf-public-ok'));
         var list=el('ul','','wf-public-signatures');
-        if(v.counterparty)list.appendChild(el('li','Signed for '+(v.name||'the counterparty')+' by '+(v.counterparty.by||'')+' on '+when(v.counterparty.signedAt)));
+        if(v.counterparty)list.appendChild(el('li',signatureLine('Signed for '+(v.name||'the counterparty')+' by ')));
         if(v.vendora)list.appendChild(el('li','Signed for Vendora Nordic AB by '+(v.vendora.by||'')+', '+(v.vendora.title||'CEO')+', on '+when(v.vendora.signedAt)));
         card.appendChild(list);
-        card.appendChild(el('p','Download your copy below. Vendora\'s electronic signature is stamped in the signature block.'));
+        var drawnDone=signatureImage();if(drawnDone)card.appendChild(drawnDone);
+        card.appendChild(el('p','Download your copy below. Both signatures are stamped in the signature block.'));
         card.appendChild(download);
       }
       card.appendChild(el('p','Questions? Reply to the email you received from Vendora.','wf-note'));
@@ -434,6 +472,6 @@ window.WorkflowHardNoDialog = (function () {
     try{await load();}catch(e){shell.textContent='';var card=el('section','','card wf-public');card.appendChild(el('h2','This link is not available'));card.appendChild(el('p',e.message));shell.appendChild(card);}
   }
   window.addEventListener('hashchange',openHash);window.addEventListener('hashchange',copyView);openHash();copyView();
-  var publicStyle=document.createElement('style');publicStyle.textContent='.wf-public{max-width:720px;margin:30px auto}.wf-public-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}.wf-public-upload{margin-top:22px;padding-top:16px;border-top:1px solid var(--border)}.wf-public-upload label{display:block;margin:12px 0 6px;font-size:13px}.wf-public-upload input[type=text]{width:100%;max-width:420px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font:inherit;box-sizing:border-box}.wf-public-primary{display:block;margin-top:12px;padding:10px 18px;cursor:pointer}.wf-public-ok{background:#e6f2ea;border:1px solid #b7dfc3;border-radius:8px;padding:12px 14px;line-height:1.5}.wf-public-signatures{margin:10px 0 0 18px;line-height:1.6}';document.head.appendChild(publicStyle);
+  var publicStyle=document.createElement('style');publicStyle.textContent='.wf-public{max-width:720px;margin:30px auto}.wf-public-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}.wf-public-upload{margin-top:22px;padding-top:16px;border-top:1px solid var(--border)}.wf-public-upload label{display:block;margin:12px 0 6px;font-size:13px}.wf-public-upload input[type=text]{width:100%;max-width:420px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font:inherit;box-sizing:border-box}.wf-public-primary{display:block;margin-top:12px;padding:10px 18px;cursor:pointer}.wf-public-ok{background:#e6f2ea;border:1px solid #b7dfc3;border-radius:8px;padding:12px 14px;line-height:1.5}.wf-public-signatures{margin:10px 0 0 18px;line-height:1.6}.wf-public-sign{margin-top:22px;padding-top:16px;border-top:1px solid var(--border)}.wf-public-sign label{display:block;margin:12px 0 6px;font-size:13px}.wf-public-sign input[type=text],.wf-public-sign input[type=email]{width:100%;max-width:420px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font:inherit;box-sizing:border-box}.wf-sign-pad{display:block;width:100%;max-width:480px;height:auto;background:#fff;border:1px dashed #9aa5a0;border-radius:8px;touch-action:none;cursor:crosshair}.wf-sign-tools{margin-top:6px}.wf-public-secondary{padding:6px 12px;cursor:pointer}.wf-sign-confirm{display:flex;gap:8px;align-items:flex-start;line-height:1.5;margin-top:14px;font-size:13px}.wf-sign-confirm input{margin-top:3px;flex:none}.wf-public-upload summary{cursor:pointer;font-weight:600;margin-bottom:6px}.wf-sign-image{display:block;max-height:60px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 8px;margin-top:8px}';document.head.appendChild(publicStyle);
   var style=document.createElement('style');style.textContent='.wf-progress{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.wf-progress span{padding:8px 12px;border:1px solid var(--border);border-radius:20px;font-size:12px}.wf-progress [aria-current]{background:var(--navy);color:#fff}.wf-item{border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:14px}.wf-item-title{display:flex;gap:15px;justify-content:space-between}.wf-item-title span{font-size:12px;font-weight:600}.wf-line{margin-top:10px;white-space:pre-wrap;line-height:1.5}.wf-diff{padding:12px;margin:12px 0;background:#f7f8fa;white-space:pre-wrap;line-height:1.6}.wf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.wf-actions button{padding:8px 13px;cursor:pointer}.wf-actions button:disabled{opacity:.45;cursor:not-allowed}.wf-note{font-size:12px;line-height:1.5;color:var(--muted);margin-top:12px}.wf-warning{color:#964514;font-size:13px;margin:12px 0}.wf-check{margin:14px 0;padding:12px;background:#f8f0df}';document.head.appendChild(style);
 })();

@@ -98,7 +98,7 @@ function isSigner(u) { return !!u && !!SIGNER_EMAIL && String(u.email || '').toL
 // Fields only the server may write into agreement data (the CEO's signature stamp comes solely from
 // POST /sign). Stripped from every client-supplied payload so a stamp can't be forged.
 function stripServerFields(data) {
-  if (data && typeof data === 'object') delete data._vendoraSignature;
+  if (data && typeof data === 'object') { delete data._vendoraSignature; delete data._counterpartySignature; }
   return data;
 }
 // Lawyer structures and cover-sheet values are checked before anything is written.
@@ -1389,7 +1389,7 @@ async function storeFile(agreementId, filename, mime, buf, who) {
 function publicCopy(data) {
   const out = {};
   Object.keys(data || {}).forEach(function (k) {
-    if ((k[0] === '_' && k !== '_type' && k !== '_vendoraSignature') || k === 'redlines' || k === 'workflow_state' || k === 'workflow_revision') return;
+    if ((k[0] === '_' && k !== '_type' && k !== '_vendoraSignature' && k !== '_counterpartySignature') || k === 'redlines' || k === 'workflow_state' || k === 'workflow_revision') return;
     out[k] = data[k];
   });
   return out;
@@ -1409,15 +1409,17 @@ function signatureRequestMail(row, who, replyTo, to, link) {
 }
 // The counterparty's signed copy has arrived (through their link, or uploaded by the seller when it
 // came by email): record it, move the agreement on to the CEO, and tell the CEO and the seller.
-async function registerCounterpartySignature(req, row, file, signerName, uploadedBy) {
+// `file` is the uploaded signed copy, or null when `stamp` carries an electronic signature.
+async function registerCounterpartySignature(req, row, file, signerName, uploadedBy, stamp) {
   let status_updated_at;
   if (row.workflow_state) {
-    status_updated_at = (await workflow.counterpartySigned(row.id, file, signerName)).status_updated_at;
+    status_updated_at = (await workflow.counterpartySigned(row.id, file, signerName, stamp || null)).status_updated_at;
   } else {
     const up = await db.query(
       `UPDATE agreements SET status='pending_signature', status_updated_at=now(), updated_at=now(),
-         counterparty_signed_at=now(), counterparty_signed_by=$1, counterparty_signed_file=$2
-       WHERE id=$3 AND status='sent' RETURNING status_updated_at`, [signerName, file.id, row.id]);
+         counterparty_signed_at=now(), counterparty_signed_by=$1, counterparty_signed_file=$2,
+         data = CASE WHEN $4::jsonb IS NULL THEN data - '_counterpartySignature' ELSE jsonb_set(data, '{_counterpartySignature}', $4::jsonb) END
+       WHERE id=$3 AND status='sent' RETURNING status_updated_at`, [signerName, file ? file.id : null, row.id, stamp ? JSON.stringify(stamp) : null]);
     if (!up.rows[0]) { const e = new Error('This agreement is not awaiting the counterparty\'s signature.'); e.status = 409; throw e; }
     status_updated_at = up.rows[0].status_updated_at;
   }
@@ -1428,8 +1430,9 @@ async function registerCounterpartySignature(req, row, file, signerName, uploade
     to: SIGNER_EMAIL, ...(row.signature_requested_by ? { replyTo: row.signature_requested_by } : {}),
     subject: oneLine(`Ready for your signature: ${type} — ${cpName(row)}`),
     html: mailShell(`&#x270D;&#xFE0F; ${escHtml(cpName(row))} has signed — your signature is requested`,
-      `<p style="color:#555;font-size:14px"><strong>${escHtml(signerName)}</strong> signed the ${escHtml(type)} for <strong>${escHtml(cpName(row))}</strong>`
-      + (uploadedBy ? ` (signed copy uploaded by ${escHtml(uploadedBy)})` : ' and uploaded the signed copy')
+      `<p style="color:#555;font-size:14px"><strong>${escHtml(signerName)}</strong>${stamp && stamp.title ? ', ' + escHtml(stamp.title) + ',' : ''} signed the ${escHtml(type)} for <strong>${escHtml(cpName(row))}</strong>`
+      + (stamp ? ` electronically on the signing page (${escHtml(stamp.email || '')}${stamp.ip ? ', IP ' + escHtml(stamp.ip) : ''})`
+        : uploadedBy ? ` (signed copy uploaded by ${escHtml(uploadedBy)})` : ' and uploaded the signed copy')
       + `. ${escHtml(row.signature_requested_by_name || 'The seller')} approved this version for Vendora before it went out. Please countersign it.</p>`
       + coverHtml(summary) + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Review & sign →')),
   }) : false;
@@ -1495,7 +1498,7 @@ app.post('/api/agreements/:id/send-for-signature', requireDb, auth.requireAuth, 
          signature_requested_by=$4, signature_requested_by_name=$5, signature_requested_at=now(), signature_note=NULL,
          counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL,
          vendora_signed_by=NULL, vendora_signed_email=NULL, vendora_signed_at=NULL,
-         data = data - '_vendoraSignature'
+         data = data - '_vendoraSignature' - '_counterpartySignature'
        WHERE id=$6 RETURNING status_updated_at, signature_sent_at`,
       [to, token, summary, req.user.email, who, req.params.id]);
     publishStatusChange(row.id, row.status, 'sent');
@@ -1523,6 +1526,8 @@ app.get('/api/public-agreements/:id', publicLimiter, requireDb, async (req, res)
     }
     const data = row.workflow_state ? Object.assign({}, row.workflow_state.signatureShare.data) : publicCopy(row.data);
     if (row.vendora_signed_at && row.data && row.data._vendoraSignature) data._vendoraSignature = row.data._vendoraSignature;
+    const esign = row.counterparty_signed_at && row.data && row.data._counterpartySignature ? row.data._counterpartySignature : null;
+    if (esign) data._counterpartySignature = esign;
     let file = null;
     if (row.counterparty_signed_file) {
       file = (await db.query('SELECT filename FROM agreement_files WHERE id=$1 AND agreement_id=$2', [row.counterparty_signed_file, row.id])).rows[0] || null;
@@ -1531,7 +1536,7 @@ app.get('/api/public-agreements/:id', publicLimiter, requireDb, async (req, res)
     res.json({
       type: row.type, status: row.status, name: cpName(row), data,
       version: row.workflow_state ? row.workflow_state.signatureShare.version : null,
-      counterparty: row.counterparty_signed_at ? { signedAt: row.counterparty_signed_at, by: row.counterparty_signed_by, filename: file && file.filename } : null,
+      counterparty: row.counterparty_signed_at ? { signedAt: row.counterparty_signed_at, by: row.counterparty_signed_by, filename: file && file.filename, method: esign ? 'electronic' : 'uploaded', title: esign ? esign.title || '' : '' } : null,
       vendora: row.vendora_signed_at ? { signedAt: row.vendora_signed_at, by: row.vendora_signed_by, title: 'CEO' } : null,
     });
   } catch (err) {
@@ -1569,6 +1574,47 @@ app.post('/api/public-agreements/:id/signed-copy', publicLimiter, requireDb,
     }
   });
 
+// The counterparty signs electronically on the same page: name, title and email, an optional drawn
+// signature, and an explicit confirmation. The stamp (time, IP, user agent and the exact version
+// signed) is kept on the agreement and rendered in its signature block; it is a simple electronic
+// signature under eIDAS, not a qualified one.
+const SIGNATURE_IMAGE = /^data:image\/png;base64,[A-Za-z0-9+/=]{20,}$/;
+app.post('/api/public-agreements/:id/sign', publicLimiter, requireDb, async (req, res) => {
+  try {
+    const row = /^\d+$/.test(String(req.params.id)) ? (await db.query('SELECT * FROM agreements WHERE id=$1', [req.params.id])).rows[0] : null;
+    const token = row && signingToken(row);
+    if (!row || !token || !tokenEq(req.query.token, token)) return res.status(404).json({ error: 'This signing link is not valid or has been withdrawn. Please contact Vendora.' });
+    if (row.status !== 'sent') {
+      return res.status(409).json({ error: ['pending_signature', 'signed'].includes(row.status)
+        ? 'This agreement has already been signed for your side.'
+        : 'This agreement is not awaiting your signature. Please contact Vendora.' });
+    }
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 200), title = String(b.title || '').trim().slice(0, 120), email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+    if (name.length < 2) return res.status(400).json({ error: 'Enter the full name of the person signing.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter the signer\'s email address.' });
+    if (b.confirmed !== true) return res.status(400).json({ error: 'Tick the confirmation to sign.' });
+    let image = null;
+    if (b.image != null && b.image !== '') {
+      if (typeof b.image !== 'string' || b.image.length > 300000 || !SIGNATURE_IMAGE.test(b.image)) return res.status(400).json({ error: 'The drawn signature could not be read. Clear it and try again, or sign with your typed name only.' });
+      image = b.image;
+    }
+    const share = row.workflow_state ? row.workflow_state.signatureShare : null;
+    const signedData = row.workflow_state ? share.data : publicCopy(row.data);
+    const stamp = {
+      method: 'electronic', name, title, email, company: cpName(row), at: new Date().toISOString(),
+      ip: String(req.ip || '').slice(0, 64), userAgent: String(req.get('User-Agent') || '').slice(0, 300),
+      version: share ? share.version : null, digest: crypto.createHash('sha256').update(JSON.stringify(signedData)).digest('hex').slice(0, 16),
+      ...(image ? { image } : {}),
+    };
+    const result = await registerCounterpartySignature(req, row, null, name, null, stamp);
+    res.json({ ok: true, status: result.status, signedAt: stamp.at, name, title });
+  } catch (err) {
+    console.error('Electronic signature error:', err.message);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not record the signature' });
+  }
+});
+
 // CEO: countersign the version the counterparty has already signed.
 app.post('/api/agreements/:id/sign', requireDb, auth.requireAuth, async (req, res) => {
   try {
@@ -1603,7 +1649,8 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
     if (!note) return res.status(400).json({ error: 'Add a comment so the seller knows what to change.' });
     const up = await db.query(
       `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(), signature_note=$1,
-         signature_token=NULL, counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL
+         signature_token=NULL, counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL,
+         data = data - '_counterpartySignature'
        WHERE id=$2 AND status='pending_signature' RETURNING status_updated_at`,
       [note, req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
@@ -1637,7 +1684,7 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
       `UPDATE agreements SET status='generated', status_updated_at=now(), updated_at=now(),
          vendora_signed_by=NULL, vendora_signed_email=NULL, vendora_signed_at=NULL, signature_note=NULL,
          signature_token=NULL, counterparty_signed_at=NULL, counterparty_signed_by=NULL, counterparty_signed_file=NULL,
-         data = data - '_vendoraSignature'
+         data = data - '_vendoraSignature' - '_counterpartySignature'
        WHERE id=$1 RETURNING status_updated_at`, [req.params.id]);
     publishStatusChange(row.id, row.status, 'generated');
     // Voiding an actual signature is worth telling the signer about.
