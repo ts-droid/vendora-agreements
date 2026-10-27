@@ -108,7 +108,11 @@ test('Vendora-first: two real API/browser review rounds, persisted Word edits, l
     await page.screenshot({path:'test-results/initial-review.png',fullPage:true});
     // The same saved agreement is invited; the copy includes the approved clauses but no internals.
     await page.evaluate(()=>sv('ra_inv_email','customer@example.test'));
+    // A sent invite is confirmed in a modal; closing it returns to the start page (a reload, stubbed here so the page survives).
+    await page.evaluate(()=>{window.startVisits=0;window.wfGoToStart=()=>{window.startVisits++;};});
     await page.click('#wf_panel_ra [data-wf="invite"]');await page.waitForFunction(()=>window._editing.status==='invited');
+    await page.waitForSelector('dialog.wf-sent-dialog[open]');assert.match(await page.$eval('dialog.wf-sent-dialog',e=>e.textContent),/customer@example\.test/);
+    await page.click('[data-sent-close]');await page.waitForFunction(()=>!document.querySelector('.wf-sent-dialog')&&window.startVisits===1);
     r=await good('/api/workflow/'+id);assert.equal(r.state.sent.delivery,'sent');assert.deepEqual(r.state.sent.data.clauseOverrides,amendments);assert.equal(r.state.sent.data.reg,'CP-2026-002');assert.equal(r.state.sent.data.companyImports,undefined);assert.equal(r.state.sent.data.redlines,undefined);
     let stored=(await db.query('SELECT * FROM agreements WHERE id=$1',[id])).rows[0];const sentVersion=stored.workflow_state.sent.version;const token=stored.update_token;
     // Public submission: factual completion succeeds, proposed terms and malicious internal fields do not overwrite content.
