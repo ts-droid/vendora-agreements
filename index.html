@@ -188,6 +188,7 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .cmp-comment{grid-column:2/4;font-size:11px;font-style:italic;color:var(--muted);padding:0 14px 10px}
 .cmp-actions{display:flex;gap:6px}
 .cmp-btn{font-size:12px;padding:6px 12px;border:1px solid var(--line);background:#fff;color:var(--pine);cursor:pointer;border-radius:999px}
+.cmp-btn:disabled{opacity:.45;cursor:not-allowed}
 .cmp-btn.active-accept{background:var(--ok);color:#fff;border-color:var(--ok)}
 .cmp-btn.active-keep{background:var(--pine);color:#f6f3ec;border-color:var(--pine)}
 .neg-badge,.badge{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:12px;background:#ece7df}
@@ -23977,6 +23978,7 @@ function hydrateForm(type, d){
   d = d || {};
   var p = type;
   ["name","reg","country","addr","vat","products","curr","pay","inco","moq","date","vname","vemail","sig_name","sig_email","sig_title","sig_phone","notice"].forEach(function(k){ sv(p+"_"+k, d[k]); });
+  sv(p+"_inv_name", d.invName); sv(p+"_inv_email", d.invEmail);   // the invite contact — blank fields looked like lost data
   sv(p+"_terr", d.terr); restoreTerr(p, d.terr);
   if (type==="da"){
     ["eori","parent","excluded","term","excl","invmail","incoy","delplace","lead","rot","rotw","pcurr","mdfb","mdft","mdfc","mdff","rmae","rmaf","rmam","t1f","t1t","t1b","t2f","t2t","t2b","t3f","t3t","t3b"].forEach(function(k){ sv("da_"+k, d[k]); });
@@ -23994,6 +23996,13 @@ function hydrateForm(type, d){
 
 /* ──────────────────────────────────────────────── GENERATE DISPATCHER */
 function generate() {
+  // Out for signature: the record is locked, so unsaved edits in the form (or from the Contract
+  // Lawyer) can neither be saved nor exported. A document that differs from the archive would only
+  // mislead — say so instead of quietly downloading the approved version.
+  if (editingLocked() && window._editing.type === ["da","ra","rb"][activeTab] && formHasUnsavedEdits()) {
+    alert("Nothing was downloaded. This agreement is locked while out for signature, so your edits in the form are not saved and cannot be included. Withdraw the signing request (in the signing view) to edit it, or download the approved version from the archive.");
+    return;
+  }
   // Libraries embedded inline — always available
   var btn = document.getElementById("genBtn");
   var spin = document.getElementById("spin");
@@ -25287,10 +25296,18 @@ function showReviewMode(d) {
   var banner = document.createElement("div");
   banner.className = "review-banner";
   banner.innerHTML = "<h2>✅ " + esc(d.name||"Supplier") + " has submitted their details</h2>"
-    + "<div style='margin:10px 0 4px'>" + stageStripHtml({status:"submitted", counterparty_name:d.name}) + "</div>"
+    + "<div id='reviewStage' style='margin:10px 0 4px'>" + stageStripHtml({status:"submitted", counterparty_name:d.name}) + "</div>"
     + "<p>Review and <strong>adjust</strong> any of the submitted details below, consult the Contract Lawyer for wording changes, then save or approve &amp; send for signature.</p>"
     + (d._aid ? "<a onclick='reviewBackToArchive()' style='font-size:12px;cursor:pointer;text-decoration:underline;margin-right:14px'>&larr; Back to the archive</a>" : "")
     + "<button onclick='toggleAiDrawer()' style='margin-top:6px;background:var(--navy);color:#fff;border:none;border-radius:6px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer'>&#9878;&#65039; Discuss with the Contract Lawyer</button>";
+
+  // The record's live state is fetched once signed in (reviewRefreshRecord): locked while out for
+  // signature, or newer than this link's snapshot. The snapshot is remembered before any edit so a
+  // newer archive version can be told apart from this page's own changes.
+  window._reviewSnapshot = reviewFingerprint(d); window._reviewRecord = null;
+  var lockBox = document.createElement("div");
+  lockBox.id = "reviewLock"; lockBox.setAttribute("role", "status");
+  lockBox.style.cssText = "display:none;background:#FFF3CD;border:1px solid #ffe69c;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:13px;color:#664d03;line-height:1.5";
 
   // Editable fields — bound to _reviewData so any adjustment flows straight into generation.
   var idStyle = "width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:4px;font-size:13px;box-sizing:border-box";
@@ -25341,6 +25358,7 @@ function showReviewMode(d) {
   }
 
   var reviewCard = document.createElement("div");
+  reviewCard.id = "reviewCard";
   reviewCard.className = "card";
   reviewCard.innerHTML = "<h2>Agreement details</h2>"
     + "<div class='desc'>Everything below is editable — adjust anything the counterparty submitted, then generate.</div>"
@@ -25393,6 +25411,7 @@ function showReviewMode(d) {
 
     shell.innerHTML = "";
   shell.appendChild(banner);
+  shell.appendChild(lockBox);
   if (proposalCard) shell.appendChild(proposalCard);
   shell.appendChild(reviewCard);
   shell.appendChild(genBar);
@@ -25410,6 +25429,76 @@ function showReviewMode(d) {
 function reviewBackToArchive(){
   if (window._reviewDirty && !confirm("You have unsaved changes. Leave without saving?")) return;
   history.replaceState(null, "", window.location.pathname+"#archive"); window.location.reload();
+}
+/* The review page is reached from an email link, so by itself it knows nothing about the record's
+   current state. Once signed in it reads the record: locked while out for signature (nothing can be
+   saved until withdrawn — offer the withdrawal right here), or newer than the link's snapshot (saving
+   from a stale link would overwrite the newer version — offer to load it instead). */
+function reviewFingerprint(d){
+  // Key order is canonicalised at every level: Postgres stores jsonb with its own key order.
+  function canonical(v){
+    if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+    if (v && typeof v === "object") return "{" + Object.keys(v).filter(function(k){ return v[k] !== undefined; }).sort().map(function(k){ return JSON.stringify(k) + ":" + canonical(v[k]); }).join(",") + "}";
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  var o = {};
+  Object.keys(d||{}).filter(function(k){ return k.charAt(0)!=="_" || k==="_proposals" || k==="_accepted"; }).forEach(function(k){ o[k] = d[k]; });
+  return canonical(o);
+}
+function reviewLocked(){ return !!(window._reviewRecord && isLockedRow(window._reviewRecord)); }
+function reviewRefreshRecord(){
+  var d = window._reviewData; if (!d || !d._aid || !window._authUser) return Promise.resolve();
+  return fetch("/api/agreements/"+d._aid).then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(j){ if (j.agreement){ window._reviewRecord = j.agreement; reviewApplyRecord(j.agreement); } })
+    .catch(function(){});
+}
+function reviewApplyRecord(a){
+  var box = document.getElementById("reviewLock"); if (!box) return;
+  var stage = document.getElementById("reviewStage"); if (stage) stage.innerHTML = stageStripHtml(a);
+  var locked = isLockedRow(a), txt = document.getElementById("reviewBarText");
+  ["reviewSaveBtn","reviewCeoBtn","reviewGenBtn"].forEach(function(id){
+    var b = document.getElementById(id); if (!b) return;
+    b.disabled = locked; b.style.opacity = locked ? .45 : 1; b.title = locked ? "Locked while out for signature — withdraw the signing request to edit" : "";
+  });
+  document.querySelectorAll("#reviewCard input, #reviewCard select, #reviewCard textarea, [id^='acc_'], [id^='keep_']").forEach(function(el){ el.disabled = locked; });
+  var btnStyle = "padding:8px 14px;border:none;background:var(--navy);color:#fff;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer";
+  if (locked) {
+    var who = a.counterparty_email || a.counterparty_name || "the counterparty";
+    var what = a.status === "sent"
+      ? "Nothing on this page can be changed or saved until you withdraw the signing request. Their signing link then stops working, and you send the corrected version afterwards."
+      : a.status === "pending_signature"
+        ? esc(a.counterparty_signed_by || who) + " has already signed. Withdrawing voids that signature; they must sign the corrected version again."
+        : "The agreement is signed. Withdrawing voids the signature.";
+    box.style.display = "block";
+    box.innerHTML = "<strong>🔒 Out for signature</strong> — sent to " + esc(who) + (a.signature_sent_at ? " on " + esc(fmtWhen(a.signature_sent_at)) : "") + ". " + what
+      + "<div style='margin-top:10px;display:flex;gap:14px;align-items:center;flex-wrap:wrap'>"
+      + "<button id='reviewWithdrawBtn' onclick='reviewWithdraw()' style='" + btnStyle + "'>Withdraw the signing request</button>"
+      + "<a onclick='reviewBackToArchive()' style='font-size:12px;cursor:pointer;text-decoration:underline'>Open it in the archive &rarr;</a></div>";
+    if (txt){ txt.style.color = "#9a4b00"; txt.textContent = "🔒 Locked while out for signature — withdraw the signing request to edit, save or generate."; }
+    return;
+  }
+  var stale = reviewFingerprint(a.data||{}) !== window._reviewSnapshot;
+  box.style.display = stale ? "block" : "none";
+  if (stale) {
+    box.innerHTML = "<strong>⚠️ The archive has a newer version</strong> of this agreement (saved " + esc(fmtWhen(a.updated_at)) + ", " + esc((STATUS_META[a.status]||{}).label || a.status) + "). "
+      + "This page shows the details as they were when the link was made; saving from here would overwrite the newer version."
+      + "<div style='margin-top:10px'><button id='reviewReloadBtn' onclick='reviewReloadFromArchive()' style='" + btnStyle + "'>Load the archive version</button></div>";
+  }
+  if (txt && /Locked|Withdrawing/.test(txt.textContent)){ txt.style.color = "#1e7e34"; txt.textContent = "Withdrawn — the agreement is editable again. Make your changes, then save or approve & send."; }
+}
+function reviewWithdraw(){
+  var a = window._reviewRecord; if (!a) return;
+  var voids = !!(a.vendora_signed_at || a.counterparty_signed_at);
+  if (!confirm(voids ? "Withdraw this agreement? This VOIDS the signature already given — it must be signed again."
+                     : "Withdraw the signing request so the agreement can be edited? The counterparty's signing link stops working; you send the corrected version afterwards.")) return;
+  var txt = document.getElementById("reviewBarText"); if (txt){ txt.style.color = "var(--muted)"; txt.textContent = "Withdrawing…"; }
+  sigPost("/api/agreements/"+a.id+"/withdraw").then(function(){ return reviewRefreshRecord(); })
+    .catch(function(e){ if (txt){ txt.style.color = "#c0392b"; txt.textContent = (e && e.message) || "Could not withdraw."; } });
+}
+function reviewReloadFromArchive(){
+  var a = window._reviewRecord; if (!a) return;
+  var d = Object.assign({}, a.data||{}, {_type:a.type, _aid:a.id, _review:true});
+  history.replaceState(null, "", window.location.pathname+"#review="+(encodeData(d)||"")); window.location.reload();
 }
 /* Bind edits in the review screen back to the submitted data object. */
 function rvSet(key, val){ if (window._reviewData) { window._reviewData[key] = val; reviewMarkDirty(); } }
@@ -25486,6 +25575,10 @@ function reviewCounterpartyEmail(d){
 function generateFromReview() {
   var d = window._reviewData;
   var isDA = window._reviewIsDA;
+  if (reviewLocked()) {
+    alert("Nothing was downloaded. This agreement is locked while out for signature, so the details on this page cannot be saved or included. Withdraw the signing request first, or download the approved version from the archive.");
+    return;
+  }
   var btn = document.getElementById("reviewGenBtn");
   var spin = document.getElementById("review_spin");
   btn.disabled = true; spin.style.display = "block";
@@ -25497,13 +25590,23 @@ function generateFromReview() {
     window.saveAs(result.blob, result.filename);
     document.getElementById("review_suc").style.display = "block";
     // If this came from a linked invite, advance that same archive row to 'generated' with the
-    // final data (Vendora is authenticated here). Best-effort; ignored if not signed in.
+    // final data. A refused save is said out loud: a downloaded document that the archive does
+    // not have is exactly how corrections get lost.
     if (d._aid) {
+      var txt = document.getElementById("reviewBarText");
       fetch("/api/agreements/" + d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ counterpartyName:(d.name||null), counterpartyEmail:reviewCounterpartyEmail(d), data:d, status:"generated" })
       }).then(readApi).then(function(res){
-        if (!res.ok && res.status === 400) alert(agreementErrorText(res.j, "Could not save the agreement"));
-      }).catch(function(){});
+        if (res.ok) {
+          window._reviewDirty = false; window._reviewSnapshot = reviewFingerprint(d);
+          if (txt){ txt.style.color = "#1e7e34"; txt.textContent = "Generated and saved to the archive ✓ " + fmtWhen(new Date().toISOString()); }
+          return;
+        }
+        var why = res.status === 401 ? "you are not signed in" : agreementErrorText(res.j, "the archive refused the save");
+        if (txt){ txt.style.color = "#c0392b"; txt.textContent = "Downloaded, but NOT saved to the archive: " + why + "."; }
+        if (res.status === 409 || res.status === 400) alert("The document was downloaded, but the changes were NOT saved to the archive: " + why + ".");
+        if (res.status === 409) reviewRefreshRecord();
+      }).catch(function(){ if (txt){ txt.style.color = "#c0392b"; txt.textContent = "Downloaded, but the archive could not be reached — the changes are not saved."; } });
     }
   }).catch(function(e) {
     alert("Error: " + e.message);
@@ -25521,7 +25624,7 @@ function reviewPersist(statusAfter){
   if (statusAfter) body.status = statusAfter;
   return d._aid
     ? fetch("/api/agreements/"+d._aid, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
-        .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); return d._aid; }); })
+        .then(function(r){ return r.json().then(function(x){ if(!r.ok){ if(r.status===409) reviewRefreshRecord(); throw new Error(agreementErrorText(x, "Could not save the agreement")); } return d._aid; }); })
     : fetch("/api/agreements", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({type:d._type, status:statusAfter||"generated"}, body))})
         .then(function(r){ return r.json().then(function(x){ if(!r.ok) throw new Error(agreementErrorText(x, "Could not save the agreement")); d._aid = x.id; return x.id; }); });
 }
@@ -25529,7 +25632,7 @@ function reviewSave(){
   var btn = document.getElementById("reviewSaveBtn"), txt = document.getElementById("reviewBarText");
   if (btn) btn.disabled = true;
   reviewPersist(null).then(function(){
-    window._reviewDirty = false;
+    window._reviewDirty = false; window._reviewSnapshot = reviewFingerprint(window._reviewData);
     if (txt){ txt.style.color = "#1e7e34"; txt.textContent = "Saved to the archive ✓ " + fmtWhen(new Date().toISOString()); }
   }).catch(function(e){ if (txt){ txt.style.color = "#c0392b"; txt.textContent = e.message; } })
     .finally(function(){ if (btn) btn.disabled = false; });
@@ -25538,7 +25641,7 @@ function reviewSave(){
 // first, the CEO countersigns last).
 function reviewSendForSignature() {
   var btn = document.getElementById("reviewCeoBtn"); if (btn) btn.disabled = true;
-  reviewPersist("generated").then(function(id){ window._reviewDirty = false; sendForSignature(id); })
+  reviewPersist("generated").then(function(id){ window._reviewDirty = false; window._reviewSnapshot = reviewFingerprint(window._reviewData); sendForSignature(id); })
     .catch(function(e){ alert(e.message); })
     .finally(function(){ if (btn) btn.disabled = false; });
 }
@@ -25555,6 +25658,7 @@ function initReviewSigning() {
         var s = document.getElementById("reviewSaveBtn"); if (s) s.style.display = "inline-flex";
         var b = document.getElementById("reviewCeoBtn");
         if (b && window._signerOn){ b.style.display = "inline-flex"; b.textContent = "✍️ Approve & send for signature"; }
+        reviewRefreshRecord();
       });
     });
   }).catch(function(){});
@@ -26079,6 +26183,17 @@ var LOCKED_STATUS = {sent:1, pending_signature:1, vendora_signed:1};
 // Frozen = awaiting the CEO, or carrying Vendora's signature (even after it moves on to the counterparty).
 function isLockedRow(a){ return !!(a && (LOCKED_STATUS[a.status] || a.vendora_signed_at)); }
 function editingLocked(){ var e=window._editing; return !!(e && isLockedRow({status:e.status, vendora_signed_at:e.signedAt})); }
+// Unsaved work on the record being edited: typed edits in the form, or Contract Lawyer changes
+// (which land in the shared _lawyerState object, so they are detected by fingerprint).
+var LAWYER_KEYS = ["clauseOverrides","clauseInserts","clauseDeletes","annexOverrides","annexDeletes","redlines"];
+function lawyerFingerprint(d){ d = d || {}; return JSON.stringify(LAWYER_KEYS.map(function(k){ return d[k]==null ? null : d[k]; })); }
+function formHasUnsavedEdits(){
+  var e = window._editing; if (!e) return !!window._formDirty;
+  return !!window._formDirty || (e.pristine !== undefined && lawyerFingerprint(window._lawyerState || e.base) !== e.pristine);
+}
+function markFormDirty(ev){ var t = ev.target; if (t && t.closest && t.closest(".tab-panel") && !t.closest("#tab3")) window._formDirty = true; }
+document.addEventListener("input", markFormDirty, true);
+document.addEventListener("change", markFormDirty, true);
 var SIGNABLE_FROM = {draft:1, submitted:1, generated:1, imported:1};
 function statusBadge(s){
   var m = STATUS_META[s] || {label:(s||"—"), bg:"#eef1f5", fg:"#555"};
@@ -26471,7 +26586,7 @@ function sendForSignature(id){
         m.innerHTML = x.sent ? "Sent ✓ — "+esc(to)+" has the signing link. The agreement is locked until both parties have signed."
           : "Approved and locked, but the email could not be sent"+(x.mailReason?" ("+esc(x.mailReason)+")":"")+". Send the link yourself:<br><a href='"+esc(x.link||"")+"' style='word-break:break-all'>"+esc(x.link||"")+"</a>";
         b.style.display="none";
-        refreshEditing(id); loadArchive();
+        refreshEditing(id); loadArchive(); if (window._reviewData) reviewRefreshRecord();
       }).catch(function(e){ b.disabled=false; m.style.color="#c0392b"; m.textContent=e.message; });
     };
   }).catch(function(){ alert("Could not open that agreement."); });
@@ -26648,6 +26763,7 @@ function archiveEdit(id){
     window._editing = { id:a.id, type:type, base:data, status:a.status, cpEmail:a.counterparty_email, signedAt:a.vendora_signed_at, revision:Number(a.workflow_revision||0), workflow:!!a.workflow_state };
     window._lawyerState = data;
     window._clauseOverrides = data.clauseOverrides || {};
+    window._formDirty = false; window._editing.pristine = lawyerFingerprint(data);
     var bar=document.getElementById("editBar"); bar.style.display="flex";
     document.getElementById("editBarText").textContent = "Editing saved agreement #"+a.id+(a.counterparty_name?" — "+a.counterparty_name:"")+" — make changes, then Save.";
     document.getElementById("editBarStatus").textContent = "";
@@ -26772,13 +26888,14 @@ function updateArchive(editing, formData, showStatus){
   }).then(readApi).then(function(res){
     if (!res.ok) throw new Error(agreementErrorText(res.j, "Save failed"));
     editing.base = res.j.data || merged;
+    editing.pristine = lawyerFingerprint(editing.base); window._formDirty = false;
     if(res.j.revision!==undefined)editing.revision=res.j.revision;
     if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
   }).catch(function(e){ if(st){ st.style.color="#c0392b"; st.textContent=(e && e.message) || "Save failed"; } throw e; });
 }
 function saveEditOnly(){
   var e=window._editing; if(!e) return;
-  var formData = readForm(e.type);
+  var formData = lawyerCarry(readForm(e.type));
   if (!formData.name && !e.workflow){ var st=document.getElementById("editBarStatus"); st.style.color="#c0392b"; st.textContent="Enter the "+(e.type==="da"?"Supplier":"Reseller")+" name first"; return; }
   if(window.WorkflowActivity&&WorkflowActivity.busy())return;
   updateArchive(e, formData, true).catch(function(){});
