@@ -203,6 +203,8 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .val-modal{position:fixed;inset:0;background:rgba(22,54,45,.45);z-index:2000;display:none;align-items:center;justify-content:center}
 .val-modal.open{display:flex}
 .val-box{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:24px 28px;max-width:480px;width:90%}
+.fill-submitted{margin-top:14px;background:#fff;color:#16362d;border-radius:8px;padding:10px 14px;font-size:13px;line-height:1.55}
+.fill-submitted a{color:#1f6b45}
 .val-box h3{font-family:var(--sans);font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin-bottom:6px}
 .val-box p{font-size:14px;color:var(--muted);margin-bottom:12px}
 .val-list{list-style:none;padding:0;margin:0 0 16px;border:1px solid var(--line);border-radius:12px}
@@ -25104,6 +25106,8 @@ function renderFillMode(d) {
     + "<p>Hi" + invName + " \u2014 please fill in your company details and contact persons below. The commercial terms have already been set by Vendora and are shown for your review. Once complete, click <strong>Submit Details</strong> to send them back to Vendora.</p>"
     + "<button onclick=\'downloadPreview()\' id=\'previewBtn\' style=\'margin-top:6px;background:#fff;color:#16362d;border:none;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer\'>\u2193 Download preview of the agreement</button>"
     + "<span style=\'font-size:11px;color:#C8D9ED;margin-left:10px\'>See the full draft as it stands now, before you fill in your details.</span>";
+  // Already submitted through this link: say so at the top; the form below cannot be sent twice.
+  if (d._submittedAt) banner.innerHTML += fillSubmittedNotice(d);
 
   // Negotiable commercial terms — supplier can accept or propose a change
   var isRB = d._type === "rb";
@@ -25244,7 +25248,7 @@ function renderFillMode(d) {
   var submitBar = document.createElement("div");
   submitBar.style.cssText = "position:sticky;bottom:0;background:#fff;border-top:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06)";
   submitBar.innerHTML = "<span style='font-size:12px;color:var(--muted)'>Fill in your details above, then submit</span>"
-    + "<button onclick=\'submitFill()\' style=\'background:#16362d;color:#f6f3ec;border:none;padding:11px 28px;font-size:14px;font-weight:600;cursor:pointer\'><span>Submit Details &#x2192;</span><div class=\'spin\' id=\'fill_spin\'></div></button>";
+    + "<button id=\'fillSubmitBtn\' onclick=\'submitFill()\' style=\'background:#16362d;color:#f6f3ec;border:none;padding:11px 28px;font-size:14px;font-weight:600;cursor:pointer\'><span>Submit Details &#x2192;</span><div class=\'spin\' id=\'fill_spin\'></div></button>";
 
   var sucDiv = document.createElement("div");
   sucDiv.className = "suc";
@@ -25281,6 +25285,7 @@ function renderFillMode(d) {
   }
 
   window._fillIsDA = isDA;
+  fillLockSubmit(d);
 }
 
 function showReviewMode(d) {
@@ -25713,9 +25718,34 @@ function collectPos(group){
     .map(function(i){ return i.value.trim(); })
     .filter(Boolean);
 }
+/* What the counterparty is told once their details are in: the page says so, the form cannot be
+   sent twice, and any change goes by email to their Vendora contact. */
+function fillWhen(at){ var t=new Date(at); return isNaN(t.getTime()) ? "" : t.toLocaleString("en-GB",{day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
+function fillContactHtml(d){ return d && d.vemail ? "<a href='mailto:"+esc(d.vemail)+"'>"+esc(d.vemail)+"</a>" : "your Vendora contact"; }
+function fillSubmittedNotice(d){
+  return "<div class='fill-submitted' id='fillSubmitted'>&#x2705; <strong>Already submitted</strong>"+(d._submittedAt?" on "+esc(fillWhen(d._submittedAt)):"")
+    + ". Vendora Nordic AB is reviewing your details and "+(d.vname?esc(d.vname):"your Vendora contact")+" will come back to you. There is nothing more to do here, and the form cannot be submitted twice. If something needs to change, email "+fillContactHtml(d)+".</div>";
+}
+function fillLockSubmit(d){
+  var b=document.getElementById("fillSubmitBtn"); if(!b) return;
+  var locked=!!(d && d._submittedAt); b.disabled=locked; b.style.opacity=locked?.5:1; b.title=locked?"Already submitted":"";
+}
+function showSubmittedModal(kind, d, at){
+  d = d || {};
+  var title=document.getElementById("thankTitle"), text=document.getElementById("thankText");
+  if (kind==="already"){
+    if (title) title.textContent = "Already submitted";
+    if (text) text.innerHTML = "Your details reached Vendora Nordic AB"+(at?" on "+esc(fillWhen(at)):"")+" and are being reviewed. The form cannot be submitted twice, so what you entered just now was not applied. If something needs to change, email "+fillContactHtml(d)+".";
+  } else {
+    if (title) title.textContent = "Submitted \u2713";
+    if (text) text.innerHTML = "Your details reached Vendora Nordic AB"+(at?" on "+esc(fillWhen(at)):"")+". There is nothing more to do now: "+(d.vname?esc(d.vname):"your Vendora contact")+" will review them and come back to you with the agreement for signing. If something needs to change in the meantime, email "+fillContactHtml(d)+" rather than submitting again.";
+  }
+  document.getElementById("thankModal").classList.add("open");
+}
 function submitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
+  if (d && d._submittedAt) { showSubmittedModal("already", d, d._submittedAt); return; }
 
   // Hard required fields
   var required = [];
@@ -25837,8 +25867,9 @@ function doSubmitFill() {
           })
         }).catch(function(){});
 
-        // Show thank-you modal — closes the page on OK
-        document.getElementById("thankModal").classList.add("open");
+        // Submitted: say so, and that the next step is Vendora's — closes the page on OK.
+        d._submittedAt = new Date().toISOString(); fillLockSubmit(d);
+        showSubmittedModal("received", d, d._submittedAt);
         window._reviewUrl = reviewUrl;
       };
       if (d._aid && d._atok) {
@@ -25847,7 +25878,11 @@ function doSubmitFill() {
           method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ token: d._atok, sentVersion:d._sentVersion, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
         }).then(readApi).then(function(res){
-          if (!res.ok) { spin.style.display = "none"; alert(agreementErrorText(res.j, "Could not submit")); return; }
+          if (!res.ok) {
+            spin.style.display = "none";
+            if (res.j && res.j.alreadySubmitted) { d._submittedAt = res.j.submittedAt || new Date().toISOString(); fillLockSubmit(d); showSubmittedModal("already", d, d._submittedAt); return; }
+            alert(agreementErrorText(res.j, "Could not submit")); return;
+          }
           doNotify();
         }).catch(function(){ spin.style.display="none"; alert("Kunde inte bekräfta att uppgifterna sparades. Försök igen; inga villkorsändringar godkänns automatiskt."); });
       } else {
@@ -27744,10 +27779,9 @@ initApp();
 <div class="val-modal" id="thankModal">
   <div class="val-box" style="text-align:center;max-width:420px">
     <div style="font-size:40px;margin-bottom:12px">&#x2705;</div>
-    <h3 style="margin-bottom:10px">Thank you!</h3>
-    <p style="font-size:13px;color:#555;line-height:1.6;margin-bottom:20px">
-      Your details have been received by Vendora Nordic AB.<br>
-      We will review your information and be in touch shortly with the complete agreement for signing.
+    <h3 id="thankTitle" style="margin-bottom:10px">Submitted &#x2713;</h3>
+    <p id="thankText" style="font-size:13px;color:#555;line-height:1.6;margin-bottom:20px">
+      Your details have been received by Vendora Nordic AB. There is nothing more to do now: we will review them and come back to you with the agreement for signing.
     </p>
     <button class="btn-anyway" onclick="closeThankModal()" style="width:100%;padding:12px;font-size:14px">OK, close this window</button>
   </div>
