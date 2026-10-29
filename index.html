@@ -23966,9 +23966,12 @@ function restoreTerr(prefix, terr){
   var names = String(terr).replace(/\s+and\s+/g, ", ").split(",").map(function(s){return s.trim().toLowerCase();});
   var codes = {sweden:"se",norway:"no",denmark:"dk",finland:"fi",iceland:"is",estonia:"ee",latvia:"lv",lithuania:"lt",poland:"pl"};
   var extras = [];
+  // Every box reflects the stored territory: ticked when named, cleared otherwise. The form's
+  // defaults tick every country, which made a removed country look like it was back on reopening.
+  Object.keys(codes).forEach(function(n){ var cb=document.getElementById(prefix+"_t_"+codes[n]); if(cb) cb.checked=false; });
   names.forEach(function(n){
     if (codes[n]) { var cb=document.getElementById(prefix+"_t_"+codes[n]); if(cb) cb.checked=true; }
-    else if (n) extras.push(n.charAt(0).toUpperCase()+n.slice(1));
+    else if (n && n.charAt(0)!=="[") extras.push(n.charAt(0).toUpperCase()+n.slice(1));
   });
   var ex=document.getElementById(prefix+"_terr_extra"); if(ex) ex.value = extras.join(", ");
 }
@@ -26255,7 +26258,9 @@ function sigLine(a){
     var n = String(a.signature_note);
     out += "<div title='"+esc(n)+"' style='"+sm+";color:#c0392b'>&#8617; Returned: "+esc(n.length>90?n.slice(0,90)+"…":n)+"</div>";
   }
-  if (window._signerOn && SIGNABLE_FROM[a.status]){
+  // In the review workflow the approval is one of its steps, with its readiness check: the panel below has the button.
+  if (a.workflow_state) out += "<div style='"+sm+";color:var(--muted)'>Approve &amp; send from the review steps below.</div>";
+  else if (window._signerOn && SIGNABLE_FROM[a.status]){
     out += "<a onclick='sendForSignature("+a.id+")' style='font-size:11px;color:var(--blue2);cursor:pointer;font-weight:600'>&#9997;&#65039; Approve &amp; send for signature</a>";
   }
   return out;
