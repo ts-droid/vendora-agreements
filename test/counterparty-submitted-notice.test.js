@@ -64,6 +64,8 @@ test('browser: the counterparty is told their details are in, and cannot submit 
     assert.match(notice,/cannot be submitted twice\. If something needs to change, email thomas@vendora\.example\.test\.$/);
     assert.equal(await page.$eval('#fillSubmitBtn',b=>b.disabled),true);
     assert.equal(await page.$eval('#fillSubmitBtn',b=>b.title),'Already submitted');
+    assert.equal(await page.$eval('#fill_name',e=>!!e.closest('.fill-done')),true,'the form below the notice is dimmed and inert');
+    assert.equal(await page.$eval('#fillSubmitted',e=>!!e.closest('.fill-done')),false,'the notice itself is not');
     await page.evaluate(()=>submitFill());
     await page.waitForSelector('#thankModal.open');
     assert.equal(await page.$eval('#thankTitle',e=>e.textContent),'Already submitted');
