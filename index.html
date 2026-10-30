@@ -432,8 +432,8 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
   <div class="sec">MDF</div>
   <div class="g3">
     <div class="f"><label>Base MDF (%)</label><input id="da_mdfb" type="number" min="0" max="20" step="0.5" placeholder="e.g. 3"></div>
-    <div class="f"><label>Target bonus MDF (%)</label><input id="da_mdft" type="number" min="0" max="10" step="0.5" placeholder="e.g. 1"></div>
-    <div class="f"><label>Co-op fund (%)</label><input id="da_mdfc" placeholder="e.g. 1.5 or blank"></div>
+    <div class="f"><label>Target bonus MDF (%) <em>(optional &mdash; leave blank unless agreed)</em></label><input id="da_mdft" type="number" min="0" max="10" step="0.5" placeholder="leave blank"></div>
+    <div class="f"><label>Co-op fund (%) <em>(optional &mdash; leave blank unless agreed)</em></label><input id="da_mdfc" placeholder="leave blank"></div>
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f"><label>MDF invoicing frequency</label><select id="da_mdff"><option value="Quarterly" selected>Quarterly</option><option value="Bi-annually">Bi-annually</option><option value="Annually">Annually</option></select></div>
@@ -24560,7 +24560,13 @@ async function buildDA(overrideData) {
   if (!hasMDF) {
     children.push(h.note("No Market Development Funds have been agreed for the initial term of this Agreement. MDF may be agreed by written amendment."));
   } else {
-    children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2),h.dataRow(["Base MDF",data.mdfb?data.mdfb+"% of invoiced value":"—",data.mdff||"Quarterly"],MW),h.dataRow(["Target bonus",data.mdft?data.mdft+"%":"—","Annually"],MW,true),h.dataRow(["Co-op fund",data.mdfc?data.mdfc+"%":"Not agreed","As agreed"],MW)]}));
+    // Only the components that have been agreed are listed: a "Co-op fund — Not agreed" row reads
+    // like an open item, and the counterparty's page should not offer what Vendora has not set.
+    var MDF_ROWS=[h.hdrRow(["Component","Rate","Frequency"],MW,h.BL2)];
+    if (data.mdfb) MDF_ROWS.push(h.dataRow(["Base MDF",data.mdfb+"% of invoiced value",data.mdff||"Quarterly"],MW,MDF_ROWS.length%2===0));
+    if (data.mdft) MDF_ROWS.push(h.dataRow(["Target bonus",data.mdft+"%","Annually"],MW,MDF_ROWS.length%2===0));
+    if (data.mdfc) MDF_ROWS.push(h.dataRow(["Co-op fund",data.mdfc+"%","As agreed"],MW,MDF_ROWS.length%2===0));
+    children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:MW,rows:MDF_ROWS}));
   }
   children.push(h.sp());
   children.push(h.h2("E   RMA and Stock Rotation"));
@@ -25194,6 +25200,9 @@ function renderFillMode(d) {
   ];
   // Store original values for comparison later
   window._negOriginals = {};
+  // The optional MDF components are offered only when Vendora has set them: an empty "Co-op fund"
+  // row invited the counterparty to put their MDF there instead (Troubadour, October 2026).
+  if (isDA) NEG_TERMS = NEG_TERMS.filter(function(t){ return !((t.key==="mdft" && !d.mdft) || (t.key==="mdfc" && !d.mdfc)); });
   NEG_TERMS.forEach(function(t){ window._negOriginals[t.key] = t.val; });
 
   var summary = document.createElement("div");
