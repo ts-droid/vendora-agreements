@@ -187,7 +187,7 @@ function receive(row, submitted, sentVersion, actor, at) {
   if(!s.sent||s.sent.version!==Number(sentVersion)||!['invited','submitted'].includes(row.status))throw error('Länken gäller en äldre eller stängd avtalsversion. Kontakta Vendora.');
   const fingerprint=digest({submitted,sentVersion});
   if(s.lastSubmission===fingerprint)return {data:row.data,state:s,replayed:true};
-  if(row.status==='submitted')throw error('Uppgifterna är redan inlämnade och behandlas av Vendora.');
+  if(row.status==='submitted'){const e=error('Uppgifterna är redan inlämnade och behandlas av Vendora.');e.code='already-submitted';throw e;}
   const d=copy(row.data);
   for(const k of FACTS)if(Object.hasOwn(submitted,k))d[k]=value(submitted[k]);
   if(submitted.contacts)d.contacts=contacts(submitted.contacts,true);

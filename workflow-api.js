@@ -128,7 +128,8 @@ function install(app, deps) {
     const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);const row=r.rows[0],sent=row&&row.workflow_state&&row.workflow_state.sent;
     if(!row||!sent||!deps.tokenEq(req.query.token,row.update_token)||!['invited','submitted'].includes(row.status)||Number(req.query.version)!==sent.version)throw core.error('Kundlänken är ogiltig eller har återkallats.',404);
     if(row.workflow_state.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Begär den arkiverade avtalsversionen från Vendora.');
-    res.set('Cache-Control','no-store');res.json({...sent.data,_aid:row.id,_atok:row.update_token,_sentVersion:sent.version});
+    // Once submitted, the page says so instead of offering the form again (one submission per sent version).
+    res.set('Cache-Control','no-store');res.json({...sent.data,_aid:row.id,_atok:row.update_token,_sentVersion:sent.version,...(row.status==='submitted'?{_submittedAt:row.workflow_state.submittedAt||null}:{})});
   }));
   app.get('/api/workflow/:id/versions',auth.requireAuth,wrap(async(req,res)=>{
     await load(req);const r=await db.query('SELECT revision,actor,action,created_at FROM agreement_versions WHERE agreement_id=$1 ORDER BY revision DESC LIMIT 100',[req.params.id]);res.json({versions:r.rows});
@@ -153,11 +154,12 @@ function install(app, deps) {
       const v=req.body.sentVersion||req.body.data&&req.body.data._sentVersion;
       let changed;
       try{changed=core.receive(row,req.body.data||{},v,'counterparty',when());}catch(e){
-        if(e.status===409){await c.query('INSERT INTO agreement_submission_conflicts(agreement_id,sent_version,submission,reason) VALUES($1,$2,$3,$4)',[row.id,Number(v)||null,req.body.data||{},e.message]);return {conflict:e.message};}
+        if(e.status===409){await c.query('INSERT INTO agreement_submission_conflicts(agreement_id,sent_version,submission,reason) VALUES($1,$2,$3,$4)',[row.id,Number(v)||null,req.body.data||{},e.message]);
+          return {conflict:e.message,alreadySubmitted:e.code==='already-submitted',submittedAt:(row.workflow_state&&row.workflow_state.submittedAt)||null};}
         throw e;
       }
       return changed.replayed?row:write(c,row,changed.data,changed.state,'counterparty','customer-submission','submitted');
-    });if(result.conflict)return res.status(409).json({error:result.conflict,retainedForReview:true});publishStatusChange(result.id,'invited','submitted');res.json({ok:true,revision:result.workflow_revision,workflow:true});
+    });if(result.conflict)return res.status(409).json({error:result.conflict,retainedForReview:true,...(result.alreadySubmitted?{alreadySubmitted:true,submittedAt:result.submittedAt}:{})});publishStatusChange(result.id,'invited','submitted');res.json({ok:true,revision:result.workflow_revision,workflow:true});
   };
   methods.prepareReview=async(req,jobId)=>lock(req,async(row,c)=>{
     core.editable(row);core.checkVersion(row,req.body.expectedRevision);const s=core.copy(core.state(row));
