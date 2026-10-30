@@ -490,6 +490,8 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
   <div class="sec">Products and territory</div>
   <div class="g1">
     <div class="f"><label>Products / brands covered *</label><textarea id="ra_products" placeholder="e.g. All products in Vendora's current catalogue, or specific brands: Brand A, Brand B"></textarea></div>
+    <div class="f" style="margin-top:12px"><label>Authorised brands <em>(selective distribution, optional)</em></label><input id="ra_selbrands" placeholder="Leave blank for the standard agreement, e.g. Brand A, Brand B" oninput="syncSelective()">
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5">Naming brands adds &sect;3A (selective distribution system) and Appendix 4 (criteria), makes the appointment non-exclusive, and limits the Reseller&rsquo;s sales of those brands to end users and other authorised resellers.</div></div>
   </div>
   <div class="g2" style="margin-top:12px">
     <div class="f">
@@ -23967,7 +23969,7 @@ function readDAForm(){
 function readRAForm(){
   var data = {
     name:gv("ra_name"),reg:gv("ra_reg"),country:gv("ra_country"),addr:gv("ra_addr"),vat:gv("ra_vat"),
-    products:gv("ra_products"),terr:gv("ra_terr"),excl:gv("ra_excl"),
+    products:gv("ra_products"),selbrands:gv("ra_selbrands"),terr:gv("ra_terr"),excl:gv("ra_excl"),
     date:gv("ra_date"),notice:gv("ra_notice"),curr:gv("ra_curr"),pay:gv("ra_pay"),credit:gv("ra_credit"),
     inco:gv("ra_inco"),incoplace:gv("ra_incoplace"),moq:gv("ra_moq"),minact:gv("ra_minact"),
     t1f:gv("ra_t1f"),t1t:gv("ra_t1t"),t1b:gv("ra_t1b"),t2f:gv("ra_t2f"),t2t:gv("ra_t2t"),t2b:gv("ra_t2b"),t3f:gv("ra_t3f"),t3t:gv("ra_t3t"),t3b:gv("ra_t3b"),
@@ -23993,6 +23995,9 @@ function readRBForm(){
 function readForm(type){ return type==="da" ? readDAForm() : type==="rb" ? readRBForm() : readRAForm(); }
 
 // Set one form field (input/select/textarea/checkbox) by id.
+// Selective distribution cannot be combined with an exclusive appointment in the same territory, so
+// naming authorised brands locks the appointment to non-exclusive while they are set.
+function syncSelective(){ var b=document.getElementById("ra_selbrands"), e=document.getElementById("ra_excl"); if(!b||!e) return; var on=!!b.value.trim(); if(on) e.value="non-exclusive"; e.disabled=on; e.title=on?"Non-exclusive while brands are sold under selective distribution (§3A)":""; }
 function sv(id, val){ var e=document.getElementById(id); if(!e) return; if(e.type==="checkbox") e.checked=!!val; else e.value=(val==null?"":val); }
 
 // Best-effort restore of the territory checkboxes from a stored territory string.
@@ -24024,7 +24029,8 @@ function hydrateForm(type, d){
     var rc=d.contacts||{}; DA_ROLES.forEach(function(r){ var c=rc[r.id]||{}, pr=c.p||{}, bk=c.b||{}; sv("da_"+r.id+"_pn",pr.n); sv("da_"+r.id+"_pe",pr.e); sv("da_"+r.id+"_pp",pr.p); sv("da_"+r.id+"_bn",bk.n); sv("da_"+r.id+"_be",bk.e); sv("da_"+r.id+"_bp",bk.p); });
     sv("da_targets_on", d.targetsOn); toggleTargets("da");
   } else if (type==="ra"){
-    ["excl","credit","incoplace","minact","mdfb","mdft","mdff","t1f","t1t","t1b","t2f","t2t","t2b","t3f","t3t","t3b"].forEach(function(k){ sv("ra_"+k, d[k]); });
+    ["excl","selbrands","credit","incoplace","minact","mdfb","mdft","mdff","t1f","t1t","t1b","t2f","t2t","t2b","t3f","t3t","t3b"].forEach(function(k){ sv("ra_"+k, d[k]); });
+    syncSelective();
     var rrc=d.rcontacts||{}; RESELLER_ROLES.forEach(function(r){ var c=rrc[r.id]||{}; sv("ra_rc_"+r.id+"_n",c.n); sv("ra_rc_"+r.id+"_e",c.e); sv("ra_rc_"+r.id+"_p",c.p); });
     sv("ra_targets_on", d.targetsOn); toggleTargets("ra");
   } else {
@@ -24620,6 +24626,46 @@ async function buildDA(overrideData) {
 }
 
 /* ──────────────────────────────────────────────── RA */
+/* ── Selective distribution (reseller agreement). Switched on by naming authorised brands; with none
+   named nothing below renders and the agreement reads exactly as before. ── */
+function selectiveRA(data){ return !!String(data && data.selbrands || "").trim(); }
+function selectiveRAClauses(h, data){
+  if (!selectiveRA(data)) return [];
+  var out=[h.h1("3A   Selective Distribution System")];
+  ["ra.s3a.system","ra.s3a.sales","ra.s3a.unauthorised","ra.s3a.criteria","ra.s3a.marketplaces","ra.s3a.breach","ra.s3a.supplier"].forEach(function(id){
+    out=out.concat(clauseNode(h, id, LawyerChanges.standardClauseText("ra", id, data)));
+  });
+  return out;
+}
+function selectiveAppendix(h, data){
+  if (!selectiveRA(data)) return [];
+  return [
+    h.pgBrk(),
+    h.appHdr("APPENDIX 4 \u2014 SELECTIVE DISTRIBUTION CRITERIA",h.NAVY),h.sp(),
+    h.par("The Supplier sells the Products of the brands below only to resellers that meet the following qualitative criteria and have been approved in writing as Authorised Resellers for the brand (\u00a73A). The criteria are objective, applied uniformly to all resellers and without discrimination, and follow from the nature of the Products: they call for correct pre-sale advice, careful presentation and reliable after-sales service."),
+    h.fldTbl([h.fldRow("Brands under selective distribution",String(data.selbrands).trim()),h.fldRow("Criteria confirmed by the Reseller",data.sel_confirmed_at?String(data.sel_confirmed_at).slice(0,10):"Pending")]),
+    h.sp(),
+    h.h2("A   Company"),
+    h.bul("A registered company with a valid VAT number, a named contact and a Contract & Notices address (Appendix 1); credit assessment where invoice terms are requested (\u00a74)."),
+    h.h2("B   Points of sale"),
+    h.bul("Physical store(s) and/or the Reseller\u2019s own web shop meeting the Supplier\u2019s minimum presentation standards: correct and complete product information, the Supplier\u2019s or the brand owner\u2019s images and texts, the local language of the Territory, a secure checkout and clear consumer terms."),
+    h.h2("C   Brand guidelines"),
+    h.bul("Compliance with each brand\u2019s written guidelines for presentation, logo use and marketing; no modification of the Products, their packaging or labelling (\u00a75)."),
+    h.h2("D   Competence and customer service"),
+    h.bul("Staff with adequate product knowledge, using the training the Supplier or the brand owner offers; a customer service channel; the ability to give correct pre-sale advice."),
+    h.h2("E   After-sales"),
+    h.bul("Handling of warranty claims and consumer complaints in accordance with applicable law and Appendix 2; correct information to end customers about the Supplier\u2019s warranty (\u00a75)."),
+    h.h2("F   Compliance"),
+    h.bul("Compliance with consumer law, product safety, producer responsibility for electronics, batteries and packaging where applicable, data protection and anti-bribery rules (\u00a76)."),
+    h.h2("G   Channel rules"),
+    h.bul("No sales through third-party online marketplaces without the Supplier\u2019s authorisation (\u00a73); sell-through reporting (\u00a77); traceability information on request (\u00a73A.6)."),
+    h.h2("H   Application, decision and register"),
+    h.par("A reseller applies in writing through the Supplier\u2019s agreement form, stating its points of sale and confirming that it meets these criteria. The Supplier decides within ten (10) business days and gives reasons for a refusal. The Supplier keeps a register of Authorised Resellers per brand, with the date and basis of each approval and withdrawal, reviews compliance at least annually and confirms on request whether a named company is an Authorised Reseller (\u00a73A.3)."),
+    h.note("Brand-specific guidelines are provided in writing and form part of these criteria for the brand concerned. This appendix may be amended on sixty (60) days\u2019 written notice to all Authorised Resellers of the brand (\u00a73A.4)."),
+    annexNode(h, "4", null),
+    h.sp()
+  ];
+}
 async function buildRA(overrideData) {
   var h = docxHelpers(), d = window.docx;
   var data = overrideData || readRAForm();
@@ -24635,7 +24681,9 @@ async function buildRA(overrideData) {
 
   var posRows = [];
   posRows.push(h.h2("B   Approved Points of Sale"));
-  posRows.push(h.par("The Reseller shall sell the Products only through the points of sale listed below. This includes physical retail locations and all websites, domains, and trading names operated by the Reseller. The Reseller shall obtain the Supplier’s prior written approval before adding any new point of sale, website, or domain. Sales through any point of sale not approved in writing shall constitute a material breach."));
+  posRows.push(h.par(selectiveRA(data)
+    ? "The Reseller shall sell the Products through the points of sale listed below, each of which meets the Selective Distribution Criteria in Appendix 4. This includes physical retail locations and all websites, domains, and trading names operated by the Reseller. The Reseller shall obtain the Supplier’s prior written approval before adding any new physical point of sale, and shall notify the Supplier in writing before selling through any new website, domain, or trading name, which must meet Appendix 4; approval of a website that meets Appendix 4 shall not be withheld. Sales through a point of sale neither approved nor notified shall constitute a material breach."
+    : "The Reseller shall sell the Products only through the points of sale listed below. This includes physical retail locations and all websites, domains, and trading names operated by the Reseller. The Reseller shall obtain the Supplier’s prior written approval before adding any new point of sale, website, or domain. Sales through any point of sale not approved in writing shall constitute a material breach."));
   posRows.push(h.par([{t:"Physical locations:",b:true}]));
   (Array.isArray(data.pos_physical) && data.pos_physical.length ? data.pos_physical : ["—"]).forEach(function(x){ posRows.push(h.bul(x)); });
   posRows.push(h.par([{t:"Websites / domains / trading names:",b:true}]));
@@ -24664,8 +24712,9 @@ async function buildRA(overrideData) {
     h.h1("3   Appointment and Territory"),
     clauseNode(h, "ra.s3.appointment", LawyerChanges.standardClauseText("ra", "ra.s3.appointment", data)),
     clauseNode(h, "ra.no_subreselling", LawyerChanges.standardClauseText("ra", "ra.no_subreselling", data), [{t:"No sub-reselling. ",b:true}]),
-    clauseItemsNode(h, "ra.s3.p1", "Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products.", undefined),
+    ...(selectiveRA(data)?[]:[clauseItemsNode(h, "ra.s3.p1", "Outside the Territory, the Reseller shall refrain from actively seeking customers or establishing distribution for the Products.", undefined)]),
     clauseNode(h, "ra.marketplaces", LawyerChanges.standardClauseText("ra", "ra.marketplaces", data)),
+    ...selectiveRAClauses(h, data),
     // §4
     h.h1("4   Orders and Payment"),
     h.h3("Orders"),
@@ -24749,7 +24798,7 @@ async function buildRA(overrideData) {
     h.pgBrk(),
     h.appHdr("APPENDIX 1 — RESELLER SPECIFIC TERMS AND CONDITIONS",h.NAVY),h.sp(),
     h.h2("A   Products and Territory"),
-    h.fldTbl([h.fldRow("Products / brands",data.products),h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),    h.fldRow("Shipping terms",data.inco+" "+(data.incoplace||"Vendora Nordic AB, Lomma, Sweden")),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
+    h.fldTbl([h.fldRow("Products / brands",data.products),selectiveRA(data)?h.fldRow("Authorised brands (selective distribution, §3A)",String(data.selbrands).trim()):null,selectiveRA(data)?h.fldRow("Selective distribution criteria (Appendix 4)",data.sel_confirmed_at?"Confirmed by the Reseller on "+String(data.sel_confirmed_at).slice(0,10):"Confirmation pending"):null,h.fldRow("Territory (active sales area)",data.terr),h.fldRow("Invoice currency",data.curr),h.fldRow("Payment terms",data.pay+" days net"),    h.fldRow("Shipping terms",data.inco+" "+(data.incoplace||"Vendora Nordic AB, Lomma, Sweden")),h.fldRow("Notice period",data.notice+" days"),h.fldRow("Minimum order value",data.moq||"No minimum"),data.target?h.fldRow("Annual sales target",data.target):null,data.bonus?h.fldRow("Back-end bonus",data.bonus):null,data.mdf?h.fldRow("MDF",data.mdf):null,data.special?h.fldRow("Special conditions",data.special):null,h.fldRow("Vendora responsible salesperson",vendoraAM),h.fldRow("Signatory (Vendora)","Andreas Höynälä, CEO"),h.fldRow("Reseller signatory",data.sig_name||"—"),h.fldRow("Reseller signatory email",data.sig_email||"—"),h.fldRow("Contract & Notices contact",resellerNoticesValue(data))].filter(Boolean)),
     h.note("Reseller signatory: "+(data.sig_name||"—")+(data.sig_email?" — "+data.sig_email:"")+(data.sig_title?" — "+data.sig_title:"")+(data.sig_phone?" — "+data.sig_phone:"")),h.sp(),
     annexNode(h, "1A", null),
     h.note("This appendix can be updated by written agreement without re-signing the main agreement."),
@@ -24786,6 +24835,7 @@ async function buildRA(overrideData) {
   var GTW=[2200,7306];
   children.push(new d.Table({width:{size:h.W,type:d.WidthType.DXA},columnWidths:GTW,rows:[h.hdrRow(["","Terms"],GTW)].concat(GTC.map(function(r,i){ return h.dataRow(r,GTW,i%2===1); }))}));
   children.push(h.sp());
+  selectiveAppendix(h, data).forEach(function(n){ if (n) children.push(n); });
 
   if (data._isPreview) {
     children.unshift(new d.Paragraph({alignment:d.AlignmentType.CENTER,spacing:{before:0,after:120},shading:{fill:"FFF3CD",type:d.ShadingType.CLEAR},border:{top:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},bottom:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},left:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"},right:{style:d.BorderStyle.SINGLE,size:4,color:"C9A84C"}},children:[h.t("DRAFT PREVIEW \u2014 commercial terms proposed by Vendora; counterparty details not yet completed",{bold:true,size:18,color:"856404"})]}));
@@ -24900,7 +24950,7 @@ function getVendoraData(prefix) {
     };
   } else if (prefix === 'ra') {
     d = {
-      _type:'ra', products:gv("ra_products"), terr:gv("ra_terr"), excl:gv("ra_excl"),
+      _type:'ra', products:gv("ra_products"), selbrands:gv("ra_selbrands"), terr:gv("ra_terr"), excl:gv("ra_excl"),
       curr:gv("ra_curr"), pay:gv("ra_pay"), credit:gv("ra_credit"),
       inco:gv("ra_inco"), incoplace:gv("ra_incoplace"), moq:gv("ra_moq"),
       minact:gv("ra_minact"), notice:gv("ra_notice"), date:gv("ra_date"),
@@ -25271,6 +25321,10 @@ function renderFillMode(d) {
       + "<label style='margin-top:12px;display:block'>Websites / domains / trading names</label>"
       + "<div id='pos_web_rows'></div>"
       + "<button type='button' class='pos-add' onclick=\"addPosRow('pos_web_rows','pos_web')\">+ Add website / domain</button>";
+    // Under selective distribution the form is also the application: the reseller confirms the criteria.
+    if (d.selbrands && String(d.selbrands).trim()) idCard.innerHTML += "<div class='sec' id='fill_sel_sec'>Selective distribution *</div>"
+      + "<div class='desc'>Vendora sells the following brands only to authorised resellers that meet the Selective Distribution Criteria in Appendix 4 of the agreement: <strong>" + esc(String(d.selbrands).trim()) + "</strong>. The points of sale above must meet those criteria.</div>"
+      + "<label style='display:flex;gap:8px;align-items:flex-start;font-weight:400;cursor:pointer'><input type='checkbox' id='fill_sel_confirm' style='margin-top:3px'><span>We confirm that we meet the Selective Distribution Criteria in Appendix 4 for these brands, will inform Vendora without undue delay if we cease to do so, and will not supply the Products of these brands to resellers that Vendora has not authorised.</span></label>";
   }
 
   // Contacts form (only for DA)
@@ -25819,6 +25873,10 @@ function submitFill() {
   if (d._type === 'ra' && collectPos("pos_physical").length === 0 && collectPos("pos_web").length === 0) {
     required.push("At least one point of sale (physical store or website / domain)");
   }
+  // Under selective distribution the submission is the application: the criteria must be confirmed.
+  if (d._type === 'ra' && d.selbrands && String(d.selbrands).trim() && !(document.getElementById("fill_sel_confirm") || {}).checked) {
+    required.push("Confirmation that you meet the Selective Distribution Criteria (Appendix 4) for " + String(d.selbrands).trim());
+  }
 
   // Soft warnings — empty but not blocking
   var warnings = [];
@@ -25899,6 +25957,15 @@ function doSubmitFill() {
         if (d._type === 'ra') {
           merged.pos_physical = collectPos("pos_physical");
           merged.pos_web      = collectPos("pos_web");
+          if (d.selbrands && String(d.selbrands).trim()) {
+            var selBox = document.getElementById("fill_sel_confirm");
+            if (!selBox || !selBox.checked) {
+              spin.style.display = "none";
+              alert("Please confirm that you meet the Selective Distribution Criteria in Appendix 4 for the listed brands.");
+              return;
+            }
+            merged.sel_confirmed = true; merged.sel_confirmed_at = new Date().toISOString();
+          }
         }
         merged.rcontacts = collectResellerContacts("fill_rc_");
       }
