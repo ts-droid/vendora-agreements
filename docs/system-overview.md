@@ -160,6 +160,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 59 | Systemöversikten (detta dokument) |
 | 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 | 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
+| 2026-10-30 | 63 | Marknadsplatsklausulen villkorar inte längre ett godkännande med minimipris |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
