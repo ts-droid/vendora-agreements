@@ -12,6 +12,7 @@ const lawyerChanges    = require('./lawyer-changes');
 const lawyerVerify     = require('./lawyer-verify');
 const documentExtract  = require('./document-extract');
 const workflowCore = require('./workflow-core');
+const history = require('./agreement-history');
 const uploadLimits = require('./upload-limits');
 const aiDocument = require('./ai-document');
 
@@ -80,6 +81,13 @@ const STATUSES = ['draft', 'invited', 'submitted', 'generated', 'sent', 'pending
 const LOCKED = ['sent', 'pending_signature', 'vendora_signed'];
 // …as is anything still carrying Vendora's signature.
 function isLocked(row) { return LOCKED.includes(row.status) || !!row.vendora_signed_at; }
+// Version history (agreement-history.js): who did it, and a write that never undoes the change it
+// records — a failed history write is logged, the saved change stands.
+const actorOf = req => (req.user && (req.user.name || req.user.email)) || 'unknown';
+async function keepVersion(id, action, actor, opts) {
+  try { return await history.record(db, id, action, actor, opts); }
+  catch (err) { console.error('[history] ' + action + ' on agreement ' + id + ': ' + err.message); return null; }
+}
 // Statuses that may only be reached through the signature workflow, never set by hand.
 const WORKFLOW_ONLY = ['sent', 'pending_signature', 'vendora_signed'];
 // An agreement can go out for signature once negotiation is done (never while still awaiting the counterparty's details).
@@ -967,6 +975,7 @@ app.post('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
       [aligned.type, counterpartyName || null, counterpartyEmail || null, data, initial, req.user.uid, req.user.name || req.user.email]
     );
     publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
+    await keepVersion(r.rows[0].id, 'created', actorOf(req));
     res.json({ id: r.rows[0].id, created_at: r.rows[0].created_at });
   } catch (err) {
     console.error('Save agreement error:', err.message);
@@ -992,6 +1001,7 @@ app.post('/api/invites', requireDb, auth.requireAuth, async (req, res) => {
       [aligned.type, counterpartyName || null, counterpartyEmail || null, data, token, req.user.uid, req.user.name || req.user.email]
     );
     publishAgreement('agreement.created', r.rows[0].id, { previous_status: null });
+    await keepVersion(r.rows[0].id, 'invited', actorOf(req), { note: counterpartyEmail ? 'to ' + counterpartyEmail : null });
     res.json({ id: r.rows[0].id, token });
   } catch (err) {
     console.error('Create invite error:', err.message);
@@ -1006,7 +1016,7 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
   try {
     const { token, data, counterpartyName, counterpartyEmail } = req.body || {};
     if (!token || !data) return res.status(400).json({ error: 'token and data are required' });
-    const cur = await db.query('SELECT update_token, status, vendora_signed_at, data, workflow_state FROM agreements WHERE id=$1', [req.params.id]);
+    const cur = await db.query('SELECT update_token, status, vendora_signed_at, data, workflow_state, counterparty_name, updated_at, created_at FROM agreements WHERE id=$1', [req.params.id]);
     const row = cur.rows[0];
     if (!row) return res.status(404).json({ error: 'Not found' });
     if (!row.update_token || !tokenEq(row.update_token, token)) return res.status(403).json({ error: 'Invalid token' });
@@ -1028,6 +1038,7 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
     );
     if (!upd.rowCount) return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
     publishStatusChange(req.params.id, prevStatus, 'submitted');
+    await keepVersion(req.params.id, 'submitted', (counterpartyName || cpName(row)) + ' (counterparty)', { previous: row });
     res.json({ ok: true });
   } catch (err) {
     console.error('Submit error:', err.message);
@@ -1069,6 +1080,53 @@ app.get('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
   }
 });
 
+// ── Version history ───────────────────────────────────────────────────────────
+// Every version of an agreement is kept (agreement-history.js): list them, fetch one to download
+// it as it was, or put one back as the current content. Restoring never discards anything — the
+// content being replaced is itself the latest version.
+app.get('/api/agreements/:id/versions', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const row = await loadOwned(req, res); if (!row) return;
+    const versions = await history.list(db, row.id);
+    res.json({ versions, current: Number(row.workflow_revision || 0), status: row.status, locked: isLocked(row), workflow: !!row.workflow_state,
+      restorable: !row.workflow_state && !isLocked(row) && row.status !== 'signed' });
+  } catch (err) {
+    console.error('List versions error:', err.message);
+    res.status(500).json({ error: 'Could not load the version history' });
+  }
+});
+app.get('/api/agreements/:id/versions/:revision', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const row = await loadOwned(req, res); if (!row) return;
+    const version = await history.get(db, row.id, req.params.revision);
+    if (!version) return res.status(404).json({ error: 'Version not found' });
+    res.json({ version: Object.assign({ type: row.type }, version) });
+  } catch (err) {
+    console.error('Get version error:', err.message);
+    res.status(500).json({ error: 'Could not load that version' });
+  }
+});
+app.post('/api/agreements/:id/versions/:revision/restore', requireDb, auth.requireAuth, async (req, res) => {
+  try {
+    const row = await loadOwned(req, res); if (!row) return;
+    if (row.workflow_state) return res.status(409).json({ error: 'Agreements in the review workflow are changed through the workflow itself: earlier versions can be downloaded, not restored.' });
+    if (isLocked(row)) return res.status(409).json({ error: 'This agreement is locked while out for signature. Withdraw it before restoring an earlier version.', locked: true });
+    if (row.status === 'signed') return res.status(409).json({ error: 'This agreement is fully signed, so its content cannot be replaced.' });
+    const version = await history.get(db, row.id, req.params.revision);
+    if (!version) return res.status(404).json({ error: 'Version not found' });
+    const data = history.restorable(version.data, row.type);
+    const aligned = alignAgreementType(data, row.type);
+    if (aligned.error) return res.status(400).json({ error: aligned.error });
+    const r = await db.query('UPDATE agreements SET data=$1, counterparty_name=COALESCE($2, counterparty_name), updated_at=now() WHERE id=$3 RETURNING updated_at',
+      [data, data.name || null, row.id]);
+    const revision = await keepVersion(row.id, 'restored', actorOf(req), { previous: row, note: 'version ' + version.revision });
+    res.json({ ok: true, revision, data, updated_at: r.rows[0].updated_at });
+  } catch (err) {
+    console.error('Restore version error:', err.message);
+    res.status(500).json({ error: 'Could not restore that version' });
+  }
+});
+
 app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => {
   try {
     const { counterpartyName, counterpartyEmail, data, status } = req.body || {};
@@ -1090,12 +1148,16 @@ app.put('/api/agreements/:id', requireDb, auth.requireAuth, async (req, res) => 
     if (rejectBadAgreement(res, data, row.data)) return;
     // Workflow-only statuses can't be set through a plain save.
     const nextStatus = status && STATUSES.includes(status) && !WORKFLOW_ONLY.includes(status) ? status : null;
+    const cmp = (await db.query('SELECT data = $1::jsonb AS same FROM agreements WHERE id=$2', [data, req.params.id])).rows[0];
+    const unchanged = !!(cmp && cmp.same);
     const r = await db.query(
       `UPDATE agreements SET counterparty_name=$1, counterparty_email=$2, data=$3,
          status=COALESCE($4,status), updated_at=now() WHERE id=$5 RETURNING id, updated_at`,
       [counterpartyName || null, counterpartyEmail || null, data, nextStatus, req.params.id]
     );
     publishStatusChange(row.id, row.status, nextStatus);
+    // A save that changes nothing (a re-download of the same content) is not a version.
+    if (!unchanged || (nextStatus && nextStatus !== row.status)) await keepVersion(row.id, 'saved', actorOf(req), { previous: row });
     res.json({ id: r.rows[0].id, updated_at: r.rows[0].updated_at });
   } catch (err) {
     console.error('Update agreement error:', err.message);
@@ -1131,6 +1193,7 @@ app.put('/api/agreements/:id/status', requireDb, auth.requireAuth, async (req, r
     }
     const r = await db.query('UPDATE agreements SET status=$1, status_updated_at=now(), updated_at=now() WHERE id=$2 RETURNING status_updated_at', [status, req.params.id]);
     publishStatusChange(row.id, row.status, status);
+    if (status !== row.status) await keepVersion(row.id, 'status-changed', actorOf(req), { previous: row });
     res.json({ ok: true, status, status_updated_at: r.rows[0].status_updated_at });
   } catch (err) {
     console.error('Set status error:', err.message);
@@ -1184,6 +1247,7 @@ app.post('/api/agreements/:id/files',
         ? await db.query("UPDATE agreements SET status='signed', status_updated_at=now(), updated_at=now() WHERE id=$1 RETURNING status_updated_at", [req.params.id])
         : { rows: [{ status_updated_at: row.status_updated_at }] };
       if (legacyDone) publishStatusChange(req.params.id, row.status, 'signed');
+      if (legacyDone) await keepVersion(row.id, 'signed-copy-uploaded', who, { previous: row, note: filename });
       res.json({ file, status: legacyDone ? 'signed' : row.status, status_updated_at: up.rows[0] && up.rows[0].status_updated_at });
     } catch (err) {
       console.error('Upload file error:', err.message);
@@ -1422,6 +1486,7 @@ async function registerCounterpartySignature(req, row, file, signerName, uploade
        WHERE id=$3 AND status='sent' RETURNING status_updated_at`, [signerName, file ? file.id : null, row.id, stamp ? JSON.stringify(stamp) : null]);
     if (!up.rows[0]) { const e = new Error('This agreement is not awaiting the counterparty\'s signature.'); e.status = 409; throw e; }
     status_updated_at = up.rows[0].status_updated_at;
+    await keepVersion(row.id, 'counterparty-signed', signerName + ' (counterparty)', { previous: row, note: stamp ? 'electronic signature' : 'signed copy' + (file ? ': ' + file.filename : '') });
   }
   publishStatusChange(row.id, 'sent', 'pending_signature');
   const type = TYPE_LABEL[row.type] || 'Agreement';
@@ -1502,6 +1567,7 @@ app.post('/api/agreements/:id/send-for-signature', requireDb, auth.requireAuth, 
        WHERE id=$6 RETURNING status_updated_at, signature_sent_at`,
       [to, token, summary, req.user.email, who, req.params.id]);
     publishStatusChange(row.id, row.status, 'sent');
+    await keepVersion(row.id, 'sent-for-signature', who, { previous: row, note: 'to ' + to });
     const link = 'https://' + req.get('host') + '/#agreementcopy=' + row.id + '.' + token;
     const sent = await sendMailSafe(signatureRequestMail(row, who, req.user.email, to, link));
     res.json({ ok: true, status: 'sent', sent, mailReason: sent ? null : lastMailError, link, email: to,
@@ -1631,6 +1697,7 @@ app.post('/api/agreements/:id/sign', requireDb, auth.requireAuth, async (req, re
       [SIGNER_NAME, req.user.email, JSON.stringify(stamp), req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
     publishStatusChange(row.id, row.status, 'signed');
+    await keepVersion(row.id, 'vendora-signed', actorOf(req), { previous: row });
     const notified = await notifyFullySigned(req, Object.assign({}, row, { status: 'signed', vendora_signed_at: up.rows[0].vendora_signed_at, vendora_signed_by: SIGNER_NAME }));
     res.json({ ok: true, status: 'signed', vendora_signed_at: up.rows[0].vendora_signed_at, data: up.rows[0].data, notified });
   } catch (err) {
@@ -1655,6 +1722,7 @@ app.post('/api/agreements/:id/return', requireDb, auth.requireAuth, async (req, 
       [note, req.params.id]);
     if (!up.rows[0]) return res.status(409).json({ error: 'This agreement is not awaiting a signature.' });
     publishStatusChange(row.id, row.status, 'generated');
+    await keepVersion(row.id, 'returned', actorOf(req), { previous: row, note: note });
     if (row.signature_requested_by) {
       const type = TYPE_LABEL[row.type] || 'agreement';
       await sendMailSafe({
@@ -1687,6 +1755,7 @@ app.post('/api/agreements/:id/withdraw', requireDb, auth.requireAuth, async (req
          data = data - '_vendoraSignature' - '_counterpartySignature'
        WHERE id=$1 RETURNING status_updated_at`, [req.params.id]);
     publishStatusChange(row.id, row.status, 'generated');
+    await keepVersion(row.id, 'withdrawn', actorOf(req), { previous: row });
     // Voiding an actual signature is worth telling the signer about.
     if (row.vendora_signed_at && SIGNER_EMAIL) {
       await sendMailSafe({
