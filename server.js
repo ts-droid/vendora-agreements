@@ -1617,7 +1617,7 @@ app.get('/api/public-agreements/:id', publicLimiter, requireDb, async (req, res)
     if (!row || !token || !tokenEq(req.query.token, token) || !['sent', 'pending_signature', 'signed'].includes(row.status)) {
       return res.status(404).json({ error: 'This signing link is not valid or has been withdrawn. Please contact Vendora.' });
     }
-    if (row.workflow_state && row.workflow_state.templateVersion !== workflowCore.TEMPLATE_VERSION) {
+    if (row.workflow_state && !workflowCore.templateCurrent(row)) {
       return res.status(409).json({ error: 'Please ask Vendora for the archived copy of this agreement.' });
     }
     const data = row.workflow_state ? Object.assign({}, row.workflow_state.signatureShare.data) : publicCopy(row.data);

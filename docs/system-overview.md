@@ -44,7 +44,9 @@ Varje steg i flödet skriver en version (se avsnitt 6). Kortet längst ner i for
 
 Statusar: `draft` → `invited` → `submitted` → `generated` → `sent` → `pending_signature` → `signed`. Dessutom `imported` (post skapad från länk) och `vendora_signed` (kvar från den äldre ordningen där VD signerade först).
 
-Låst innehåll: från `sent` till `signed`, och allt som bär Vendoras signatur. En sparning mot en låst post nekas (409) och visas tydligt i gränssnittet; inget dokument kan laddas ner som arkivet inte har. Återkalla ("withdraw") öppnar avtalet igen (`generated`), motpartens länk slutar fungera, eventuell Vendora-signatur upphävs och VD meddelas.
+Låst innehåll: från `sent` till `signed`, och allt som bär Vendoras signatur. En sparning mot en låst post nekas (409) och visas tydligt i gränssnittet; inget dokument kan laddas ner som arkivet inte har. Återkalla ("withdraw") öppnar avtalet igen (`generated`; i granskningsflödet tillbaka till `submitted`), motpartens länk slutar fungera, eventuell Vendora-signatur upphävs och VD meddelas.
+
+**Standardversion.** Dokumentet skrivs alltid ut med den gällande standardtexten i klausulbiblioteket. Varje flödesärende bär därför versionen av standarden för sin avtalstyp (en hash av vad typens klausuler ger med standardvärdena). Ändras typens standard efter att ärendet började visar flödespanelen vilka klausuler som fått ny lydelse, lagts till eller tagits bort, och ägaren eller admin godkänner den nya versionen för ärendet efter att ha läst dem ("Granskat: ta den nya standarden"). Tills dess hålls kundlänken och utskicket, och punkten står under "Kvar före slutgodkännande". Ett låst ärende återkallas först. Granskningen sparas som version (`template-review`) med vem, när och anteckning. Ärenden från före 2026-10-30 bar en gemensam hash av mallfilerna; den räknas som den dåvarande versionen per typ, så de påverkas bara när deras egen typ ändras.
 
 ## 5. Signering
 
@@ -160,6 +162,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 59 | Systemöversikten (detta dokument) |
 | 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 | 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
+| 2026-10-30 | 62 | Standardversionen räknas per avtalstyp; pågående ärenden ser ändringarna och tar den nya standarden i flödespanelen |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
