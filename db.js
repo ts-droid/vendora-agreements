@@ -52,13 +52,13 @@ async function init() {
   // Several processes can run this at once: the test runner runs files in parallel, and a deploy
   // can overlap the instance it replaces. Concurrent CREATE TABLE IF NOT EXISTS on the same table
   // fails in Postgres ("duplicate key value violates unique constraint pg_type_typname_nsp_index"),
-  // so the whole schema setup runs in one transaction behind an advisory lock: initialisers queue
-  // up, and each one finds the others' work already done.
+  // so initialisers take turns behind a session-level advisory lock: each one finds the others'
+  // work already done. Every statement still commits on its own — holding every table's lock in
+  // one long transaction deadlocked against the requests another instance was serving meanwhile.
   const client = await pool.connect();
   const query = (text, params) => client.query(text, params);   // the statements below run on this client
   try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(734280117)');
+    await client.query('SELECT pg_advisory_lock(734280117)');
     await query(`
       CREATE TABLE IF NOT EXISTS users (
         id            SERIAL PRIMARY KEY,
@@ -184,11 +184,8 @@ async function init() {
       id SERIAL PRIMARY KEY,agreement_id INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
       sent_version INTEGER,submission JSONB NOT NULL,reason TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );`);
-    await client.query('COMMIT');
-  } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (e) { /* connection already doomed */ }
-    throw err;
   } finally {
+    try { await client.query('SELECT pg_advisory_unlock(734280117)'); } catch (e) { /* connection already doomed */ }
     client.release();
   }
   return true;
