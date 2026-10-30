@@ -192,6 +192,8 @@ function receive(row, submitted, sentVersion, actor, at) {
   for(const k of FACTS)if(Object.hasOwn(submitted,k))d[k]=value(submitted[k]);
   if(submitted.contacts)d.contacts=contacts(submitted.contacts,true);
   if(submitted.rcontacts)d.rcontacts=contacts(submitted.rcontacts,false);
+  // Their comments on the wording travel with the submission; never back out to them (publicData strips _ keys).
+  if(typeof submitted._counterpartyComments==='string'&&submitted._counterpartyComments.trim())d._counterpartyComments=value(submitted._counterpartyComments.slice(0,5000),5000);
   for(const k of ['pos_physical','pos_web'])if(Object.hasOwn(submitted,k)){
     if(!Array.isArray(submitted[k])||submitted[k].length>100)throw error('Ogiltig lista över försäljningsställen.',400);d[k]=submitted[k].map(x=>value(x,500));
   }

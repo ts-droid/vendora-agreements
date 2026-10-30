@@ -24,11 +24,11 @@ Distributörsavtalets MDF-del: bas-MDF är det som används. Målbonus och co-op
 
 ## 3. Två vägar för ett avtal
 
-**Ifyllnadsflödet (äldre, enklare).** Vendora fyller i villkoren i formuläret och skickar en ifyllnadslänk. Motparten fyller i företagsuppgifter, kontakter och (för RA/RB) undertecknare, och kan föreslå andra värden på de kommersiella villkoren. Inskicket uppdaterar samma arkivpost (status `submitted`). Vendora granskar på granskningssidan (`#review=`), beslutar per förslag (Accept / Keep mine), sparar och godkänner för underskrift.
+**Ifyllnadsflödet (äldre, enklare).** Vendora fyller i villkoren i formuläret och skickar en ifyllnadslänk. Motparten fyller i företagsuppgifter, kontakter och (för RA/RB) undertecknare, kan föreslå andra värden på de kommersiella villkoren, och kan skriva kommentarer om avtalstexten och bifoga sin kommenterade kopia (PDF, Word, Excel eller text). Bilagan hamnar bland avtalets filer, kommentarerna visas för Vendora i flödespanelen och på granskningssidan, och säljarens notismejl tar med båda. Inskicket uppdaterar samma arkivpost (status `submitted`). Vendora granskar på granskningssidan (`#review=`), beslutar per förslag (Accept / Keep mine), sparar och godkänner för underskrift.
 
 **Granskningsflödet "Vendora-first" (nuvarande huvudflöde).** Startas från arkivposten (flödespanelen under formuläret). Steg:
 
-1. Jämför kundavtal och anpassa vårt avtal: ladda upp motpartens dokument (PDF, Word, Excel, text). Avtalsadvokaten föreslår ändringar i vårt avtal, punkt för punkt, och importförslag av företagsuppgifter. Vendora godkänner eller avstår varje punkt. Riskvillkor ("hard no") kräver dokumenterat särskilt godkännande.
+1. Jämför kundavtal och anpassa vårt avtal: ladda upp motpartens dokument (PDF, Word, Excel, text), eller välj ett dokument som redan ligger på avtalet, till exempel det motparten bifogade via sin länk (förvalt). Avtalsadvokaten föreslår ändringar i vårt avtal, punkt för punkt, och importförslag av företagsuppgifter. Vendora godkänner eller avstår varje punkt. Riskvillkor ("hard no") kräver dokumenterat särskilt godkännande.
 2. Kundens komplettering: "Skicka till kunden för granskning" skickar ifyllnadslänken (en version per utskick). Kundens svar kommer tillbaka som beslutspunkter; kundens villkorsförslag ändrar aldrig avtalet automatiskt. Ett inskick per utskickad version; senare försök sparas som `agreement_submission_conflicts` och motparten får besked om att uppgifterna redan är inne.
 3. Granska återkoppling: alla punkter beslutade, "Kvar före slutgodkännande" tom.
 4. Motpartens underskrift.
@@ -108,7 +108,7 @@ Inloggade (`/api/agreements…`): skapa, lista, hämta, spara (PUT, nekas låst)
 
 Flödet (`/api/workflow/:id/…`): start, decisions, company-details, apply, rework, invite, counsel-approval, versions, plus `manualSave`, `submit`, `sendForSignature`, `withdraw`, `sign` som anropas via agreements-rutterna när posten är i flödet.
 
-Publika (token-skyddade, hastighetsbegränsade): `/api/invite/:code`, `/api/public-invites/:id`, `/api/agreements/:id/submit`, `/api/public-agreements/:id` (hämta fryst version), `…/sign` (e-signatur), `…/signed-copy` (uppladdning), `/api/notify`.
+Publika (token-skyddade, hastighetsbegränsade): `/api/invite/:code`, `/api/public-invites/:id`, `/api/agreements/:id/submit`, `/api/agreements/:id/counterparty-files` (motpartens bilaga), `/api/public-agreements/:id` (hämta fryst version), `…/sign` (e-signatur), `…/signed-copy` (uppladdning), `/api/notify`.
 
 AI: `/api/ai/review` (+ `/api/ai/review/:jobId`), `/api/reviews…`, `/api/ai/chat`, `/api/ai/verify-document`, `/api/ai/suggest-note`, `/api/playbook…`.
 
@@ -126,7 +126,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 
 ## 13. Tester och CI
 
-`npm test` kör `node --test test/*.js`: enhetstester, API-tester mot en engångsdatabas (`TEST_DATABASE_URL`, måste heta `agreement_test`) och webbläsartester med Chrome/Edge via puppeteer (`CHROME_BIN`). GitHub Actions (`agreement-tests.yml`) kör samma svit med Postgres och Chrome; en separat workflow mäter AI-träffsäkerhet på företagsuppgifter. Läget 2026-10-30: 199 tester, 197 godkända, 2 överhoppade.
+`npm test` kör `node --test test/*.js`: enhetstester, API-tester mot en engångsdatabas (`TEST_DATABASE_URL`, måste heta `agreement_test`) och webbläsartester med Chrome/Edge via puppeteer (`CHROME_BIN`). GitHub Actions (`agreement-tests.yml`) kör samma svit med Postgres och Chrome; en separat workflow mäter AI-träffsäkerhet på företagsuppgifter. Läget 2026-10-30: 202 tester, 200 godkända, 2 överhoppade.
 
 ## 14. Ändringslogg (mergade PR:ar)
 
@@ -153,13 +153,14 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 56 | Schemat sätts upp bakom ett lås så att samtidiga starter inte krockar |
 | 2026-10-30 | 57 | Valfria MDF-komponenter visas bara när de är satta |
 | 2026-10-30 | 58 | Schemalåset blir ett sessionslås: varje sats committas för sig, inga dödlås mot pågående anrop |
+| 2026-10-30 | 59 | Systemöversikten (detta dokument) |
+| 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
 ## 15. Kända luckor och förslag
 
 - Avvisade upprepade inskick från motparten sparas men syns inte i gränssnittet. Förslag: lista dem i flödespanelen med "Ta in uppgifterna".
-- Motparten kan föreslå andra värden på villkoren men inte skicka ändrad avtalstext eller bifoga dokument via formuläret. Förslag: fält för kommentarer på lydelsen och uppladdning av kommenterad Word/Excel direkt på ifyllnadssidan, kopplad till jämförelsesteget.
 - VD får signeringsförfrågan automatiskt när motparten signerat. Vill man ha ett kontrollsteg hos säljaren först behöver det byggas.
 - Tider i gränssnittet visas i UTC utom i versionshistoriken, som visar lokal tid.
 

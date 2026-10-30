@@ -25303,6 +25303,13 @@ function renderFillMode(d) {
   shell.appendChild(idCard);
   if (rcCard) shell.appendChild(rcCard);
   if (contactCard) shell.appendChild(contactCard);
+  // Changes to the wording itself, and their own document: until now the only way was email.
+  var markupCard = document.createElement("div"); markupCard.className = "card"; markupCard.id = "fillMarkupCard";
+  markupCard.innerHTML = "<h2>Comments on the agreement wording</h2>"
+    + "<div class='desc'>Optional. If you would like changes to the agreement text itself, write them here or attach your marked-up copy or a list of comments. Vendora reviews them before the agreement is finalised.</div>"
+    + "<div class='g1'><div class='f'><label>Your comments</label><textarea id='fill_comments' rows='4' maxlength='5000' placeholder='e.g. Clause 3: we would like 90 days instead of 180.'></textarea></div></div>"
+    + "<div class='g1' style='margin-top:12px'><div class='f'><label>Attach your marked-up copy or list of comments <em>(PDF, Word, Excel or text, up to "+(window.UploadLimits?UploadLimits.MAX_FILE_LABEL:"50 MB")+")</em></label><input type='file' id='fill_file' accept='.pdf,.doc,.docx,.xlsx,.txt,.md'></div></div>";
+  shell.appendChild(markupCard);
   shell.appendChild(submitBar);
   shell.appendChild(sucDiv);
 
@@ -25457,6 +25464,11 @@ function showReviewMode(d) {
     shell.innerHTML = "";
   shell.appendChild(banner);
   shell.appendChild(lockBox);
+  if (d._counterpartyComments) {
+    var cbox=document.createElement("div"); cbox.className="card"; cbox.id="reviewComments";
+    cbox.innerHTML="<h2>"+(isDA?"Supplier":"Reseller")+"'s comments on the agreement wording</h2><p style='white-space:pre-wrap;font-size:13px'>"+esc(d._counterpartyComments)+"</p><div class='desc'>Their attached document, if any, is with the agreement's files in the archive and can be chosen in the comparison step.</div>";
+    shell.appendChild(cbox);
+  }
   if (proposalCard) shell.appendChild(proposalCard);
   shell.appendChild(reviewCard);
   shell.appendChild(genBar);
@@ -25838,6 +25850,15 @@ function submitFill() {
   }
   document.getElementById("valModal").classList.add("open");
 }
+// The counterparty's own document goes up through their invite token, before their submission.
+function uploadCounterpartyFile(d, file, company){
+  if (window.UploadLimits && file.size > UploadLimits.MAX_FILE_BYTES) { var big=new Error("The attached file is larger than "+UploadLimits.MAX_FILE_LABEL+". Nothing was submitted."); big.uploadError=true; return Promise.reject(big); }
+  return fetch("/api/agreements/"+d._aid+"/counterparty-files?token="+encodeURIComponent(d._atok), {method:"POST", headers:{"Content-Type": file.type||"application/octet-stream", "X-Filename": encodeURIComponent(file.name), "X-Uploader-Name": encodeURIComponent(company||"")}, body:file})
+    .then(readApi).then(function(res){
+      if(!res.ok){ var e=new Error("The attached document could not be uploaded ("+((res.j&&res.j.error)||"error")+"). Nothing was submitted; check the attachment and try again."); e.uploadError=true; throw e; }
+      return res.j.file;
+    });
+}
 function doSubmitFill() {
   var d = window._fillData;
   var isDA = window._fillIsDA;
@@ -25906,7 +25927,9 @@ function doSubmitFill() {
             agreementType: isDA ? "Distributor Agreement" : "Reseller Agreement",
             reviewUrl: reviewUrl,
             vendoraContact: d.vemail || null,
-            proposalCount: Object.keys(merged._proposals||{}).length
+            proposalCount: Object.keys(merged._proposals||{}).length,
+            comments: (window._fillNotifyExtra||{}).comments || "",
+            attachment: (window._fillNotifyExtra||{}).attachment || ""
           })
         }).catch(function(){});
 
@@ -25917,17 +25940,23 @@ function doSubmitFill() {
       };
       if (d._aid && d._atok) {
         var cpEmail = merged.sig_email || (merged.contacts && merged.contacts.mgmt && merged.contacts.mgmt.p && merged.contacts.mgmt.p.e) || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
-        fetch("/api/agreements/" + d._aid + "/submit", {
+        var comments = (gv("fill_comments") || "").trim();
+        if (comments) reviewData._counterpartyComments = comments.slice(0, 5000);
+        var attach = document.getElementById("fill_file"), attachFile = attach && attach.files && attach.files[0];
+        window._fillNotifyExtra = { comments: comments, attachment: attachFile ? attachFile.name : "" };
+        // Their document goes up first, so it is with the record whatever the submission's answer.
+        var uploaded = attachFile ? uploadCounterpartyFile(d, attachFile, merged.name) : Promise.resolve();
+        uploaded.then(function(){ return fetch("/api/agreements/" + d._aid + "/submit", {
           method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ token: d._atok, sentVersion:d._sentVersion, data: reviewData, counterpartyName: (merged.name||null), counterpartyEmail: cpEmail })
-        }).then(readApi).then(function(res){
+        }); }).then(readApi).then(function(res){
           if (!res.ok) {
             spin.style.display = "none";
             if (res.j && res.j.alreadySubmitted) { d._submittedAt = res.j.submittedAt || new Date().toISOString(); fillLockSubmit(d); showSubmittedModal("already", d, d._submittedAt); return; }
             alert(agreementErrorText(res.j, "Could not submit")); return;
           }
           doNotify();
-        }).catch(function(){ spin.style.display="none"; alert("Kunde inte bekräfta att uppgifterna sparades. Försök igen; inga villkorsändringar godkänns automatiskt."); });
+        }).catch(function(e){ spin.style.display="none"; alert(e && e.uploadError ? e.message : "Kunde inte bekräfta att uppgifterna sparades. Försök igen; inga villkorsändringar godkänns automatiskt."); });
       } else {
         doNotify();
       }
@@ -26947,6 +26976,7 @@ function apLoadFiles(){
   var box=document.getElementById("apFiles");
   fetch("/api/agreements/"+e.id+"/files").then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
     var files=j.files||[];
+    crFillStoredFiles(e.type, files);
     if(!files.length){ box.innerHTML="<span style='color:var(--muted)'>No documents uploaded yet.</span>"; return; }
     box.innerHTML=files.map(function(f){
       var kb=Math.max(1,Math.round((f.size_bytes||0)/1024));
@@ -27575,6 +27605,7 @@ function renderContractReviewCards(){
       + "<div class='f' style='margin-bottom:10px;max-width:520px'><label>Name this review <em>(optional — it's saved under Archive &rarr; Contract reviews)</em></label><input id='cr_name_"+t+"' maxlength='120' placeholder='e.g. Komplett — their reseller terms, Oct 2026'></div>"
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
       + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.xlsx,.txt,.md' style='font-size:12px'>"
+      + "<select id='cr_stored_"+t+"' style='display:none;font-size:12px;max-width:380px' title='A document already with this agreement'></select>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Jämför och föreslå anpassningar &rarr;</button>"
       + "<div id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted);flex-basis:100%' role='status' aria-live='polite'></div></div>"
       + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx), Excel (.xlsx) or text, up to 50 MB. A spreadsheet of comments, one row per clause, works too. Jämförelsen föreslår även motpartens företagsuppgifter från dokumentet. Kontrollera och välj vilka uppgifter som ska föras in i vårt avtal. Godkänn eller avstå förslagen före kundutskicket.</div>"
@@ -27680,11 +27711,31 @@ async function buildOurAgreementText(type){
   return docxToText(await r.blob.arrayBuffer());
 }
 
+// Documents already with the record — what the counterparty attached through their link, or anything
+// uploaded — can be compared without downloading and re-uploading them. The counterparty's newest
+// attachment is preselected.
+function crFillStoredFiles(type, files){
+  var sel=document.getElementById("cr_stored_"+type); if(!sel) return;
+  files=(files||[]).filter(function(f){ return /\.(pdf|docx?|xlsx|txt|md)$/i.test(f.filename||""); });
+  if(!files.length){ sel.style.display="none"; sel.innerHTML=""; return; }
+  var theirs=files.filter(function(f){ return /\(counterparty\)$/.test(f.uploaded_by||""); }).sort(function(a,b){ return String(b.uploaded_at||"").localeCompare(String(a.uploaded_at||"")); });
+  sel.innerHTML="<option value=''>… or a document already with this agreement</option>"+files.map(function(f){ return "<option value='"+f.id+"'>"+esc(f.filename)+" · "+esc(f.uploaded_by||"")+" · "+esc(String(f.uploaded_at||"").slice(0,10))+"</option>"; }).join("");
+  if(theirs.length) sel.value=String(theirs[0].id);
+  sel.style.display="";
+}
+function crStoredFile(type){
+  var sel=document.getElementById("cr_stored_"+type), e=window._editing;
+  if(!sel || !sel.value || !e) return Promise.resolve(null);
+  var name=(sel.options[sel.selectedIndex].textContent.split(" · ")[0]||"document").trim();
+  return fetch("/api/agreements/"+e.id+"/files/"+sel.value).then(function(r){ if(!r.ok) throw new Error("Could not fetch that document from the archive."); return r.blob(); })
+    .then(function(b){ return new File([b], name, {type:b.type}); });
+}
 async function runContractReview(type){
   // A second click (including one after a re-render) must not start another paid request.
   if(WorkflowActivity.busy())return;
   var inp=document.getElementById("cr_file_"+type), msg=document.getElementById("cr_msg_"+type), btn=document.getElementById("cr_btn_"+type), out=document.getElementById("cr_out_"+type);
-  var file=inp.files && inp.files[0];
+  var file=(inp.files && inp.files[0]) || null;
+  if(!file){ try { file=await crStoredFile(type); } catch(e){ msg.style.color="#c0392b"; msg.textContent=e.message; return; } }
   var family=familyFromSelect("cr_type_"+type);
   var templateType=templateTypeFor(family, type);
   msg.style.color="#c0392b";
