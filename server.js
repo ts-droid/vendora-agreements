@@ -357,7 +357,7 @@ app.post('/api/send-invite', auth.requireAuth, async (req, res) => {
 
 // ── Notification to Vendora when supplier submits ─────────────────────────────
 app.post('/api/notify', publicLimiter, async (req, res) => {
-  const { supplierName, agreementType, reviewUrl, vendoraContact, proposalCount } = req.body;
+  const { supplierName, agreementType, reviewUrl, vendoraContact, proposalCount, comments, attachment } = req.body;
   const transporter = getTransporter();
   if (!transporter) {
     console.log('SMTP not configured — skipping notification');
@@ -375,6 +375,8 @@ app.post('/api/notify', publicLimiter, async (req, res) => {
   const aType = escHtml(agreementType || 'Agreement');
   const pCount = Math.max(0, parseInt(proposalCount, 10) || 0);
   const okUrl = typeof reviewUrl === 'string' && reviewUrl.indexOf('https://' + req.get('host') + '/') === 0;
+  const cText = typeof comments === 'string' ? escHtml(comments.slice(0, 2000)) : '';
+  const aName = typeof attachment === 'string' ? escHtml(attachment.slice(0, 200)) : '';
 
   try {
     await transporter.sendMail({
@@ -395,6 +397,8 @@ app.post('/api/notify', publicLimiter, async (req, res) => {
               for the <strong>${aType}</strong>.
             </p>
             ${pCount > 0 ? `<div style="background:#FFF3CD;border:1px solid #ffe69c;border-radius:4px;padding:10px 14px;margin:12px 0;color:#856404;font-size:13px"><strong>&#x26A0; ${pCount} proposed change${pCount>1?'s':''} to your commercial terms.</strong> Review them on the page before generating the final agreement.</div>` : ''}
+            ${cText ? `<div style="background:#f3f7f4;border:1px solid #cfe3d6;border-radius:4px;padding:10px 14px;margin:12px 0;color:#16362d;font-size:13px"><strong>Their comments on the agreement wording:</strong><br><span style="white-space:pre-wrap">${cText}</span></div>` : ''}
+            ${aName ? `<p style="color:#555;font-size:13px">&#128206; They attached <strong>${aName}</strong>. It is with the agreement's files in the archive, ready for the comparison step.</p>` : ''}
             ${okUrl ? `<div style="text-align:center;margin:24px 0">
               <a href="${escHtml(reviewUrl)}"
                  style="display:inline-block;background:#0F2240;color:#fff;padding:12px 28px;
@@ -1045,6 +1049,32 @@ app.post('/api/agreements/:id/submit', publicLimiter, requireDb, async (req, res
     res.status(500).json({ error: 'Could not record submission' });
   }
 });
+
+// Public: the counterparty attaches their own document — a marked-up copy of the agreement, a list
+// of comments — through their fill-in link, sent before their submission so it is with the record
+// whatever the submission's answer. It lands with the agreement's files, for Vendora to read and to
+// run the comparison on. Authorised by the invite token; open only while the fill-in link is.
+const MARKUP_TYPES = /\.(pdf|docx?|xlsx|txt|md)$/i;
+app.post('/api/agreements/:id/counterparty-files', publicLimiter, requireDb,
+  express.raw({ type: () => true, limit: uploadLimits.MAX_FILE_BYTES }),
+  async (req, res) => {
+    try {
+      const row = /^\d+$/.test(String(req.params.id)) ? (await db.query('SELECT id, update_token, status, counterparty_name, data FROM agreements WHERE id=$1', [req.params.id])).rows[0] : null;
+      if (!row || !row.update_token || !tokenEq(req.query.token, row.update_token)) return res.status(403).json({ error: 'Invalid token' });
+      if (!['invited', 'submitted'].includes(row.status)) return res.status(409).json({ error: 'This agreement is no longer open for submission.' });
+      const buf = req.body;
+      if (!buf || !buf.length) return res.status(400).json({ error: 'Empty file' });
+      const filename = safeFilename(headerText(req, 'X-Filename') || 'counterparty-document');
+      if (!MARKUP_TYPES.test(filename)) return res.status(400).json({ error: 'Attach the document as PDF, Word (.docx), Excel (.xlsx) or text.' });
+      const company = headerText(req, 'X-Uploader-Name').slice(0, 200) || cpName(row);
+      const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].slice(0, 120);
+      const file = await storeFile(row.id, filename, mime, buf, company + ' (counterparty)');
+      res.json({ ok: true, file: { id: file.id, filename: file.filename, uploaded_at: file.uploaded_at } });
+    } catch (err) {
+      console.error('Counterparty file error:', err.message);
+      res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not store the document' });
+    }
+  });
 
 app.get('/api/agreements', requireDb, auth.requireAuth, async (req, res) => {
   try {
