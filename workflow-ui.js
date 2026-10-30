@@ -172,6 +172,7 @@ window.WorkflowHardNoDialog = (function () {
     if(current&&current.id!==row.id)reset();current=row;
     if(window._editing&&window._editing.id!==row.id)reset(),current=row;
     window._editing={id:row.id,type:row.type,base:row.data,status:row.status,revision:row.revision,workflow:!!row.state,signedAt:row.signedAt};
+    if(window.syncInviteCard)window.syncInviteCard();
     window._lawyerState=row.data;window._clauseOverrides=row.data.clauseOverrides||{};
     // Opening or refreshing a saved agreement must reveal its own workspace, not
     // leave actionable controls in the default (or previously selected) hidden tab.
@@ -200,6 +201,9 @@ window.WorkflowHardNoDialog = (function () {
   };
   function mount(type){var id='wf_panel_'+type,el=document.getElementById(id);if(!el){el=document.createElement('section');el.id=id;el.className='card';var slot=document.getElementById('cr_slot_'+type);if(slot)slot.appendChild(el);}return el;}
   function esc(s){return window.esc(s);}
+  // Who signs for the counterparty (mirrors workflow-core signatory): the signatory fields, or for a
+  // distributor its General Management / Authorised Signatory contact.
+  function signatoryOf(d){d=d||{};var m=(d.contacts&&d.contacts.mgmt&&d.contacts.mgmt.p)||{};function pick(a,b){return String(a||'').trim()||String(b||'').trim();}return {name:pick(d.sig_name,m.n),title:pick(d.sig_title,m.t),email:pick(d.sig_email,m.e)};}
   function line(label,text){return text?'<div class="wf-line"><strong>'+label+'</strong> '+esc(text)+'</div>':'';}
   function companyImportsHtml(row){
     var imports=row.state.companyImports||[],html='';
@@ -249,7 +253,7 @@ window.WorkflowHardNoDialog = (function () {
     if(row.counterparty)html+='<p class="wf-note">Signerat för motparten av '+esc(row.counterparty.by||'')+' · '+esc(fmtWhen(row.counterparty.signedAt))+(row.status==='pending_signature'?'. Väntar på '+esc(signerName)+'s underskrift.':'')+'</p>';
     if(row.signedAt)html+='<p class="wf-note">Undertecknat för Vendora av '+esc(row.signedBy||signerName)+' · '+esc(fmtWhen(row.signedAt))+'. Motparten har fått en länk till det signerade avtalet.</p>';
     html+=companyImportsHtml(row);
-    if(row.signatureProblems.length)html+='<details class="wf-check"><summary>Kvar före slutgodkännande ('+row.signatureProblems.length+')</summary><p>'+row.signatureProblems.map(p=>esc(p.replace(/Saknad uppgift: (\w+)/g,(_,k)=>'Saknad uppgift: '+({name:'företagsnamn',reg:'organisations-/registreringsnummer',country:'registreringsland',addr:'registrerad adress',sig_name:'undertecknarens namn',sig_email:'undertecknarens e-post'}[k]||k)))).join('<br>')+'</p>'+(window._isAdmin&&s.items.some(i=>i.status==='accepted'&&i.requiresCounsel)?'<button data-wf="counsel">Dokumentera särskilt godkännande</button>':'')+'</details>';
+    if(row.signatureProblems.length)html+='<details class="wf-check"><summary>Kvar före slutgodkännande ('+row.signatureProblems.length+')</summary><p>'+row.signatureProblems.map(p=>esc(p.replace(/Saknad uppgift: (\w+)/g,(_,k)=>'Saknad uppgift: '+({name:'företagsnamn',reg:'organisations-/registreringsnummer',country:'registreringsland',addr:'registrerad adress',sig_name:row.type==='da'?'undertecknarens namn (General Management / Authorised Signatory)':'undertecknarens namn',sig_email:row.type==='da'?'undertecknarens e-post (General Management / Authorised Signatory)':'undertecknarens e-post'}[k]||k)))).join('<br>')+'</p>'+(window._isAdmin&&s.items.some(i=>i.status==='accepted'&&i.requiresCounsel)?'<button data-wf="counsel">Dokumentera särskilt godkännande</button>':'')+'</details>';
     if(s.sent)html+='<p class="wf-note">Senast utskickad version: '+s.sent.version+' · E-post: '+esc(s.sent.delivery==='sent'?'skickad':s.sent.delivery==='failed'?'kunde inte skickas':'inte bekräftad')+'. Kundens villkorsförslag ändrar inte avtalet automatiskt.</p>';
     html+='<h3>'+(s.reviewRunning?'Inväntar granskningsresultat':pending.length+' punkter väntar på beslut')+'</h3>';
     s.items.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||(order[a.classification]||0)-(order[b.classification]||0)).forEach(function(item){
@@ -360,7 +364,7 @@ window.WorkflowHardNoDialog = (function () {
       var file=input.files&&input.files[0];if(!file)return;
       try{
         if(window.UploadLimits&&file.size>window.UploadLimits.MAX_FILE_BYTES)throw new Error('Filen är större än '+window.UploadLimits.MAX_FILE_LABEL+'.');
-        var signer=prompt('Vem har signerat för motparten? (namn)',row.data.sig_name||'');if(!signer||!signer.trim())return;
+        var signer=prompt('Vem har signerat för motparten? (namn)',signatoryOf(row.data).name);if(!signer||!signer.trim())return;
         var r=await fetch('/api/agreements/'+row.id+'/files',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Signer-Name':encodeURIComponent(signer.trim())},body:file});
         var j=await r.json();if(!r.ok)throw new Error(j.error||'Uppladdningen misslyckades.');
         await refresh(row.id);message('Motpartens signerade kopia är registrerad. '+(window._signerName||'VD')+' har fått en begäran om underskrift.');
@@ -427,7 +431,8 @@ window.WorkflowHardNoDialog = (function () {
         var sign=el('div','','wf-public-sign');sign.appendChild(el('h3','Sign electronically'));
         sign.appendChild(el('p','Type your name and title, draw your signature if you like, and confirm. Your name, title, email, the time, your IP address and the exact version you sign are recorded, and your signature appears in the agreement\'s signature block. This is an electronic signature (eIDAS); no printing needed.','wf-note'));
         function field(id,label,value,type){var l=el('label',label);l.htmlFor=id;sign.appendChild(l);var i=document.createElement('input');i.id=id;i.type=type||'text';i.maxLength=200;i.value=value||'';sign.appendChild(i);return i;}
-        var sName=field('wf-sign-name','Full name',v.data.sig_name),sTitle=field('wf-sign-title','Title / position',v.data.sig_title),sEmail=field('wf-sign-email','Email',v.data.sig_email,'email');
+        var who=signatoryOf(v.data);
+        var sName=field('wf-sign-name','Full name',who.name),sTitle=field('wf-sign-title','Title / position',who.title),sEmail=field('wf-sign-email','Email',who.email,'email');
         var padLabel=el('label','Signature (draw with your mouse or finger — optional)');padLabel.htmlFor='wf-sign-pad';sign.appendChild(padLabel);
         var pad=document.createElement('canvas');pad.id='wf-sign-pad';pad.width=720;pad.height=220;pad.className='wf-sign-pad';pad.setAttribute('role','img');pad.setAttribute('aria-label','Signature pad');sign.appendChild(pad);
         var tools=el('div','','wf-sign-tools');var clear=el('button','Clear','wf-public-secondary');clear.type='button';clear.id='wf-sign-clear';tools.appendChild(clear);sign.appendChild(tools);
@@ -458,7 +463,7 @@ window.WorkflowHardNoDialog = (function () {
         var alt=document.createElement('details');alt.className='wf-public-upload';alt.id='wf-public-paper';var summary=el('summary','Prefer to sign on paper? Print, sign and upload the signed copy instead.');alt.appendChild(summary);
         var form=el('div','');
         var nameLabel=el('label','Name of the person who signed');nameLabel.htmlFor='wf-signer-name';form.appendChild(nameLabel);
-        var name=document.createElement('input');name.id='wf-signer-name';name.type='text';name.maxLength=200;name.value=v.data.sig_name||'';form.appendChild(name);
+        var name=document.createElement('input');name.id='wf-signer-name';name.type='text';name.maxLength=200;name.value=signatoryOf(v.data).name;form.appendChild(name);
         var fileLabel=el('label','Signed agreement (PDF, Word, PNG or JPEG, up to '+(window.UploadLimits?window.UploadLimits.MAX_FILE_LABEL:'50 MB')+')');fileLabel.htmlFor='wf-signed-file';form.appendChild(fileLabel);
         var file=document.createElement('input');file.id='wf-signed-file';file.type='file';file.accept='.pdf,.docx,.doc,.png,.jpg,.jpeg';form.appendChild(file);
         var send=el('button','Upload signed copy','wf-public-primary');send.type='button';send.id='wf-upload-signed';form.appendChild(send);

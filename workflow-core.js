@@ -210,13 +210,24 @@ function receive(row, submitted, sentVersion, actor, at) {
   d._proposals=requests;s.lastSubmission=fingerprint;s.submittedAt=at;validFields(d);
   return {data:d,state:s};
 }
+// Who signs for the counterparty. Reseller forms ask for a signatory outright; a distributor's
+// signatory is its General Management / Authorised Signatory contact (the distributor fill-in
+// page has no signatory fields of its own).
+function signatory(data) {
+  data=data||{};const mgmt=(data.contacts&&data.contacts.mgmt&&data.contacts.mgmt.p)||{};
+  const pick=(a,b)=>String(a||'').trim()||String(b||'').trim();
+  return {name:pick(data.sig_name,mgmt.n),title:pick(data.sig_title,mgmt.t),email:pick(data.sig_email,mgmt.e)};
+}
 function signatureProblems(row) {
   const s=state(row),problems=[];
   if(s.reviewRunning)problems.push('En jämförelse pågår.');
   if(counterpartyDetails.pending(s).length)problems.push('Granska eller avstå från import av företagsuppgifter först.');
   if(pending(s).length)problems.push(pending(s).length+' ändringsförslag väntar på beslut.');
   if(s.items.some(i=>i.status==='accepted'&&i.requiresCounsel)&&(!s.counselApproval||s.counselApproval.digest!==digest(row.data)))problems.push('Dokumenterat särskilt godkännande krävs för accepterade riskvillkor.');
-  for(const k of ['name','reg','country','addr','sig_name','sig_email'])if(!String(row.data[k]||'').trim()||/^\[.*\]$/.test(String(row.data[k])))problems.push('Saknad uppgift: '+k);
+  for(const k of ['name','reg','country','addr'])if(!String(row.data[k]||'').trim()||/^\[.*\]$/.test(String(row.data[k])))problems.push('Saknad uppgift: '+k);
+  const sig=signatory(row.data);
+  if(!sig.name||/^\[.*\]$/.test(sig.name))problems.push('Saknad uppgift: sig_name');
+  if(!sig.email||/^\[.*\]$/.test(sig.email))problems.push('Saknad uppgift: sig_email');
   if(row.type==='ra'&&!(row.data.pos_physical||[]).length&&!(row.data.pos_web||[]).length)problems.push('Minst ett försäljningsställe krävs.');
   if(s.templateVersion!==TEMPLATE_VERSION)problems.push('Standarden har uppdaterats. Detta ärende kräver en uttrycklig versionsgranskning.');
   problems.push(...LC.consistencyCheck(row.data).map(i=>i.message));return problems;
@@ -226,4 +237,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatureProblems,summary,validFields};
+module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatory,signatureProblems,summary,validFields};
