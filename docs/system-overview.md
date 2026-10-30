@@ -24,6 +24,8 @@ Dokumentet byggs som `.docx` i webbläsaren från formulärets data plus klausul
 
 Distributörsavtalets MDF-del: bas-MDF är det som används. Målbonus och co-op-fond är valfria och visas för motparten och i Appendix 1 bara om Vendora satt ett värde.
 
+**Selektiv distribution (återförsäljaravtalet).** Fältet "Authorised brands" i formuläret styr det. Tomt fält ger dagens avtal. Anges varumärken tänds §3A (selektivt system per varumärke: tillåten och förbjuden försäljning, kriterier över tid, marknadsplatser, sanktioner utan viten, Vendoras åtagande) och Bilaga 4 (kriterierna A till H och ansökningsprocessen), utnämningen blir per varumärke och låses till icke-exklusiv, förbudet mot aktiv försäljning utanför territoriet försvinner, underåterförsäljarklausulen pekar på 3A.3, §14 får två nya väsentliga brott, §2 räknar fyra bilagor, §16 låter 3A.6 överleva, och Bilaga 1B kräver godkännande bara för fysiska butiker medan nya webbplatser anmäls. På ifyllnadssidan bekräftar återförsäljaren kriterierna (obligatoriskt), och bekräftelsen med serverns tidsstämpel skrivs in i Bilaga 1 och Bilaga 4. Arkivet och exporten är registret över auktoriserade återförsäljare per varumärke. Det förenklade avtalet har ingen motsvarighet och används inte för selektiva varumärken.
+
 ## 3. Två vägar för ett avtal
 
 **Ifyllnadsflödet (äldre, enklare).** Vendora fyller i villkoren i formuläret och skickar en ifyllnadslänk. Motparten fyller i företagsuppgifter, kontakter och (för RA/RB) undertecknare, kan föreslå andra värden på de kommersiella villkoren, och kan skriva kommentarer om avtalstexten och bifoga sin kommenterade kopia (PDF, Word, Excel eller text). Bilagan hamnar bland avtalets filer, kommentarerna visas för Vendora i flödespanelen och på granskningssidan, och säljarens notismejl tar med båda. Inskicket uppdaterar samma arkivpost (status `submitted`). Vendora granskar på granskningssidan (`#review=`), beslutar per förslag (Accept / Keep mine), sparar och godkänner för underskrift.
@@ -160,6 +162,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 59 | Systemöversikten (detta dokument) |
 | 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 | 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
+| 2026-10-30 | 64 | Selektiv distribution per varumärke i återförsäljaravtalet, bakom fältet "Authorised brands": §3A, Bilaga 4, följdändringar, bekräftelse på ifyllnadssidan |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
