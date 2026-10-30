@@ -172,6 +172,7 @@ window.WorkflowHardNoDialog = (function () {
     if(current&&current.id!==row.id)reset();current=row;
     if(window._editing&&window._editing.id!==row.id)reset(),current=row;
     window._editing={id:row.id,type:row.type,base:row.data,status:row.status,revision:row.revision,workflow:!!row.state,signedAt:row.signedAt};
+    if(window.syncInviteCard)window.syncInviteCard();
     window._lawyerState=row.data;window._clauseOverrides=row.data.clauseOverrides||{};
     // Opening or refreshing a saved agreement must reveal its own workspace, not
     // leave actionable controls in the default (or previously selected) hidden tab.

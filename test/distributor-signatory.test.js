@@ -97,6 +97,29 @@ test('browser: a distributor agreement goes out for signature, the signing page 
     await page.evaluate(id=>archiveEdit(id),second);
     await page.waitForFunction(()=>document.getElementById('archivePanel').style.display==='block'&&/review steps below/.test(document.getElementById('apSig').textContent));
     assert.equal(await page.$eval('#apSig',e=>!!e.querySelector('a[onclick^="sendForSignature"]')),false);
+    // A draft still offers the fill-in link at the foot of the form.
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('da_invite_next')).display),'none');
+
+    // 5. Once the counterparty's details are in, the card at the foot of the form offers the approval instead of
+    //    the fill-in link: unsaved edits are saved first, the dialog is prefilled with the signatory's email, and
+    //    after sending the card points to the signing view.
+    const third=(await good('/api/agreements','POST',{type:'da',data:distributor({invName:'Ryan Example',invEmail:'ryan@counterparty.example.test'}),status:'generated',counterpartyName:data.name})).id;ids.push(third);
+    await page.evaluate(id=>archiveEdit(id),third);
+    await page.waitForFunction(()=>getComputedStyle(document.getElementById('da_invite_next')).display==='block');
+    assert.match(await page.$eval('#da_invite_next',e=>e.textContent),/Testpartner AB's details are in — approve & send for signature/);
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('da_invite_next').parentNode.querySelector('.invite-fill')).display),'none','the fill-in link is tucked away');
+    await page.select('#da_lead','3');
+    await page.click('#da_approve_btn');
+    await page.waitForFunction(()=>document.getElementById('sigOverlay')&&document.getElementById('sigOverlay').style.display==='block');
+    assert.equal(await page.$eval('#sigEmail',e=>e.value),'ryan@counterparty.example.test');
+    assert.equal((await good('/api/agreements/'+third)).agreement.data.lead,'3','the form was saved before the approval dialog opened');
+    await page.click('#sigSendBtn');
+    await page.waitForFunction(()=>/Sent ✓/.test(document.getElementById('sigMsg').textContent));
+    assert.equal((await good('/api/agreements/'+third)).agreement.status,'sent');
+    await page.waitForFunction(()=>/Out for signature/.test(document.getElementById('da_invite_next').textContent));
+    assert.equal(await page.evaluate(()=>readinessText('Saknad uppgift: sig_name Saknad uppgift: addr')),'Missing: signatory name (General Management / Authorised Signatory). Missing: registered address.');
+    await page.evaluate(()=>{closeSig();exitEdit();});
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('da_invite_next')).display),'none','leaving the record brings the fill-in link back');
     assert.deepEqual(pageErrors,[]);
   }finally{if(browser)await browser.close();}
 });
@@ -110,4 +133,9 @@ test('the signatory fallback and the territory restore are wired in',()=>{
   const restore=html.match(/\nfunction restoreTerr\(prefix, terr\)\{[\s\S]*?\n\}\n/)[0];
   assert.match(restore,/cb\.checked=false/);
   assert.match(html,/if \(a\.workflow_state\) out \+= .*review steps below/);
+  for(const id of ['da_invite_next','ra_invite_next'])assert.match(html,new RegExp('<div class="invite-next" id="'+id+'"'));
+  assert.equal((html.match(/<div class="invite-fill">/g)||[]).length,2);
+  for(const fn of ['syncInviteCard','approveFromForm','readinessText','inviteShowFill'])assert.match(html,new RegExp('\\nfunction '+fn+'\\('),fn);
+  assert.equal((html.match(/syncInviteCard\(\);/g)||[]).length,3,'archiveEdit, refreshEditing and exitEdit keep the card in step');
+  assert.match(ui,/if\(window\.syncInviteCard\)window\.syncInviteCard\(\);/);
 });
