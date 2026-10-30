@@ -5,10 +5,22 @@ const LC = require('./lawyer-changes');
 const clauses = require('./agreement-clauses');
 const counterpartyDetails = require('./counterparty-details');
 const hardNo = require('./workflow-hard-no');
-const fs = require('fs');
-const TEMPLATE_VERSION = crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./agreement-clauses'))).update(fs.readFileSync(require.resolve('./agreement-defaults.json'))).digest('hex');
 const DEFAULTS=require('./agreement-defaults.json');
 const TYPES = ['ra', 'rb', 'da'];
+// The standard's version is per agreement type and derived from what that type's clauses render with
+// the defaults, so a change to the reseller agreement never disturbs an open distributor case. States
+// written before 2026-10-30 carried one hash of the two template files; that hash stands for the
+// per-type versions of that snapshot, so those cases stay current until their own type changes.
+const LEGACY_TEMPLATE_HASH = '3a3d3f01c4d760809dba0e9283066e5083d3489ca37569c0fb27f269054381ce';
+const LEGACY_TEMPLATE_VERSIONS = {ra:'bf41670837dc4dca8640550ef878fefd8d06deaa1dffddd05b1478ac10086476', rb:'46f405e782508b7c503627237552c95534b16949d7b33135b753fbcb95cf7b44', da:'64e1e89f2bada447bb79f3340622fe51d5838ed3111c447cfde2f6011f68ed2c'};
+function templateVersionFor(type) {
+  const sample={_type:type,...DEFAULTS[type]};
+  const parts=clauses.catalog(type).map(c=>{let w,r;try{w=!!c.when(sample);}catch(e){w='err';}try{r=c.render(sample);}catch(e){r='err:'+e.message;}return [c.id,c.label,w,r];});
+  return crypto.createHash('sha256').update(JSON.stringify([parts,DEFAULTS[type]])).digest('hex');
+}
+const TEMPLATE_VERSIONS = Object.fromEntries(TYPES.map(t=>[t,templateVersionFor(t)]));
+function caseTemplateVersion(row) { const v=row.workflow_state&&row.workflow_state.templateVersion; return v===LEGACY_TEMPLATE_HASH?LEGACY_TEMPLATE_VERSIONS[row.type]:v; }
+function templateCurrent(row) { return caseTemplateVersion(row)===TEMPLATE_VERSIONS[row.type]; }
 const EDIT_KEYS = ['clauseOverrides','clauseInserts','clauseDeletes','annexOverrides','annexDeletes','redlines'];
 const FACTS = ['name','reg','country','addr','vat','eori','parent','sig_name','sig_title','sig_email','sig_phone'];
 const TERMS = Object.keys(LC.FIELDS).filter(k => !FACTS.includes(k)).concat(['targets']);
@@ -29,8 +41,30 @@ function benchmark(data) {
   const label=data._type==='da'?'DISTRIBUTOR AGREEMENT':'RESELLER AGREEMENT'+(data._type==='rb'?' — SIMPLIFIED':'');
   return label+'\nVendora standard template\n'+clauses.catalog(data._type).filter(c=>c.when(data)).map(c=>c.label+'\n'+c.render(data)).join('\n\n');
 }
+// The standard text a case was baselined against, clause by clause, from the benchmark string.
+function clauseTexts(text) {
+  const out={};for(const block of String(text||'').split('\n\n').slice(1)){const i=block.indexOf('\n');if(i>0)out[block.slice(0,i)]=block.slice(i+1);}return out;
+}
+// What changed in the standard since this case was baselined: the clauses whose text differs, and the
+// ones added or removed, so the version review is a read of the actual differences, not a blind click.
+function templateChanges(row) {
+  const s=state(row); const data={...standard(row.data),...DEFAULTS[row.type]};
+  const before=clauseTexts(s.baselineText), after=clauseTexts(benchmark(data));
+  const changed=[],added=[],removed=[];
+  for(const label of Object.keys(after)){if(!(label in before))added.push({label,text:after[label]});else if(before[label]!==after[label])changed.push({label,before:before[label],after:after[label]});}
+  for(const label of Object.keys(before))if(!(label in after))removed.push({label,text:before[label]});
+  return {changed,added,removed};
+}
+// The version review: Vendora has read the differences and takes the current standard for the case.
+// Who, when and the reviewer's note are kept; the baseline text becomes the standard the case now follows.
+function adoptTemplate(row, by, at, note) {
+  const s=copy(state(row)); if(templateCurrent(row))throw error('Ärendet följer redan den gällande standarden.');
+  const data={...standard(row.data),...DEFAULTS[row.type]};
+  s.templateReviews=(s.templateReviews||[]).concat([{from:caseTemplateVersion(row)||null,to:TEMPLATE_VERSIONS[row.type],by,at,note:String(note||'').slice(0,2000)}]);
+  s.templateVersion=TEMPLATE_VERSIONS[row.type]; s.baselineText=benchmark(data); return s;
+}
 function createState(data) {
-  ensureType(data); return {schema:1, templateVersion:TEMPLATE_VERSION, baseline:{...standard(data),...DEFAULTS[data._type]}, baselineText:benchmark({...standard(data),...DEFAULTS[data._type]}), round:0, items:[], decisions:[], sent:null, reviewRunning:null};
+  ensureType(data); return {schema:1, templateVersion:TEMPLATE_VERSIONS[data._type], baseline:{...standard(data),...DEFAULTS[data._type]}, baselineText:benchmark({...standard(data),...DEFAULTS[data._type]}), round:0, items:[], decisions:[], sent:null, reviewRunning:null};
 }
 function state(row) { if(!row.workflow_state||row.workflow_state.schema!==1) throw error('Starta avtalsflödet först.',400); return row.workflow_state; }
 function pending(s) { return (s.items||[]).filter(i=>i.status==='pending'); }
@@ -231,7 +265,7 @@ function signatureProblems(row) {
   if(!sig.name||/^\[.*\]$/.test(sig.name))problems.push('Saknad uppgift: sig_name');
   if(!sig.email||/^\[.*\]$/.test(sig.email))problems.push('Saknad uppgift: sig_email');
   if(row.type==='ra'&&!(row.data.pos_physical||[]).length&&!(row.data.pos_web||[]).length)problems.push('Minst ett försäljningsställe krävs.');
-  if(s.templateVersion!==TEMPLATE_VERSION)problems.push('Standarden har uppdaterats. Detta ärende kräver en uttrycklig versionsgranskning.');
+  if(!templateCurrent(row))problems.push('Standarden har uppdaterats. Detta ärende kräver en uttrycklig versionsgranskning.');
   problems.push(...LC.consistencyCheck(row.data).map(i=>i.message));return problems;
 }
 function summary(row) {
@@ -239,4 +273,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSION,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatory,signatureProblems,summary,validFields};
+module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSIONS,templateVersionFor,templateCurrent,caseTemplateVersion,templateChanges,adoptTemplate,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatory,signatureProblems,summary,validFields};
