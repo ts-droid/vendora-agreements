@@ -189,6 +189,22 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 .cmp-actions{display:flex;gap:6px}
 .cmp-btn{font-size:12px;padding:6px 12px;border:1px solid var(--line);background:#fff;color:var(--pine);cursor:pointer;border-radius:999px}
 .cmp-btn:disabled{opacity:.45;cursor:not-allowed}
+.ap-versions{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow:auto}
+.ap-version{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;font-size:12px;color:#222}
+.ap-version.current{background:#f3f7f4}
+.ap-ver-no{font-weight:700;color:var(--blue2);min-width:30px}
+.ap-ver-what{font-weight:600}
+.ap-ver-note{font-weight:400;color:var(--muted)}
+.ap-ver-who{color:var(--muted);font-size:11px}
+.ap-ver-cur{font-size:10px;background:#1f6b45;color:#fff;border-radius:8px;padding:1px 7px}
+.ap-ver-actions{margin-left:auto;display:flex;gap:10px}
+.ap-ver-actions a{color:var(--blue2);cursor:pointer;font-size:11px;white-space:nowrap}
+.ap-ver-diff{margin:0 8px 6px 46px;font-size:11px}
+.ap-diff{border-collapse:collapse}
+.ap-diff th{text-align:left;padding:2px 8px 2px 0;color:var(--muted);font-weight:600;vertical-align:top;white-space:nowrap}
+.ap-diff td{padding:2px 6px;vertical-align:top;max-width:360px;word-break:break-word}
+.ap-diff td.from{color:#9a4b00;text-decoration:line-through}
+.ap-diff td.to{color:#1f6b45}
 .cmp-btn.active-accept{background:var(--ok);color:#fff;border-color:var(--ok)}
 .cmp-btn.active-keep{background:var(--pine);color:#f6f3ec;border-color:var(--pine)}
 .neg-badge,.badge{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:12px;background:#ece7df}
@@ -307,6 +323,10 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
       <button id="apRemindBtn" onclick="apRemind()" style="font-size:12px;padding:6px 12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer">&#9993; Send reminder</button>
       <div id="apRemindMsg" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
     </div>
+  </div>
+  <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+    <label style="display:block;font-size:11px;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Version history</label>
+    <div id="apVersions" style="font-size:12px;color:var(--muted)">—</div>
   </div>
 </div>
 
@@ -26476,10 +26496,10 @@ function coverSheetHtml(s){
 
 /* ── Document downloads from stored data ── */
 function cloneData(d){ return JSON.parse(JSON.stringify(d||{})); }
-function downloadAgreementData(type, data){
+function downloadAgreementData(type, data, suffix){
   var fn = type==="da" ? buildDA : (type==="rb" ? buildRB : buildRA);
   var d = cloneData(data); d._type = d._type||type;
-  fn(d).then(function(r){ if (r) window.saveAs(r.blob, r.filename); })
+  fn(d).then(function(r){ if (r) window.saveAs(r.blob, suffix ? r.filename.replace(/\.docx$/i,"")+suffix+".docx" : r.filename); })
     .catch(function(e){ alert("Could not generate the agreement: "+((e&&e.message)||e)); });
 }
 function downloadCoverSheet(a){
@@ -26543,8 +26563,8 @@ function closeSig(){
 }
 // Re-sync the edit view if the agreement being edited just changed state.
 function refreshEditing(id){
-  if (!(window._editing && window._editing.id===id)) return;
-  fetch("/api/agreements/"+id).then(function(r){ return r.json(); }).then(function(j){
+  if (!(window._editing && window._editing.id===id)) return Promise.resolve();
+  return fetch("/api/agreements/"+id).then(function(r){ return r.json(); }).then(function(j){
     if (!j.agreement) return;
     window._editing.revision = Number(j.agreement.workflow_revision||0);
     if(j.agreement.workflow_state && window.wfRefresh) wfRefresh(id);
@@ -26806,6 +26826,7 @@ function apShowPanel(a){
   else if(a.status!=="invited" && a.status!=="sent"){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="Reminders go out while the customer has a link: invited, or sent for signature."; }
   else { btn.disabled=false; btn.style.opacity=1; msg.textContent=(a.status==="invited"?"Nudge to fill in their details":"Nudge to sign & upload")+" → "+a.counterparty_email; }
   apLoadFiles();
+  apLoadVersions();
 }
 function apSetStatus(status){
   var e=window._editing; if(!e) return;
@@ -26845,7 +26866,7 @@ function apUpload(input){
     .then(function(r){ if(!r.ok) throw 0; return r.json(); })
     .then(function(res){ msg.style.color="#1e7e34"; msg.textContent=res.status==="pending_signature"?"Signed copy registered ✓ — sent to "+(window._signerName||"the CEO")+" for countersignature":"Uploaded ✓";
       if(res.status){ document.getElementById("apStatus").value=res.status; e.status=res.status; }
-      apLoadFiles();
+      apLoadFiles(); apLoadVersions();
     })
     .catch(function(){ msg.style.color="#c0392b"; msg.textContent="Upload failed"; })
     .finally(function(){ input.value=""; });
@@ -26870,6 +26891,112 @@ function apRemind(){
     .catch(function(){ msg.style.color="#c0392b"; msg.textContent="Network error"; })
     .finally(function(){ btn.disabled=false; });
 }
+/* ── Version history: every save, invite, submission, send, signature and withdrawal is a version
+   that can be downloaded as it was, compared with the one before, or restored as the current content. ── */
+var VERSION_ACTIONS = {
+  created:"Created", invited:"Invite sent", submitted:"Details submitted by the counterparty", saved:"Saved",
+  "status-changed":"Status changed", "sent-for-signature":"Sent for signature", "counterparty-signed":"Signed by the counterparty",
+  "vendora-signed":"Countersigned for Vendora", "signed-copy-uploaded":"Signed copy uploaded", returned:"Returned for changes",
+  withdrawn:"Signing request withdrawn", restored:"Earlier version restored", baseline:"As it was before history was kept",
+  start:"Review workflow started", "manual-edit":"Edited", "review-start":"AI comparison started", "review-complete":"AI comparison completed",
+  "approve-ai-changes":"AI changes approved", "special-approval":"Risk terms approved", invite:"Invite sent",
+  "invite-mail-sent":"Invite email delivered", "invite-mail-failed":"Invite email failed", "send-for-signature":"Sent for signature",
+  "signature-mail-sent":"Signing email delivered", "signature-mail-failed":"Signing email failed", "withdraw-to-review":"Withdrawn to review"
+};
+function versionLabel(v){
+  var a=String(v.action||"");
+  if (VERSION_ACTIONS[a]) return VERSION_ACTIONS[a];
+  if (a.indexOf("decision:")===0) return "Decision on a proposal";
+  if (a.indexOf("company-details:")===0) return "Company details "+(a.split(":")[1]==="apply"?"imported":"kept");
+  return a.replace(/[-_:]/g," ") || "Changed";
+}
+var VERSION_SKIP_KEYS = {_type:1,_aid:1,_review:1,_atok:1,_isPreview:1,_trackChanges:1,_revision:1,_sentVersion:1};
+var VERSION_FIELD_LABELS = {name:"Company name", invName:"Contact name", invEmail:"Contact email", sig_name:"Signatory", sig_title:"Signatory title",
+  sig_email:"Signatory email", products:"Products / brands", special:"Special conditions", clauseOverrides:"Clause wording (Contract Lawyer)",
+  clauseInserts:"Inserted clauses", clauseDeletes:"Deleted clauses", annexOverrides:"Annex wording", annexDeletes:"Deleted annexes", redlines:"Redlines",
+  contacts:"Contacts", rcontacts:"Contacts", _proposals:"Open proposals", _accepted:"Accepted proposals",
+  _vendoraSignature:"Vendora signature", _counterpartySignature:"Counterparty signature"};
+// Versions are shown in the reader's own time zone (the rest of the app shows UTC, as stored).
+function fmtLocal(s){
+  if(!s) return ""; var d=new Date(s); if(isNaN(d.getTime())) return fmtWhen(s);
+  function p(n){ return (n<10?"0":"")+n; }
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes());
+}
+function versionFieldLabel(k){ return VERSION_FIELD_LABELS[k] || (typeof PROPOSAL_LABELS!=="undefined" && PROPOSAL_LABELS[k]) || k; }
+function versionValueText(v){
+  if (v==null || v==="") return "—";
+  if (typeof v!=="object") return String(v);
+  if (Array.isArray(v)) return v.length ? v.map(versionValueText).join("; ") : "—";
+  var keys=Object.keys(v).sort(); if(!keys.length) return "—";
+  return keys.map(function(k){ return k+": "+versionValueText(v[k]); }).join("; ");
+}
+function versionDiff(a, b){
+  a=a||{}; b=b||{};
+  var keys={}; Object.keys(a).concat(Object.keys(b)).forEach(function(k){ if(!VERSION_SKIP_KEYS[k]) keys[k]=1; });
+  var out=[];
+  Object.keys(keys).sort().forEach(function(k){ var from=versionValueText(a[k]), to=versionValueText(b[k]); if (from!==to) out.push({key:k, from:from, to:to}); });
+  return out;
+}
+function apLoadVersions(){
+  var e=window._editing, box=document.getElementById("apVersions"); if(!e||!box) return;
+  fetch("/api/agreements/"+e.id+"/versions").then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    if(!window._editing || window._editing.id!==e.id) return;
+    var vs=j.versions||[];
+    if(!vs.length){ box.innerHTML="<span style='color:var(--muted)'>No versions yet — history starts with the next change to this agreement.</span>"; return; }
+    box.innerHTML="<div class='ap-versions'>"+vs.map(function(v){
+      var cur=v.revision===j.current;
+      return "<div class='ap-version"+(cur?" current":"")+"' data-revision='"+v.revision+"'>"
+        +"<span class='ap-ver-no'>v"+v.revision+"</span>"
+        +"<span class='ap-ver-what'>"+esc(versionLabel(v))+(v.note?" <span class='ap-ver-note'>· "+esc(v.note)+"</span>":"")+"</span>"
+        +(STATUS_META[v.status]?statusBadge(v.status):"")
+        +"<span class='ap-ver-who'>"+esc(v.actor||"")+" · "+esc(fmtLocal(v.created_at))+"</span>"
+        +(cur?"<span class='ap-ver-cur'>current</span>":"")
+        +"<span class='ap-ver-actions'>"
+        +"<a onclick='apDownloadVersion("+v.revision+")'>&#8681; Download</a>"
+        +(v.revision>1?"<a onclick='apShowChanges("+v.revision+")'>What changed</a>":"")
+        +(j.restorable&&!cur?"<a onclick='apRestoreVersion("+v.revision+")'>&#8634; Restore</a>":"")
+        +"</span></div><div class='ap-ver-diff' id='apDiff_"+v.revision+"' style='display:none'></div>";
+    }).join("")+"</div>";
+  }).catch(function(){ box.innerHTML="<span style='color:#c0392b'>Could not load the version history.</span>"; });
+}
+function apFetchVersion(rev){
+  var e=window._editing; if(!e) return Promise.reject(new Error("No agreement is open"));
+  return fetch("/api/agreements/"+e.id+"/versions/"+rev).then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||"Version not found"); return j.version; }); });
+}
+function apDownloadVersion(rev){
+  apFetchVersion(rev).then(function(v){ downloadAgreementData(v.type, v.data, "_v"+rev); })
+    .catch(function(err){ alert("Could not download that version: "+((err&&err.message)||err)); });
+}
+function apShowChanges(rev){
+  var el=document.getElementById("apDiff_"+rev); if(!el) return;
+  if(el.style.display!=="none"){ el.style.display="none"; return; }
+  el.style.display="block"; el.innerHTML="<span style='color:var(--muted)'>Comparing with v"+(rev-1)+"…</span>";
+  function short(s){ s=String(s); return s.length>220 ? s.slice(0,220)+"…" : s; }
+  function stName(s){ return (STATUS_META[s]||{}).label || s || "—"; }
+  Promise.all([apFetchVersion(rev-1), apFetchVersion(rev)]).then(function(vs){
+    var d=versionDiff(vs[0].data, vs[1].data);
+    var statusLine = vs[0].status!==vs[1].status ? "<div style='color:var(--muted);margin-bottom:3px'>Status: "+esc(stName(vs[0].status))+" → "+esc(stName(vs[1].status))+"</div>" : "";
+    if(!d.length){ el.innerHTML=statusLine+"<span style='color:var(--muted)'>No changes to the agreement's content compared with v"+(rev-1)+".</span>"; return; }
+    el.innerHTML=statusLine+"<table class='ap-diff'>"+d.map(function(c){
+      return "<tr><th>"+esc(versionFieldLabel(c.key))+"</th><td class='from'>"+esc(short(c.from))+"</td><td>→</td><td class='to'>"+esc(short(c.to))+"</td></tr>";
+    }).join("")+"</table>";
+  }).catch(function(err){ el.innerHTML="<span style='color:#c0392b'>Could not compare: "+esc((err&&err.message)||err)+"</span>"; });
+}
+function apRestoreVersion(rev){
+  var e=window._editing; if(!e) return;
+  if(!confirm("Restore version "+rev+" as the current content of this agreement?\n\nThe version you have now stays in the history, so this can be undone.")) return;
+  sigPost("/api/agreements/"+e.id+"/versions/"+rev+"/restore").then(function(j){
+    var data=j.data||{};
+    hydrateForm(e.type, data);
+    e.base=data; window._lawyerState=data; window._clauseOverrides=data.clauseOverrides||{};
+    window._formDirty=false; e.pristine=lawyerFingerprint(data); if(j.revision) e.revision=j.revision;
+    loadArchive();
+    // The panel refresh resets the status line, so the confirmation goes on after it.
+    return refreshEditing(e.id).then(function(){
+      var st=document.getElementById("editBarStatus"); if(st){ st.style.color="#1e7e34"; st.textContent="Version "+rev+" restored ✓ — kept as version "+(j.revision||"")+"."; }
+    });
+  }).catch(function(err){ alert("Could not restore that version: "+((err&&err.message)||err)); });
+}
 function updateArchive(editing, formData, showStatus){
   var merged = Object.assign({}, editing.base, formData); merged._type = editing.type;
   var cpEmail = merged.sig_email || merged.invEmail || (merged.rcontacts && merged.rcontacts.notices && merged.rcontacts.notices.e) || null;
@@ -26891,6 +27018,7 @@ function updateArchive(editing, formData, showStatus){
     editing.pristine = lawyerFingerprint(editing.base); window._formDirty = false;
     if(res.j.revision!==undefined)editing.revision=res.j.revision;
     if (st){ st.style.color="#1e7e34"; st.textContent="Changes saved ✓"; }
+    apLoadVersions();
   }).catch(function(e){ if(st){ st.style.color="#c0392b"; st.textContent=(e && e.message) || "Save failed"; } throw e; });
 }
 function saveEditOnly(){

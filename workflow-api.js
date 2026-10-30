@@ -29,8 +29,8 @@ function install(app, deps) {
       counterparty_name=COALESCE(NULLIF($4,''),counterparty_name),status=$5,
       status_updated_at=CASE WHEN status<>$5 THEN now() ELSE status_updated_at END,updated_at=now() WHERE id=$6`,
       [data,s,revision,data.name||'',nextStatus,row.id]);
-    await client.query(`INSERT INTO agreement_versions(agreement_id,revision,data,workflow_state,actor,action)
-      VALUES($1,$2,$3,$4,$5,$6)`,[row.id,revision,data,s,actor,action]);
+    await client.query(`INSERT INTO agreement_versions(agreement_id,revision,data,workflow_state,actor,action,status)
+      VALUES($1,$2,$3,$4,$5,$6,$7)`,[row.id,revision,data,s,actor,action,nextStatus]);
     return {...row,data,workflow_state:s,workflow_revision:revision,status:nextStatus};
   }
   function view(row){
