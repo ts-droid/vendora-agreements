@@ -130,7 +130,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 
 ## 13. Tester och CI
 
-`npm test` kör `node --test test/*.js`: enhetstester, API-tester mot en engångsdatabas (`TEST_DATABASE_URL`, måste heta `agreement_test`) och webbläsartester med Chrome/Edge via puppeteer (`CHROME_BIN`). GitHub Actions (`agreement-tests.yml`) kör samma svit med Postgres och Chrome; en separat workflow mäter AI-träffsäkerhet på företagsuppgifter. Läget 2026-10-30: 202 tester, 200 godkända, 2 överhoppade.
+`npm test` kör `node --test test/*.js`: enhetstester, API-tester mot en engångsdatabas (`TEST_DATABASE_URL`, måste heta `agreement_test`) och webbläsartester med Chrome/Edge via puppeteer (`CHROME_BIN`). GitHub Actions (`agreement-tests.yml`) kör samma svit med Postgres och Chrome; en separat workflow mäter AI-träffsäkerhet på företagsuppgifter. Läget 2026-10-30: 204 tester, 202 godkända, 2 överhoppade.
 
 ## 14. Ändringslogg (mergade PR:ar)
 
