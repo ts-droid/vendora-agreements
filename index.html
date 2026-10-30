@@ -40,6 +40,9 @@ button,input,select,textarea{font:inherit;color:inherit}
 .archive-table td.actions .archive-btn+.archive-btn{margin-left:6px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 32px;border-bottom:1px solid var(--line);background:#fff}
 .topbar-brand{display:flex;align-items:center;gap:16px;flex:1 1 auto;min-width:0}
+.brand-link{display:block;min-width:0;max-width:100%;text-decoration:none;color:inherit;cursor:pointer}
+.brand-link .brand-rule{transition:width .2s}
+.brand-link:hover .brand-rule,.brand-link:focus-visible .brand-rule{width:64px}
 .brand-mark{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;max-width:100%}
 .brand-logo{height:auto;width:auto;max-height:28px;max-width:min(220px,42vw);object-fit:contain;object-position:left center;display:block}
 .brand-mark-large .brand-logo{max-height:36px;max-width:min(300px,100%)}
@@ -271,10 +274,12 @@ select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){bo
 <body>
 <header class="topbar">
   <div class="topbar-brand">
+    <a href="/" class="brand-link" onclick="return leaveToStart(event)" title="Start page — a new agreement">
     <span class="brand-mark on-light">
       <img src="/vendora-nordic.png" alt="Vendora Nordic" class="brand-logo">
       <span class="brand-rule" aria-hidden="true"></span>
     </span>
+    </a>
     <div class="topbar-copy">
       <div class="product-name">Agreement Generator</div>
       <p>Create, negotiate and sign Vendora's reseller and distributor agreements &mdash; downloaded as Word documents (.docx)</p>
@@ -26897,12 +26902,23 @@ function archiveEdit(id){
 function exitEdit(){
   if(window.wfReset) wfReset();
   window._editing=null;
+  // A record opened from the seller's email link keeps #workflow=id in the address bar so that a
+  // reload brings it back; once the record is left, a reload must not reopen it.
+  if (/^#workflow=/.test(window.location.hash||"")) history.replaceState(null, "", window.location.pathname+window.location.search);
   syncInviteCard();
   window._lawyerState=null;
   window._clauseOverrides={};
   var b=document.getElementById("editBar"); if(b) b.style.display="none";
   var p=document.getElementById("archivePanel"); if(p) p.style.display="none";
   var s=document.getElementById("editSaveBtn"); if(s){ s.disabled=false; s.style.opacity=1; s.title=""; }
+}
+
+/* ── The logo is the way back to the start page: the agreement-type tabs with empty forms, as right
+   after sign-in. It is a plain link to "/": a full navigation, which drops a #workflow=id from the
+   address bar and leaves nothing of an opened record in the form. Unsaved edits are confirmed first. */
+function leaveToStart(ev){
+  if (formHasUnsavedEdits() && !confirm("You have unsaved changes. Leave them and go to the start page?")) { if (ev) ev.preventDefault(); return false; }
+  return true;
 }
 
 /* ── Archive record management: status, signed-file uploads, reminders ── */

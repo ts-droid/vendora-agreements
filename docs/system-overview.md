@@ -4,6 +4,8 @@ Senast uppdaterad: 2026-10-30. Repo: `ts-droid/vendora-agreements`. Drift: Railw
 
 Det här dokumentet beskriver hela bygget: vad appen gör, hur ett avtal rör sig genom den, vad som lagras, vilka gränssnitt som finns och vad som ändrats. Det är skrivet för att kunna läsas utan tillgång till koden, även av andra verktyg.
 
+Dokumentet uppdateras i varje PR som ändrar beteendet (ändringsloggen i avsnitt 14 får en rad per PR). En kopia ligger i Google Drive som "Vendora Agreement Generator – systemöversikt.md" och ersätts efter varje merge.
+
 ## 1. Syfte
 
 Internt verktyg för Vendora Nordic AB för att ta fram, förhandla, skicka ut och signera återförsäljar- och distributörsavtal. Personal loggar in med Google-konto på `@vendora.se`. Motparter behöver aldrig konto: de får länkar.
@@ -35,6 +37,8 @@ Distributörsavtalets MDF-del: bas-MDF är det som används. Målbonus och co-op
 5. Vendoras underskrift.
 
 Varje steg i flödet skriver en version (se avsnitt 6). Kortet längst ner i formuläret följer avtalets läge: ifyllnadslänk för nytt utkast, väntan medan kunden har länken, "Approve & send for signature" när uppgifterna är inne, signeringsvyn när avtalet är ute.
+
+**Tillbaka till startsidan.** Loggan högst upp till vänster är en länk till startsidan: avtalstyperna (Distributor, Reseller, Reseller Simplified) med tomma formulär, som direkt efter inloggning. Osparade ändringar bekräftas först. Ett avtal öppnat från mejlets länk (`#workflow=id`) hålls öppet över omladdningar tills man lämnar det med loggan eller Cancel i redigeringsraden; Cancel tar bort avtalet ur adressfältet men lämnar formulärets värden kvar.
 
 ## 4. Livscykel och lås
 
@@ -153,6 +157,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 56 | Schemat sätts upp bakom ett lås så att samtidiga starter inte krockar |
 | 2026-10-30 | 57 | Valfria MDF-komponenter visas bara när de är satta |
 | 2026-10-30 | 58 | Schemalåset blir ett sessionslås: varje sats committas för sig, inga dödlås mot pågående anrop |
+| 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
