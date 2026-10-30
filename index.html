@@ -27565,10 +27565,10 @@ function renderContractReviewCards(){
       + "<input type='hidden' id='cr_type_"+t+"' value='"+(t==="da"?"distribution":"reseller")+"'>"
       + "<div class='f' style='margin-bottom:10px;max-width:520px'><label>Name this review <em>(optional — it's saved under Archive &rarr; Contract reviews)</em></label><input id='cr_name_"+t+"' maxlength='120' placeholder='e.g. Komplett — their reseller terms, Oct 2026'></div>"
       + "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
-      + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.txt,.md' style='font-size:12px'>"
+      + "<input type='file' id='cr_file_"+t+"' accept='.pdf,.docx,.xlsx,.txt,.md' style='font-size:12px'>"
       + "<button class='btn-invite' id='cr_btn_"+t+"' onclick='runContractReview(\""+t+"\")'>Jämför och föreslå anpassningar &rarr;</button>"
       + "<div id='cr_msg_"+t+"' style='font-size:12px;color:var(--muted);flex-basis:100%' role='status' aria-live='polite'></div></div>"
-      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx) or text, up to 50 MB. Jämförelsen föreslår även motpartens företagsuppgifter från dokumentet. Kontrollera och välj vilka uppgifter som ska föras in i vårt avtal. Godkänn eller avstå förslagen före kundutskicket.</div>"
+      + "<div style='font-size:11px;color:var(--muted);margin-top:8px'>PDF, Word (.docx), Excel (.xlsx) or text, up to 50 MB. A spreadsheet of comments, one row per clause, works too. Jämförelsen föreslår även motpartens företagsuppgifter från dokumentet. Kontrollera och välj vilka uppgifter som ska föras in i vårt avtal. Godkänn eller avstå förslagen före kundutskicket.</div>"
       + "<div id='cr_out_"+t+"' style='margin-top:14px'></div></div>";
   });
 }
@@ -27607,6 +27607,42 @@ function docxXmlToText(xml){
     .replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
 }
 async function docxToText(buf){ return docxXmlToText(await zipEntryText(buf,"word/document.xml")); }
+// A spreadsheet is a common way for a counterparty to send their markup: one row per clause with
+// the original wording and the requested change. Each sheet becomes its title and one block per
+// row — "Header: value" lines, the headers being the first row with more than one cell — so the
+// Contract Lawyer reads it as a list of comments on our agreement.
+function xmlText(s){
+  return String(s||"").replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'")
+    .replace(/&#(\d+);/g,function(_,c){ return String.fromCharCode(+c); }).replace(/_x000D_/g,"");   // runs of one cell are joined before trimming
+}
+async function xlsxToText(buf){
+  var shared=[], names=[], out=[];
+  try { var sx=await zipEntryText(buf,"xl/sharedStrings.xml"); shared=(sx.match(/<si>[\s\S]*?<\/si>/g)||[]).map(function(si){ return (si.match(/<t[^>]*>[\s\S]*?<\/t>/g)||[]).map(xmlText).join("").trim(); }); } catch(e){}
+  try { var wb=await zipEntryText(buf,"xl/workbook.xml"); names=(wb.match(/<sheet [^>]*name="([^"]*)"/g)||[]).map(function(s){ return xmlText(s.replace(/^[\s\S]*?name="([^"]*)"[\s\S]*$/,"$1")).trim(); }); } catch(e){}
+  for(var si=1; si<=50; si++){
+    var xml; try { xml=await zipEntryText(buf,"xl/worksheets/sheet"+si+".xml"); } catch(e){ break; }
+    var rows=(xml.match(/<row[^>]*>[\s\S]*?<\/row>/g)||[]).map(function(row){
+      var cells={};
+      (row.match(/<c [^>]*?(?:\/>|>[\s\S]*?<\/c>)/g)||[]).forEach(function(c){
+        var ref=(c.match(/ r="([A-Z]+)\d+"/)||[])[1]; if(!ref) return;
+        var t=(c.match(/ t="(\w+)"/)||[])[1], v=(c.match(/<v>([\s\S]*?)<\/v>/)||[])[1];
+        var val = t==="s" ? (shared[+v]||"") : t==="inlineStr" ? (c.match(/<t[^>]*>[\s\S]*?<\/t>/g)||[]).map(xmlText).join("").trim() : t==="b" ? (v==="1"?"TRUE":"FALSE") : xmlText(v).trim();
+        if(val!=="") cells[ref]=val.slice(0,20000);
+      });
+      return cells;
+    }).filter(function(cells){ return Object.keys(cells).length; });
+    if(!rows.length) continue;
+    out.push("## "+(names[si-1]||("Sheet "+si)));
+    var headers=null;
+    rows.forEach(function(cells){
+      var cols=Object.keys(cells).sort(function(a,b){ return a.length-b.length || (a<b?-1:1); });
+      if(!headers){ if(cols.length>1){ headers=cells; return; } out.push(cells[cols[0]]); return; }
+      out.push(""); cols.forEach(function(col){ out.push((headers[col]||col)+": "+cells[col]); });
+    });
+    out.push("");
+  }
+  return out.join("\n").trim();
+}
 async function readContractFile(file){
   if(file.size>UploadLimits.MAX_FILE_BYTES) throw new Error("File too large (max 50 MB).");
   var name=(file.name||"").toLowerCase();
@@ -27617,8 +27653,9 @@ async function readContractFile(file){
   }
   var text;
   if(name.endsWith(".docx")) text=await docxToText(await file.arrayBuffer());
+  else if(name.endsWith(".xlsx")) text=await xlsxToText(await file.arrayBuffer());
   else if(name.endsWith(".txt") || name.endsWith(".md") || /^text\//.test(file.type||"")) text=await file.text();
-  else throw new Error("Unsupported file type — use PDF, Word (.docx) or text.");
+  else throw new Error("Unsupported file type — use PDF, Word (.docx), Excel (.xlsx) or text.");
   if(!text || text.trim().length<50) throw new Error("No readable text found in that file. If it's a scan, upload it as PDF.");
   return {kind:"text", data:text, filename:file.name};
 }
@@ -27643,7 +27680,7 @@ async function runContractReview(type){
   var templateType=templateTypeFor(family, type);
   msg.style.color="#c0392b";
   if(!family || !templateType){ msg.textContent="Choose the agreement type first."; return; }
-  if(!file){ msg.textContent="Välj motpartens avtal först (PDF, DOCX eller TXT)."; return; }
+  if(!file){ msg.textContent="Välj motpartens avtal först (PDF, DOCX, XLSX eller TXT)."; return; }
   if(file.size>UploadLimits.MAX_FILE_BYTES){ msg.textContent="Max 50 MB."; return; }
   var feedback=WorkflowActivity.start('comparison:'+type,function(){return document.getElementById('cr_msg_'+type);},'Sparar avtalsutkastet…');
   if(!feedback)return;
