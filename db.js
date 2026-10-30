@@ -165,6 +165,11 @@ async function init() {
     actor TEXT NOT NULL,action TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY(agreement_id,revision)
   );`);
+  // Version history for every agreement (agreement-history.js): records outside the review
+  // workflow have no workflow_state, and each version notes the lifecycle status it left behind.
+  await query(`ALTER TABLE agreement_versions ALTER COLUMN workflow_state DROP NOT NULL;`);
+  await query(`ALTER TABLE agreement_versions ADD COLUMN IF NOT EXISTS status TEXT;`);
+  await query(`ALTER TABLE agreement_versions ADD COLUMN IF NOT EXISTS note TEXT;`);
   await query(`CREATE TABLE IF NOT EXISTS agreement_submission_conflicts (
     id SERIAL PRIMARY KEY,agreement_id INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
     sent_version INTEGER,submission JSONB NOT NULL,reason TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now()
