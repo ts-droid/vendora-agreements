@@ -26203,7 +26203,7 @@ var GUIDE = {
   ],
   tips: [
     ["Locked during signature", "From the moment you approve &amp; send it — until both parties have signed — the agreement can't be changed. Need a change? Click <em>Withdraw</em>, edit, and send again. The customer's link stops working and any signature already given is void."],
-    ["Reminders", "<em>Remind</em> on the row emails the customer: to fill in their details if they haven't, otherwise to sign and upload their signed copy. The date of the last reminder shows under the button."],
+    ["Reminders", "<em>Remind</em> on the row emails whoever the agreement is waiting for: the customer, to fill in their details or to sign; or "+esc(window._signerName||"the CEO")+", to countersign once the customer has signed. When nobody is waiting the button is off. The date of the last reminder shows under the button."],
     ["Returned by {CEO}", "If {CEO} returns it instead of countersigning, the agreement goes back to <em>Generated</em> and the comment shows in red under the status. The customer's signed copy stays in the archive but that version is void: make the change and send it for signature again."],
     ["The cover sheet", "Generated automatically for you and {CEO}: the key terms plus every deviation from standard — accepted customer requests, changed terms, MDF, credit limit and reworded clauses. It's internal and never sent to the customer."],
     ["Contract Lawyer", "Help with wording and negotiation based on Vendora's playbook — not legal advice. Learned something in a negotiation? Save it as a note in the playbook."],
@@ -26459,7 +26459,7 @@ function loadArchive(){
       + "<th>Type</th><th>Counterparty</th><th>Status</th><th>Documents</th><th>Reminder</th><th>Created by</th><th class='actions'>Actions</th></tr>";
     rows.forEach(function(a){
       var id=a.id, mut="color:var(--muted);font-size:10px";
-      var noEmail = !a.counterparty_email;
+      var noEmail = !a.counterparty_email, rt = remindTarget(a);
       html += "<tr>"
         + "<td>"+(TYPE[a.type]||esc(a.type))+"<div style='"+mut+"'>"+esc((a.created_at||"").slice(0,10))+"</div></td>"
         + "<td><button type='button' class='archive-name' onclick='archiveEdit("+id+")'>"+esc(a.counterparty_name||"—")+"</button>"+(a.counterparty_email?"<div style='"+mut+"'>"+esc(a.counterparty_email)+"</div>":"")+"</td>"
@@ -26478,7 +26478,7 @@ function loadArchive(){
         + "</td>"
         // Reminder — send + last-sent
         + "<td style='white-space:nowrap'>"
-          + "<button type='button' class='archive-btn' onclick='ovRemind("+id+",this)' "+(noEmail?"disabled title='No counterparty email on file'":"")+">&#9993; Remind</button>"
+          + "<button type='button' class='archive-btn' onclick='ovRemind("+id+",this)' "+(rt?"title=\"Remind "+esc(rt.who)+" "+rt.what+"\"":"disabled title=\""+esc(remindBlockedReason(a))+"\"")+">&#9993; Remind</button>"
           + "<div id='ovRem_"+id+"' style='"+mut+";margin-top:3px'>"+(a.last_reminder_at?"sent "+esc(fmtWhen(a.last_reminder_at)):"")+"</div>"
         + "</td>"
         + "<td>"+esc(a.created_by_name||"")+"</td>"
@@ -26513,12 +26513,24 @@ function ovUpload(id, input){
     .catch(function(){ m.style.color="#c0392b"; m.textContent="upload failed"; })
     .finally(function(){ input.value=""; });
 }
+// Who is waiting decides who the reminder goes to; mirrors the server's reminderTarget().
+function remindTarget(a){
+  if (a.status==="invited") return a.counterparty_email ? {who:a.counterparty_email, what:"to fill in their details"} : null;
+  if (a.status==="sent" || a.status==="vendora_signed") return a.counterparty_email ? {who:a.counterparty_email, what:"to sign"} : null;
+  if (a.status==="pending_signature") return {who:(window._signerName||"the CEO"), what:"to countersign"};
+  return null;
+}
+function remindBlockedReason(a){
+  if (a.status==="signed") return "Fully signed — nobody to remind";
+  if (a.status==="invited" || a.status==="sent" || a.status==="vendora_signed") return "No counterparty email on file";
+  return "Nobody is waiting — reminders go out while the counterparty has a link or the agreement awaits "+(window._signerName||"the CEO");
+}
 function ovRemind(id, btn){
   var m=document.getElementById("ovRem_"+id); btn.disabled=true; m.style.color="var(--muted)"; m.textContent="sending…";
   fetch("/api/agreements/"+id+"/remind",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
     .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,j:x}; }); })
     .then(function(res){
-      if(res.ok && res.j.sent){ m.style.color="#1e7e34"; m.textContent="sent "+fmtWhen(res.j.last_reminder_at); }
+      if(res.ok && res.j.sent){ m.style.color="#1e7e34"; m.textContent="sent "+fmtWhen(res.j.last_reminder_at)+(res.j.who?" · to "+res.j.who:""); }
       else { m.style.color="#c0392b"; m.textContent=res.j.reason||res.j.error||"not sent"; }
     })
     .catch(function(){ m.style.color="#c0392b"; m.textContent="error"; })
@@ -26863,7 +26875,8 @@ function renderSigningView(a){
       + "<div style='text-align:right;margin-top:8px'><button onclick='sigReturn()' style='padding:8px 16px;border:none;background:#c0392b;color:#fff;border-radius:6px;cursor:pointer'>Send back with comment</button></div></div>"
       + "<div style='font-size:11px;color:var(--muted);margin-top:10px'>Countersigning records your electronic approval (name, e-mail and time), stamps it into Vendora's signature block and completes the agreement. "+esc(cp)+" is then emailed a link to download the signed agreement. It is an internal approval, not a qualified e-signature.</div></div>";
   } else if (pending){
-    html += "<div style='font-size:12px;color:#9a4b00;margin-top:14px'>&#9203; Waiting for "+esc(signer)+" to countersign.</div>";
+    html += "<div style='font-size:12px;color:#9a4b00;margin-top:14px'>&#9203; Waiting for "+esc(signer)+" to countersign.</div>"
+      + "<div style='margin-top:8px'><a onclick='sigRemind()' style='font-size:12px;color:var(--blue2);cursor:pointer'>Send a reminder to "+esc(signer)+"</a></div>";
   }
   if (canWithdraw){
     html += "<div style='text-align:right;margin-top:14px'><a onclick='sigWithdraw()' style='font-size:12px;color:#c0392b;cursor:pointer'>"
@@ -26933,7 +26946,7 @@ function sigUploadSigned(){
 function sigRemind(){
   var a=window._signRow; if(!a) return;
   var m=document.getElementById("sigMsg"); m.style.color="var(--muted)"; m.textContent="Sending reminder…";
-  sigPost("/api/agreements/"+a.id+"/remind").then(function(x){ m.style.color=x.sent?"#1e7e34":"#c0392b"; m.textContent=x.sent?"Reminder sent ✓":"Not sent: "+(x.reason||"email not configured"); loadArchive(); })
+  sigPost("/api/agreements/"+a.id+"/remind").then(function(x){ m.style.color=x.sent?"#1e7e34":"#c0392b"; m.textContent=x.sent?"Reminder sent to "+(x.who||"the counterparty")+" ✓":"Not sent: "+(x.reason||"email not configured"); loadArchive(); })
     .catch(function(e){ m.style.color="#c0392b"; m.textContent=e.message; });
 }
 
@@ -27035,9 +27048,9 @@ function apShowPanel(a){
   document.getElementById("apUploadMsg").textContent="";
   // Reminder hint reflects what will be sent for the current status.
   var msg=document.getElementById("apRemindMsg"), btn=document.getElementById("apRemindBtn");
-  if(!a.counterparty_email){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="No counterparty email on file."; }
-  else if(a.status!=="invited" && a.status!=="sent"){ btn.disabled=true; btn.style.opacity=.5; msg.textContent="Reminders go out while the customer has a link: invited, or sent for signature."; }
-  else { btn.disabled=false; btn.style.opacity=1; msg.textContent=(a.status==="invited"?"Nudge to fill in their details":"Nudge to sign & upload")+" → "+a.counterparty_email; }
+  var rt=remindTarget(a);
+  if(!rt){ btn.disabled=true; btn.style.opacity=.5; msg.textContent=remindBlockedReason(a)+"."; }
+  else { btn.disabled=false; btn.style.opacity=1; msg.textContent="Nudge "+rt.who+" "+rt.what; }
   apLoadFiles();
   apLoadVersions();
 }
@@ -27113,7 +27126,7 @@ var VERSION_ACTIONS = {
   "vendora-signed":"Countersigned for Vendora", "signed-copy-uploaded":"Signed copy uploaded", returned:"Returned for changes",
   withdrawn:"Signing request withdrawn", restored:"Earlier version restored", baseline:"As it was before history was kept",
   start:"Review workflow started", "manual-edit":"Edited", "review-start":"AI comparison started", "review-complete":"AI comparison completed",
-  "approve-ai-changes":"AI changes approved", "special-approval":"Risk terms approved", invite:"Invite sent",
+  "approve-ai-changes":"AI changes approved", "special-approval":"Risk terms approved", "template-review":"New standard version adopted", invite:"Invite sent",
   "invite-mail-sent":"Invite email delivered", "invite-mail-failed":"Invite email failed", "send-for-signature":"Sent for signature",
   "signature-mail-sent":"Signing email delivered", "signature-mail-failed":"Signing email failed", "withdraw-to-review":"Withdrawn to review"
 };

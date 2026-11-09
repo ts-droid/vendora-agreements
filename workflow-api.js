@@ -39,7 +39,7 @@ function install(app, deps) {
       if(item.changes.length){try{core.checkTargets(row.data,item);item.preview=core.apply(row.data,item.changes).displayed;item.issue='';}catch(e){item.issue=e.message;item.preview=[];}}
       if(hardNo.isHardNo(item))item.hardNoReview=hardNo.context(row,item);
     }
-    return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],signedAt:row.vendora_signed_at,signedBy:row.vendora_signed_by,
+    return {id:row.id,type:row.type,status:row.status,data:row.data,revision:Number(row.workflow_revision||0),state:row.workflow_state,summary:row.workflow_state?core.summary(row):null,signatureProblems:row.workflow_state?core.signatureProblems(row):[],templateReview:row.workflow_state&&!core.templateCurrent(row)?core.templateChanges(row):null,signedAt:row.vendora_signed_at,signedBy:row.vendora_signed_by,
       counterparty:row.counterparty_signed_at?{signedAt:row.counterparty_signed_at,by:row.counterparty_signed_by,fileId:row.counterparty_signed_file,method:row.data&&row.data._counterpartySignature?'electronic':'uploaded'}:null,signatureEmail:row.counterparty_email||null,signatureSentAt:row.signature_sent_at||null};}
   async function load(req){const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);if(!owned(req,r.rows[0]))throw core.error('Avtalet finns inte.',404);return r.rows[0];}
   app.get('/api/workflow/:id',auth.requireAuth,wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(view(await load(req)));}));
@@ -87,6 +87,13 @@ function install(app, deps) {
       });res.json({...view(row),reworkedItemId:itemId});
     }finally{reworking.delete(original.id);}
   }));
+  // The version review. The standard's clause texts changed since the case was baselined (the document is
+  // always printed with the current standard); the owner or an admin reads the differences shown in the
+  // panel and adopts the current version for the case. A locked case is withdrawn first (editable()).
+  app.post('/api/workflow/:id/template-review',auth.requireAuth,wrap(async(req,res)=>{
+    const row=await lock(req,async(row,c)=>{core.editable(row);core.checkVersion(row,req.body.expectedRevision);
+      const s=core.adoptTemplate(row,who(req),when(),req.body.note);return write(c,row,row.data,s,who(req),'template-review');});res.json(view(row));
+  }));
   app.post('/api/workflow/:id/counsel-approval',auth.requireAuth,wrap(async(req,res)=>{
     if(!isAdmin(req.user))throw core.error('Särskilt godkännande kräver administratör.',403);
     const note=String(req.body.note||'').trim();if(note.length<15)throw core.error('Ange vem som granskat risken och hänvisning till godkännandet.',400);
@@ -102,7 +109,7 @@ function install(app, deps) {
       if(s.sent&&s.sent.requestId===body.requestId){if(s.sent.email!==to)throw core.error('Utskicks-ID har använts för en annan mottagare.');replay=true;return row;}
       core.checkVersion(row,body.expectedRevision);
       if(core.pending(s).length||counterpartyDetails.pending(s).length||s.reviewRunning)throw core.error('Behandla samtliga förslag före kundutskicket.');
-      if(s.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Standardversionen har ändrats. Ny versionsgranskning krävs.');
+      if(!core.templateCurrent(row))throw core.error('Standardversionen har ändrats. Ny versionsgranskning krävs.');
       if(LC.consistencyCheck(row.data).length)throw core.error('Avtalet innehåller motstridiga uppgifter.');
       if(s.sent&&row.status==='invited'&&s.sent.email===to&&core.digest(s.sent.data)===core.digest(core.publicData(row.data))){
         replay=s.sent.delivery!=='failed';return row;
@@ -127,7 +134,7 @@ function install(app, deps) {
   app.get('/api/public-invites/:id',wrap(async(req,res)=>{
     const r=await db.query('SELECT * FROM agreements WHERE id=$1',[req.params.id]);const row=r.rows[0],sent=row&&row.workflow_state&&row.workflow_state.sent;
     if(!row||!sent||!deps.tokenEq(req.query.token,row.update_token)||!['invited','submitted'].includes(row.status)||Number(req.query.version)!==sent.version)throw core.error('Kundlänken är ogiltig eller har återkallats.',404);
-    if(row.workflow_state.templateVersion!==core.TEMPLATE_VERSION)throw core.error('Begär den arkiverade avtalsversionen från Vendora.');
+    if(!core.templateCurrent(row))throw core.error('Begär den arkiverade avtalsversionen från Vendora.');
     // Once submitted, the page says so instead of offering the form again (one submission per sent version).
     res.set('Cache-Control','no-store');res.json({...sent.data,_aid:row.id,_atok:row.update_token,_sentVersion:sent.version,...(row.status==='submitted'?{_submittedAt:row.workflow_state.submittedAt||null}:{})});
   }));
