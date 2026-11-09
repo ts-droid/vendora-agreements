@@ -27,7 +27,10 @@ function movedOn(baselineText){
 test('the standard version is per agreement type, derived from the rendered clauses, and the legacy file hash still counts as current',()=>{
   for(const t of ['ra','rb','da']){assert.match(C.TEMPLATE_VERSIONS[t],/^[0-9a-f]{64}$/);assert.equal(C.templateVersionFor(t),C.TEMPLATE_VERSIONS[t]);}
   assert.equal(new Set(Object.values(C.TEMPLATE_VERSIONS)).size,3);
-  for(const t of ['ra','rb','da'])assert.equal(C.templateCurrent({type:t,workflow_state:{templateVersion:LEGACY}}),true,t+': a state from before the change is current');
+  // A state from before carries the file hash; it is current for the types whose standard has not moved since
+  // that snapshot (distributor, simplified) and stale for the reseller agreement, whose clauses changed after it.
+  for(const t of ['rb','da'])assert.equal(C.templateCurrent({type:t,workflow_state:{templateVersion:LEGACY}}),true,t+': a state from before the change is current');
+  assert.equal(C.templateCurrent({type:'ra',workflow_state:{templateVersion:LEGACY}}),false,'ra: the reseller standard changed after the snapshot, so an old reseller case asks for a review');
   const data=C.copy(seeds.ra);data._type='ra';const s=C.createState(data);
   assert.equal(s.templateVersion,C.TEMPLATE_VERSIONS.ra);
   const row={id:1,type:'ra',status:'draft',data,workflow_state:s,workflow_revision:1};
