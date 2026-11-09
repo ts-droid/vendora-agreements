@@ -1319,51 +1319,77 @@ app.delete('/api/agreements/:id/files/:fileId', requireDb, auth.requireAuth, asy
 // the counterparty's details gets a "please fill in" nudge with a fresh link to the same record;
 // anything past that gets a "please sign and return" nudge. Recipient is always the stored
 // counterparty email — never an arbitrary address — so this can't be used as an open relay.
+// Who is waiting decides who the reminder goes to: the counterparty while they hold a link (to fill in
+// their details while invited; to sign while the agreement is out for signature), the CEO while the
+// agreement awaits the countersignature. Nobody else is ever reminded, and a fully signed agreement has
+// nobody to remind. The client mirrors this in remindTarget().
+function reminderTarget(row) {
+  if (row.status === 'invited') return row.counterparty_email ? { kind: 'fill', to: row.counterparty_email, who: row.counterparty_email } : null;
+  if (row.status === 'sent' || row.status === 'vendora_signed') return row.counterparty_email ? { kind: 'sign', to: row.counterparty_email, who: row.counterparty_email } : null;
+  if (row.status === 'pending_signature') return SIGNER_EMAIL ? { kind: 'ceo', to: SIGNER_EMAIL, who: SIGNER_NAME } : null;
+  return null;
+}
+function reminderBlockedReason(row) {
+  if (row.status === 'signed') return 'The agreement is fully signed; there is nobody to remind.';
+  if (row.status === 'pending_signature') return 'No CEO signer is configured on the server.';
+  if (['invited', 'sent', 'vendora_signed'].includes(row.status)) return 'No counterparty email on file for this agreement.';
+  return 'Nobody is waiting on this agreement: reminders go out while the counterparty has a link (invited, or sent for signature) or while the agreement awaits the CEO.';
+}
 app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAuth, async (req, res) => {
   try {
     const row = await loadOwned(req, res); if (!row) return;
-    if (!row.counterparty_email) return res.status(400).json({ error: 'No counterparty email on file for this agreement.' });
-    const kind = row.status === 'invited' ? 'fill' : 'sign';
+    const target = reminderTarget(row);
+    if (!target) return res.status(409).json({ error: reminderBlockedReason(row) });
+    const kind = target.kind;
     if (kind === 'sign' && !signingLink(req, row)) return res.status(409).json({ error: 'This agreement has not been sent for signature yet.' });
     const transporter = getTransporter();
     if (!transporter) {
       publishAgreement('agreement.email_failed', row.id, {
         error: 'Email is not configured on the server', email_kind: 'reminder', reminder_kind: kind,
       });
-      return res.json({ ok: true, sent: false, reason: 'SMTP not configured' });
+      return res.json({ ok: true, sent: false, reason: 'SMTP not configured', kind, who: target.who });
     }
 
     const TYPE = { da: 'Distributor Agreement', ra: 'Reseller Agreement', rb: 'Reseller Agreement — Simplified' };
     const typeLabel = TYPE[row.type] || 'agreement';
-    const name = escHtml(row.counterparty_name || 'there');
-
-    let link = '';
-    if (kind === 'fill') {
-      // Ensure the record has a capability token, then rebuild the same fill link so the
-      // counterparty's submission still auto-links back to THIS record.
-      let token = row.update_token;
-      if (!token) {
-        token = crypto.randomBytes(24).toString('base64url');
-        await db.query('UPDATE agreements SET update_token=$1 WHERE id=$2', [token, req.params.id]);
-      }
-      const linkData = Object.assign({}, row.workflow_state ? {} : row.data || {}, { _aid: Number(req.params.id), _atok: token }, row.workflow_state ? {_sentVersion:row.workflow_state.sent.version} : {});
-      link = 'https://' + req.get('host') + '/#fill=' + Buffer.from(JSON.stringify(linkData), 'utf8').toString('base64');
+    let mailOptions;
+    if (kind === 'ceo') {
+      // The CEO's reminder repeats the request that went out when the counterparty signed, with the same link.
+      const signedOn = row.counterparty_signed_at ? new Date(row.counterparty_signed_at).toISOString().slice(0, 10) : '';
+      mailOptions = {
+        from: `"Vendora Nordic AB" <${MAIL_FROM}>`,
+        to: target.to,
+        ...(row.signature_requested_by ? { replyTo: row.signature_requested_by } : {}),
+        subject: oneLine(`Reminder — ready for your signature: ${typeLabel} — ${cpName(row)}`),
+        html: mailShell(`&#x270D;&#xFE0F; Reminder: ${escHtml(cpName(row))} is waiting for your signature`,
+          `<p style="color:#555;font-size:14px"><strong>${escHtml(row.counterparty_signed_by || cpName(row))}</strong> signed the ${escHtml(typeLabel)} for <strong>${escHtml(cpName(row))}</strong>${signedOn ? ' on ' + escHtml(signedOn) : ''}. The agreement awaits your countersignature; nothing else is outstanding.</p>`
+          + btnHtml('https://' + req.get('host') + '/#sign=' + row.id, 'Review & sign →')),
+      };
     } else {
-      link = signingLink(req, row);
-    }
-
-    const btn = link
-      ? `<div style="text-align:center;margin:26px 0"><a href="${escHtml(link)}" style="display:inline-block;background:#0F2240;color:#fff;padding:13px 30px;text-decoration:none;font-size:14px;font-weight:bold">${kind === 'fill' ? 'Fill in your details →' : 'Review, sign & upload →'}</a></div>`
-      : '';
-    const body = kind === 'fill'
-      ? `<p style="color:#333;font-size:14px">This is a friendly reminder to fill in your company details for the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. It only takes a few minutes.</p>`
-      : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please open the link below, sign the agreement and upload the signed copy. Vendora's CEO then countersigns and you receive the fully signed agreement.</p>`;
-
-    let mailed = false;
-    try {
-      await transporter.sendMail({
+      const name = escHtml(row.counterparty_name || 'there');
+      let link = '';
+      if (kind === 'fill') {
+        // Ensure the record has a capability token, then rebuild the same fill link so the
+        // counterparty's submission still auto-links back to THIS record.
+        let token = row.update_token;
+        if (!token) {
+          token = crypto.randomBytes(24).toString('base64url');
+          await db.query('UPDATE agreements SET update_token=$1 WHERE id=$2', [token, req.params.id]);
+        }
+        const linkData = Object.assign({}, row.workflow_state ? {} : row.data || {}, { _aid: Number(req.params.id), _atok: token }, row.workflow_state ? {_sentVersion:row.workflow_state.sent.version} : {});
+        link = 'https://' + req.get('host') + '/#fill=' + Buffer.from(JSON.stringify(linkData), 'utf8').toString('base64');
+      } else {
+        link = signingLink(req, row);
+      }
+      const btn = link
+        ? `<div style="text-align:center;margin:26px 0"><a href="${escHtml(link)}" style="display:inline-block;background:#0F2240;color:#fff;padding:13px 30px;text-decoration:none;font-size:14px;font-weight:bold">${kind === 'fill' ? 'Fill in your details →' : 'Review, sign & upload →'}</a></div>`
+        : '';
+      const body = kind === 'fill'
+        ? `<p style="color:#333;font-size:14px">This is a friendly reminder to fill in your company details for the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. It only takes a few minutes.</p>`
+        : `<p style="color:#333;font-size:14px">This is a friendly reminder regarding the <strong>${escHtml(typeLabel)}</strong> with Vendora Nordic AB. When you have a moment, please open the link below, sign the agreement and upload the signed copy. Vendora's CEO then countersigns and you receive the fully signed agreement.</p>`;
+      mailOptions = {
         from:    `"Vendora Nordic AB" <${MAIL_FROM}>`,
-        to:      row.counterparty_email,
+        to:      target.to,
         replyTo: 'ts@vendora.se',
         subject: `Reminder: ${typeLabel} with Vendora Nordic AB`,
         html: `
@@ -1378,12 +1404,17 @@ app.post('/api/agreements/:id/remind', publicLimiter, requireDb, auth.requireAut
               <p style="color:#999;font-size:12px">Vendora Nordic AB · Ladugårdsvägen 1, 234 35 Lomma, Sweden</p>
             </div>
           </div>`,
-      });
+      };
+    }
+
+    let mailed = false;
+    try {
+      await transporter.sendMail(mailOptions);
       mailed = true;
       const rem = await db.query('UPDATE agreements SET last_reminder_at=now() WHERE id=$1 RETURNING last_reminder_at', [req.params.id]);
       publishAgreement('agreement.reminder_sent', row.id, { email_kind: 'reminder', reminder_kind: kind });
-      console.log(`Reminder (${kind}) sent for agreement ${req.params.id} to ${row.counterparty_email}`);
-      res.json({ ok: true, sent: true, kind, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
+      console.log(`Reminder (${kind}) sent for agreement ${req.params.id}`);
+      res.json({ ok: true, sent: true, kind, who: target.who, last_reminder_at: rem.rows[0] && rem.rows[0].last_reminder_at });
     } catch (err) {
       console.error('Reminder error:', err.message);
       if (mailed) publishAgreement('agreement.reminder_sent', row.id, { email_kind: 'reminder', reminder_kind: kind });
