@@ -44,7 +44,9 @@ Varje steg i flödet skriver en version (se avsnitt 6). Kortet längst ner i for
 
 Statusar: `draft` → `invited` → `submitted` → `generated` → `sent` → `pending_signature` → `signed`. Dessutom `imported` (post skapad från länk) och `vendora_signed` (kvar från den äldre ordningen där VD signerade först).
 
-Låst innehåll: från `sent` till `signed`, och allt som bär Vendoras signatur. En sparning mot en låst post nekas (409) och visas tydligt i gränssnittet; inget dokument kan laddas ner som arkivet inte har. Återkalla ("withdraw") öppnar avtalet igen (`generated`), motpartens länk slutar fungera, eventuell Vendora-signatur upphävs och VD meddelas.
+Låst innehåll: från `sent` till `signed`, och allt som bär Vendoras signatur. En sparning mot en låst post nekas (409) och visas tydligt i gränssnittet; inget dokument kan laddas ner som arkivet inte har. Återkalla ("withdraw") öppnar avtalet igen (`generated`; i granskningsflödet tillbaka till `submitted`), motpartens länk slutar fungera, eventuell Vendora-signatur upphävs och VD meddelas.
+
+**Standardversion.** Dokumentet skrivs alltid ut med den gällande standardtexten i klausulbiblioteket. Varje flödesärende bär därför versionen av standarden för sin avtalstyp (en hash av vad typens klausuler ger med standardvärdena). Ändras typens standard efter att ärendet började visar flödespanelen vilka klausuler som fått ny lydelse, lagts till eller tagits bort, och ägaren eller admin godkänner den nya versionen för ärendet efter att ha läst dem ("Granskat: ta den nya standarden"). Tills dess hålls kundlänken och utskicket, och punkten står under "Kvar före slutgodkännande". Ett låst ärende återkallas först. Granskningen sparas som version (`template-review`) med vem, när och anteckning. Ärenden från före 2026-10-30 bar en gemensam hash av mallfilerna; den räknas som den dåvarande versionen per typ, så de påverkas bara när deras egen typ ändras.
 
 ## 5. Signering
 
@@ -55,7 +57,7 @@ Ordning: motparten först, VD sist.
 - VD (`SIGNER_EMAIL`, namn `SIGNER_NAME`) får mejl och kontrasignerar i appen (`#sign=id`), eller returnerar avtalet med kommentar. Då blir det `generated` igen och motpartens signatur är ogiltig.
 - Fullt signerat: motparten mejlas en nedladdningslänk, säljaren ett besked.
 
-Påminnelser kan skickas från arkivpanelen medan kunden har en länk (`invited` eller `sent`).
+Påminnelser följer kedjan: medan kunden har en länk (`invited`: fyll i; `sent`: signera) går påminnelsen till kunden, medan avtalet väntar på VD (`pending_signature`) går den till VD med signeringslänken, och när ingen väntar (utkast, inskickat, fullt signerat) är knappen släckt. Samma regel på arkivraden, i arkivpanelen och i signeringsvyn.
 
 ## 6. Arkivet
 
@@ -92,7 +94,7 @@ Skickas via Gmail API med servicekonto (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MAIL_FRO
 | VD signerat | motparten och säljaren | "Fully signed: …" |
 | VD returnerat | säljaren | "Returned for changes: …" |
 | Återkallat efter VD-signatur | VD | "Signature voided: …" |
-| Påminnelse | motparten | "Reminder …" |
+| Påminnelse | den som avtalet väntar på: motparten, eller VD när motparten signerat | "Reminder …" |
 
 ## 9. Datamodell (Postgres)
 
@@ -160,7 +162,9 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 59 | Systemöversikten (detta dokument) |
 | 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 | 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
+| 2026-10-30 | 62 | Standardversionen räknas per avtalstyp; pågående ärenden ser ändringarna och tar den nya standarden i flödespanelen |
 | 2026-10-30 | 63 | Marknadsplatsklausulen villkorar inte längre ett godkännande med minimipris |
+| 2026-11-09 | 65 | Påminnelsen går till den som avtalet väntar på: kunden, eller VD när kunden signerat; släckt när ingen väntar |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
