@@ -57,7 +57,7 @@ Ordning: motparten först, VD sist.
 - VD (`SIGNER_EMAIL`, namn `SIGNER_NAME`) får mejl och kontrasignerar i appen (`#sign=id`), eller returnerar avtalet med kommentar. Då blir det `generated` igen och motpartens signatur är ogiltig.
 - Fullt signerat: motparten mejlas en nedladdningslänk, säljaren ett besked.
 
-Påminnelser kan skickas från arkivpanelen medan kunden har en länk (`invited` eller `sent`).
+Påminnelser följer kedjan: medan kunden har en länk (`invited`: fyll i; `sent`: signera) går påminnelsen till kunden, medan avtalet väntar på VD (`pending_signature`) går den till VD med signeringslänken, och när ingen väntar (utkast, inskickat, fullt signerat) är knappen släckt. Samma regel på arkivraden, i arkivpanelen och i signeringsvyn.
 
 ## 6. Arkivet
 
@@ -94,7 +94,7 @@ Skickas via Gmail API med servicekonto (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MAIL_FRO
 | VD signerat | motparten och säljaren | "Fully signed: …" |
 | VD returnerat | säljaren | "Returned for changes: …" |
 | Återkallat efter VD-signatur | VD | "Signature voided: …" |
-| Påminnelse | motparten | "Reminder …" |
+| Påminnelse | den som avtalet väntar på: motparten, eller VD när motparten signerat | "Reminder …" |
 
 ## 9. Datamodell (Postgres)
 
@@ -163,6 +163,7 @@ Google-inloggning begränsad till domänen. Admin (`ADMIN_EMAILS`) ser alla avta
 | 2026-10-30 | 60 | Motparten kan kommentera avtalstexten och bifoga sitt dokument på ifyllnadssidan; jämförelsesteget tar dokument som redan ligger på avtalet |
 | 2026-10-30 | 61 | Loggan leder till startsidan; Cancel släpper avtalet ur adressfältet |
 | 2026-10-30 | 62 | Standardversionen räknas per avtalstyp; pågående ärenden ser ändringarna och tar den nya standarden i flödespanelen |
+| 2026-11-09 | 65 | Påminnelsen går till den som avtalet väntar på: kunden, eller VD när kunden signerat; släckt när ingen väntar |
 
 Öppna, ej från detta arbete: PR 37 (import av återförsäljaruppgifter) och PR 41 (sparat advokatminne och bilagor, röd CI).
 
