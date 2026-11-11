@@ -38,3 +38,14 @@ test('standard defaults are not silently redefined by an initial commercial conc
 test('only accepted text, not internal decisions or redlines, goes to the customer',()=>{const d={...row().data,_proposals:{x:'secret'},_accepted:['x'],redlines:[{rationale:'secret'}],clauseOverrides:{'ra.s4.title':'accepted'}};const pub=C.publicData(d);assert.equal(pub._proposals,undefined);assert.equal(pub.redlines,undefined);assert.equal(pub.clauseOverrides['ra.s4.title'],'accepted');});
 test('changing a field cannot silently invalidate a previously customized dependent clause',()=>{const r=row();r.data.clauseOverrides={'ra.s4.payment':LC.resolvedClauseText(r.data,'ra.s4.payment')+' Extra protection.'};assert.throws(()=>C.apply(r.data,[field('pay','30','45')]),/följdändringen/);});
 module.exports={findings};
+
+test('the approved version survives the counterparty\'s electronic signature stamp', () => {
+  const core = require('../workflow-core');
+  const data = { _type: 'da', name: 'Troubadour Goods Ltd', pay: '45', inco: 'DAP' };
+  const approved = core.signingDigest(data);
+  const signed = { ...data, _counterpartySignature: { name: 'Ryan Batchelor', method: 'electronic', at: '2026-10-30T12:03:00Z' } };
+  assert.equal(core.signingDigest(signed), approved, 'the stamp alone must not invalidate the approval');
+  assert.equal(core.signingDigest({ ...signed, _vendoraSignature: { title: 'CEO' } }), approved);
+  assert.equal(core.digest(data), approved, 'approvals stored before this fix still match');
+  assert.notEqual(core.signingDigest({ ...signed, pay: '60' }), approved, 'a change to the terms still does');
+});

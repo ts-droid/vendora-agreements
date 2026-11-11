@@ -192,7 +192,7 @@ function install(app, deps) {
       const s=core.copy(core.state(row));const version=Number(row.workflow_revision)+1;
       s.counterpartySignature=null;
       s.signatureShare={token:crypto.randomBytes(24).toString('base64url'),data:core.publicData(row.data),version,email:to,at:when(),delivery:'pending'};
-      s.approval={version,digest:core.digest(row.data),requestedBy:who(req),at:when()};
+      s.approval={version,digest:core.signingDigest(row.data),requestedBy:who(req),at:when()};
       await c.query(`UPDATE agreements SET counterparty_email=$1,signature_token=$2,signature_sent_at=now(),
         signature_requested_by=$3,signature_requested_by_name=$4,signature_requested_at=now(),signature_note=NULL,
         counterparty_signed_at=NULL,counterparty_signed_by=NULL,counterparty_signed_file=NULL,
@@ -233,7 +233,7 @@ function install(app, deps) {
   methods.sign=async(req,res)=>{
     if(!isSigner(req.user))throw core.error('Endast utsedd undertecknare får skriva under.',403);
     const row=await lock(req,async(row,c)=>{
-      const s=core.copy(core.state(row));if(row.status!=='pending_signature'||!s.approval||s.approval.digest!==core.digest(row.data))throw core.error('Godkännandet avser inte denna version.');
+      const s=core.copy(core.state(row));if(row.status!=='pending_signature'||!s.approval||s.approval.digest!==core.signingDigest(row.data))throw core.error('Godkännandet avser inte denna version.');
       if(!s.counterpartySignature)throw core.error('Motpartens signerade kopia saknas.');
       const data=core.copy(row.data);const stamp={name:SIGNER_NAME,title:'CEO',email:req.user.email,at:when(),version:s.approval.version,digest:s.approval.digest};data._vendoraSignature=stamp;
       await c.query('UPDATE agreements SET vendora_signed_by=$1,vendora_signed_email=$2,vendora_signed_at=now() WHERE id=$3',[SIGNER_NAME,req.user.email,row.id]);

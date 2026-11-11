@@ -31,6 +31,10 @@ function stable(x) {
   return JSON.stringify(x);
 }
 const digest = x => crypto.createHash('sha256').update(stable(x)).digest('hex');
+// The version the CEO approves: the agreement's wording and terms, without the signature stamps that
+// signing adds to the same data (an electronic counterparty signature writes _counterpartySignature).
+const SIGNATURE_STAMPS = ['_vendoraSignature','_counterpartySignature'];
+const signingDigest = x => { const d=copy(x||{});SIGNATURE_STAMPS.forEach(k=>delete d[k]);return digest(d); };
 function error(message, status=409) { const e=new Error(message);e.status=status;return e; }
 function checkVersion(row, version) { if (!Number.isInteger(version)||version!==Number(row.workflow_revision||0)) throw error('Avtalet har ändrats. Ladda om och granska den senaste versionen.'); }
 function editable(row) { if (['pending_signature','vendora_signed','signed','sent'].includes(row.status)||row.vendora_signed_at) throw error('Avtalet är låst för godkännande eller underskrift. Återkalla först.'); }
@@ -276,4 +280,4 @@ function summary(row) {
   for(const key of TERMS)if(stable(row.data[key])!==stable(s.baseline[key]))deviations.push(key+': '+String(s.baseline[key]??'—')+' → '+String(row.data[key]??'—'));
   return {terms:[['Motpart',row.data.name||''],['Avtalstyp',row.type],['Version',String(row.workflow_revision)],['Betalning',String(row.data.pay||'')+' dagar']],deviations:Array.from(new Set(deviations))};
 }
-module.exports={reworkProposal,decideCompanyDetails,TEMPLATE_VERSIONS,templateVersionFor,templateCurrent,caseTemplateVersion,templateChanges,adoptTemplate,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatory,signatureProblems,summary,validFields};
+module.exports={signingDigest,reworkProposal,decideCompanyDetails,TEMPLATE_VERSIONS,templateVersionFor,templateCurrent,caseTemplateVersion,templateChanges,adoptTemplate,FACTS,TERMS,EDIT_KEYS,copy,digest,error,editable,checkVersion,stripTransient,standard,benchmark,createState,state,pending,sourceText,apply,preconditions,checkTargets,reviewItems,recordReview,decide,publicData,receive,signatory,signatureProblems,summary,validFields};
